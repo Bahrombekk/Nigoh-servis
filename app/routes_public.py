@@ -75,6 +75,51 @@ def list_cameras(request: Request, bbox: str = "", limit: int = 20000):
     }
 
 
+@router.get("/status")
+def cameras_status(request: Request, ids: str = "", all: int = 0):
+    """Boshlang'ich holat — SSE (`/events`) ga ulanishdan oldin bir marta.
+
+    `?ids=1,2,ext:cam-14` — tanlanganlar; `?all=1` — hammasi. Keyin faqat
+    o'zgarishlarni SSE yetkazadi, poll qilish shart emas.
+
+    `sub_codec` va `snapshot_at` maydonlari sxemada paydo bo'lguncha
+    bo'sh qaytadi (reja 2.7 va 2.3).
+    """
+    regions = allowed_regions(request)
+    if regions is not None and not regions:
+        return {"total": 0, "cameras": []}
+
+    with get_db() as db:
+        if all:
+            rows = db.execute("SELECT * FROM cameras ORDER BY id").fetchall()
+        elif ids.strip():
+            refs = [p.strip() for p in ids.split(",") if p.strip()]
+            if len(refs) > 1024:
+                raise HTTPException(400, "Bitta so'rovda 1024 tagacha id")
+            rows = [r for r in (resolve_ref(db, ref) for ref in refs)
+                    if r is not None]
+        else:
+            raise HTTPException(400, "ids=1,2,... yoki all=1 bering")
+
+    if regions is not None:
+        rows = [r for r in rows if r["region"] in regions]
+
+    def out(r):
+        keys = r.keys()
+        return {
+            "id": r["id"],
+            "external_id": r["external_id"] or "",
+            "state": camera_state(r),
+            "codec": r["codec"] or "",
+            "sub_codec": (r["sub_codec"] or "") if "sub_codec" in keys else "",
+            "resolution": r["resolution"] or "",
+            "last_seen": r["last_seen"] or "",
+            "snapshot_at": (r["snapshot_at"] or "") if "snapshot_at" in keys else "",
+        }
+
+    return {"total": len(rows), "cameras": [out(r) for r in rows]}
+
+
 @router.get("/{ref}/stream")
 def camera_stream(ref: str, request: Request, hevc: int = 0,
                   quality: str = ""):
