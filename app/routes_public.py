@@ -23,8 +23,8 @@ def list_cameras(request: Request, bbox: str = "", limit: int = 20000):
     `bbox` berilsa (minLat,minLng,maxLat,maxLng) faqat shu to'rtburchak
     ichidagilar qaytariladi.
 
-    Ko'rinish: admin (va PUBLIC_VIEW yoqiq bo'lsa anonim) hammasini ko'radi;
-    operator faqat o'ziga biriktirilgan hududlarni.
+    Ko'rinish: API kalit va admin hammasini ko'radi; operator faqat
+    o'ziga biriktirilgan hududlarni.
     """
     regions = allowed_regions(request)
     if regions is not None and not regions:

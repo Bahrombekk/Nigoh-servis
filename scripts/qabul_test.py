@@ -1,7 +1,7 @@
 """Nigoh mikroservisining qabul testi — YANGI (bo'sh) test konteyneriga qarshi.
 
 Ishga tushirish:
-    docker run -d --name nigoh-sinov -p 8021:8010 \n      -e ADMIN_PAROL=sinov-admin-987 -e NIGOH_API_KEY=test-kalit-abc123 \n      -e PUBLIC_VIEW=0 nigoh:latest
+    docker run -d --name nigoh-sinov -p 8021:8010 \n      -e ADMIN_PAROL=sinov-admin-987 -e NIGOH_API_KEY=test-kalit-abc123 \n      nigoh:latest
     python scripts/qabul_test.py
 
 Muhit orqali moslash: NIGOH_BASE, NIGOH_KEY, NIGOH_ADMIN_PAROL.
@@ -63,11 +63,11 @@ check("1.2 OpenAPI faqat v1 yo'llar", s == 200 and all(p.startswith("/api/v1") f
 s, _ = req("/")
 check("1.3 Test UI (/) beriladi", s == 200, s)
 
-# ---------- 2. Anonim cheklovlar (PUBLIC_VIEW=0) ----------
-s, d = req("/api/v1/cameras")
-check("2.1 anonim ro'yxat bo'sh", s == 200 and d["total"] == 0, d)
+# ---------- 2. Anonim cheklovlar (X-API-Key yagona kirish) ----------
+s, _ = req("/api/v1/cameras")
+check("2.1 anonim ro'yxat 401", s == 401, s)
 s, _ = req("/api/v1/cameras/1/stream")
-check("2.2 anonim oqim 403", s == 403, s)
+check("2.2 anonim oqim 401", s == 401, s)
 s, _ = req("/api/v1/admin/status")
 check("2.3 anonim admin 401", s == 401, s)
 s, _ = req("/api/v1/admin/status", headers=BAD_KEY)

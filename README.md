@@ -109,9 +109,9 @@ ro'yxati, oqim va surat shu ro'yxat bilan cheklanadi). Operatorlar
  "regions": ["Toshkent", "Buxoro"]}
 ```
 
-Anonim ko'rish standart holda ochiq (hozirgi xatti-harakat). Muhitga
-`PUBLIC_VIEW=0` qo'yilsa, xarita va oqimlar faqat tizimga kirganlarga
-ko'rinadi.
+Kirish yagona: barcha API `X-API-Key` talab qiladi (`NIGOH_API_KEY`
+majburiy — busiz servis ishga tushmaydi). Debug UI (`ENABLE_UI=1`,
+standart) cookie login bilan ishlaydi.
 
 ### Tugun salomatligi
 

@@ -24,7 +24,7 @@ import uvicorn
 
 from app import create_app
 from app.bootstrap import bootstrap, change_admin_password
-from app.config import PORT
+from app.config import API_KEY, PORT
 
 if "--admin-parol" in sys.argv:
     index_of = sys.argv.index("--admin-parol")
@@ -35,6 +35,12 @@ if "--admin-parol" in sys.argv:
         sys.exit("Parol kamida 6 belgidan iborat bo'lsin")
     change_admin_password(new_password)
     sys.exit(0)
+
+# Yagona kirish X-API-Key — kalitsiz servis himoyasiz qolardi, shuning
+# uchun ishga tushmaydi (fail fast). Kalit hosil qilish: openssl rand -hex 32
+if not API_KEY:
+    sys.exit("NIGOH_API_KEY o'rnatilmagan — .env ga uzun tasodifiy kalit "
+             "yozing (masalan: openssl rand -hex 32) va qayta ishga tushiring.")
 
 bootstrap()
 app = create_app()

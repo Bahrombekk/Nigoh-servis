@@ -7,14 +7,14 @@ import os
 
 PORT = int(os.environ.get("PORT", "8010"))
 
-# Kirmagan (anonim) foydalanuvchi xarita va oqimlarni ko'ra oladimi.
-# Standart — ha (hozirgi xatti-harakat). PUBLIC_VIEW=0 qilinsa faqat
-# tizimga kirganlar ko'radi: admin — hammasini, operator — o'z hududlarini.
-PUBLIC_VIEW = os.environ.get("PUBLIC_VIEW", "1") != "0"
+# Debug UI (xarita, admin panel): 1 — cookie login ishlaydi va sahifa
+# beriladi; 0 — faqat API. Bu servisning haqiqat manbai X-API-Key, UI
+# faqat "backend'da xatomi yoki kamerada?" savoliga javob vositasi.
+ENABLE_UI = os.environ.get("ENABLE_UI", "1") != "0"
 
-# Server-to-server kirish: tashqi backend `X-API-Key` sarlavhasi bilan
-# to'liq (admin darajasida) kiradi — cookie/login kerak emas. Bo'sh qolsa
-# mexanizm o'chiq. Uzun tasodifiy qiymat qo'ying (masalan,
+# Yagona kirish: tashqi backend `X-API-Key` sarlavhasi bilan kiradi —
+# cookie/login kerak emas. Ishga tushirish uchun MAJBURIY (bo'sh bo'lsa
+# servis ko'tarilmaydi). Uzun tasodifiy qiymat qo'ying (masalan,
 # `openssl rand -hex 32`).
 API_KEY = os.environ.get("NIGOH_API_KEY", "")
 HLS_PORT = int(os.environ.get("HLS_PORT", "8888"))

@@ -18,8 +18,7 @@ from core.rtsp_probe import probe
 from media import reconciler
 from media import sync as mediamtx_sync
 
-from .config import (API_KEY, HLS_PORT, MEDIA_BASE, MEDIA_HOST, PUBLIC_VIEW,
-                     WEBRTC_PORT)
+from .config import (API_KEY, HLS_PORT, MEDIA_BASE, MEDIA_HOST, WEBRTC_PORT)
 from .models import CameraIn
 
 
@@ -254,15 +253,16 @@ def require_admin(request: Request):
 def allowed_regions(request: Request) -> list[str] | None:
     """Foydalanuvchi qaysi hududlarni ko'ra oladi.
 
-    None — cheklov yo'q (API kalit, admin yoki, PUBLIC_VIEW yoqiq bo'lsa,
-    anonim); ro'yxat — operator: faqat shu hududlar (bo'sh = hech narsa);
-    anonim va PUBLIC_VIEW o'chiq bo'lsa ham bo'sh ro'yxat qaytadi.
+    None — cheklov yo'q (API kalit yoki admin); ro'yxat — operator:
+    faqat shu hududlar (bo'sh = hech narsa). Anonim so'rov bu yergacha
+    odatda yetmaydi (require_key 401 beradi), yetsa ham hech narsa
+    ko'rmaydi.
     """
     if api_key_ok(request):
         return None
     user = current_user(request)
     if user is None:
-        return None if PUBLIC_VIEW else []
+        return []
     if user["role"] == "admin":
         return None
     with get_db() as db:

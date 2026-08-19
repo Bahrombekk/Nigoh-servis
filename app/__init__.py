@@ -26,7 +26,7 @@ MediaMTX bilan aloqa alohida `media/` paketida — backend unga faqat
 """
 import asyncio
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -34,6 +34,7 @@ from core import bus
 from core.db import BASE_DIR
 
 from .config import VENDORS
+from .deps import require_key
 from .routes_admin import router as admin_router
 from .routes_auth import router as auth_router
 from .routes_events import router as events_router
@@ -46,18 +47,19 @@ IP kameralarni boshqarish va tarqatish servisi. MediaMTX ustidagi
 boshqaruv qatlami: kameralar bazada, oqim yo'llari MediaMTX Control API
 orqali dinamik boshqariladi, restart hech qachon kerak emas.
 
+Kirish: barcha endpointlar `X-API-Key` sarlavhasini talab qiladi
+(`NIGOH_API_KEY`). Debug UI yoqilganda (ENABLE_UI=1) cookie sessiyasi
+ham o'tadi. Istisno — **auth**: `/auth/stream` ni MediaMTX'ning o'zi
+chaqiradi (chipta tekshiruvi), `/auth/login` — debug UI kirishi.
+
 Bo'limlar:
 
-* **cameras** — ochiq: xarita ro'yxati, oqim manzili (chiptali), surat.
-* **stats** — ochiq: dashboard tarixi (24 soat / 7 kun).
-* **auth** — kirish/chiqish; `POST /auth/stream` ni MediaMTX'ning o'zi
-  chaqiradi (oqimga ruxsat tekshiruvi), brauzer emas.
-* **admin** — faqat `admin` roli: kameralar CRUD, NVR import, skaner,
-  foydalanuvchilar, MediaMTX tugunlari va sinxronlash.
-
-Rollar: `admin` hammasini ko'radi va boshqaradi; `operator` faqat o'ziga
-biriktirilgan hududlardagi kameralarni ko'radi. Anonim ko'rish standart
-holda ochiq (`PUBLIC_VIEW=0` — faqat tizimga kirganlar ko'radi).
+* **cameras** — ro'yxat, batch holat, oqim manzili (chiptali), surat.
+* **streams** — batch oqim chiptalari (bitta so'rovda 128 tagacha).
+* **events** — SSE: holat o'zgarishlari jonli.
+* **stats** — dashboard tarixi (24 soat / 7 kun).
+* **admin** — kameralar CRUD, NVR import, skaner, foydalanuvchilar,
+  MediaMTX tugunlari va sinxronlash.
 
 Kamera holati (`state`): `disabled / unknown / offline / stalled / online`.
 Tugun holati (`status`): `online / degraded / offline`.
@@ -95,18 +97,29 @@ def create_app() -> FastAPI:
                             media_type="application/geo+json",
                             headers={"Cache-Control": "max-age=86400"})
 
-    @app.get("/api/v1/vendors", tags=["cameras"])
-    @app.get("/api/vendors", include_in_schema=False)
+    @app.get("/api/v1/vendors", tags=["cameras"],
+             dependencies=[Depends(require_key)])
+    @app.get("/api/vendors", include_in_schema=False,
+             dependencies=[Depends(require_key)])
     def list_vendors():
         """Kamera qo'shishda tanlanadigan tayyor RTSP shablonlari."""
         return VENDORS
 
     # /api/v1 — asosiy (hujjatlangan); /api — eski manzillar, xuddi shu
     # endpointlar (test frontend va MediaMTX auth manzili buzilmasin).
-    for router in (auth_router, public_router, streams_router, events_router,
+    #
+    # Yagona kirish — X-API-Key (deps.require_key): auth routeridan
+    # boshqa hamma narsa kalit talab qiladi. auth alohida: /auth/stream ni
+    # MediaMTX chaqiradi (o'z chipta tekshiruvi bor), /auth/login — debug
+    # UI kirishi.
+    app.include_router(auth_router, prefix="/api/v1")
+    app.include_router(auth_router, prefix="/api", include_in_schema=False)
+    for router in (public_router, streams_router, events_router,
                    stats_router, admin_router):
-        app.include_router(router, prefix="/api/v1")
-        app.include_router(router, prefix="/api", include_in_schema=False)
+        app.include_router(router, prefix="/api/v1",
+                           dependencies=[Depends(require_key)])
+        app.include_router(router, prefix="/api", include_in_schema=False,
+                           dependencies=[Depends(require_key)])
 
     # Qolgan static fayllar (style.css, app.js) — yuqoridagi maxsus
     # yo'llardan keyin ulanadi, shuning uchun ular ustun turadi.
