@@ -781,7 +781,8 @@ function buildWall() {
         '<button data-w="x" title="Devordan olish">&times;</button>' +
       "</div>" +
       '<div class="t-foot"><span>' + esc(cam.region) + "</span><span>" +
-        esc(cam.codec || "") + '</span><span style="margin-left:auto"></span></div>';
+        esc(cam.sub_codec || cam.codec || "") +
+        '</span><span style="margin-left:auto"></span></div>';
 
     const on = (act, fn) => tile.querySelector('[data-w="' + act + '"]')
       .addEventListener("click", (e) => { e.stopPropagation(); fn(); });
@@ -821,7 +822,14 @@ function buildWall() {
     if (!down) {
       const player = createPlayer(tile.querySelector("video"), tile.querySelector(".t-msg"));
       const msEl = tile.querySelector(".t-foot span:last-child");
-      player.onOpen = (ms) => { msEl.textContent = (ms / 1000).toFixed(2) + "s"; };
+      const codecEl = tile.querySelector(".t-foot span:nth-child(2)");
+      player.onOpen = (ms, mode) => {
+        msEl.textContent = (ms / 1000).toFixed(2) + "s";
+        // Ko'rsatilayotgan oqimning kodegi: sub'da sub_codec (odatda H264) —
+        // "H265" yorlig'i sub ko'rsatilganda yolg'on gapirmasin.
+        codecEl.textContent = mode === "sub"
+          ? (cam.sub_codec || cam.codec || "") : (cam.codec || "");
+      };
       // Setkada past sifatli 2-oqim (sub) — 16 plitka tarmoqni bo'g'masin.
       // Sub bo'lmasa server asosiysini beradi; to'liq ekranda asosiyga o'tiladi.
       player.open(cam, HEVC_OK, "sub");
@@ -839,6 +847,7 @@ function buildWall() {
         v2.style.opacity = "0";
         tile.insertBefore(v2, tile.querySelector(".t-msg"));
         const p2 = createPlayer(v2, document.createElement("div"));
+        p2.onOpen = player.onOpen;         // ochilish vaqti va kodek yangilansin
         wallPlayers.push(p2);              // stopWall uni ham to'xtatsin
         mainSwap = { video: v2, player: p2, ready: false, timer: 0 };
         mainSwap.timer = setTimeout(() => {

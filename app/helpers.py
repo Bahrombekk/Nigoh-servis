@@ -194,6 +194,7 @@ def admin_camera(row, request: Request) -> dict:
         "has_password": bool(row["password_enc"]),
         "rtsp_path": row["rtsp_path"] or "",
         "sub_path": row["sub_path"] or "",
+        "sub_codec": (row["sub_codec"] or "") if "sub_codec" in row.keys() else "",
         "node_id": row["node_id"] or 1,
         "vendor": row["vendor"] or "boshqa",
         "enabled": bool(row["enabled"]),
@@ -311,24 +312,38 @@ def channel_path(vendor: str, channel: int, stream: str) -> str:
     return f"/stream{2 if sub else 1}"
 
 
-def detect_sub_path(cam: CameraIn, password: str) -> str:
-    """Past sifatli ikkinchi oqim yo'lini topadi (video devor uchun).
+def detect_sub_path(cam: CameraIn, password: str) -> tuple[str, str]:
+    """Past sifatli ikkinchi oqim yo'lini va kodegini topadi.
 
-    Admin qiymat kiritgan bo'lsa — o'sha saqlanadi. Kiritmagan bo'lsa
-    ishlab chiqaruvchi shablonidan hosil qilinadi va tekshiriladi:
-    javob bermagan yo'l saqlanmaydi (ba'zi NVR'lar ikkinchi oqimni
-    bermaydi — masalan, ayrim Holowits kanallarida Media2 xato beradi).
+    Admin qiymat kiritgan bo'lsa — o'sha saqlanadi (kodek tekshiruvda
+    aniqlanadi). Kiritmagan bo'lsa ishlab chiqaruvchi shablonidan hosil
+    qilinadi va tekshiriladi: javob bermagan yo'l saqlanmaydi (ba'zi
+    NVR'lar ikkinchi oqimni bermaydi — masalan, ayrim Holowits
+    kanallarida Media2 xato beradi).
+
+    Qaytaradi: (sub_path, sub_codec). Kodek alohida saqlanadi — devor
+    plitkasida "H265" yorlig'i ko'rinib, aslida H.264 sub ko'rsatilayotgan
+    chalkashlik bo'lmasin.
     """
-    if cam.sub_path is not None:
-        return cam.sub_path.strip()
     if cam.source_type != "rtsp" or not cam.ip.strip():
-        return ""
+        return (cam.sub_path or "").strip(), ""
+
+    if cam.sub_path is not None:
+        sub = cam.sub_path.strip()
+        if not sub:
+            return "", ""
+        result = probe(cam.ip.strip(), cam.port, sub,
+                       cam.username.strip(), password)
+        return sub, result.get("codec", "") if result.get("ok") else ""
+
     candidate = channel_path(cam.vendor, channel_from_path(cam.rtsp_path), "sub")
     if candidate == cam.rtsp_path.strip():
-        return ""                          # asosiy oqimning o'zi sub ekan
+        return "", ""                      # asosiy oqimning o'zi sub ekan
     result = probe(cam.ip.strip(), cam.port, candidate,
                    cam.username.strip(), password)
-    return candidate if result.get("ok") else ""
+    if not result.get("ok"):
+        return "", ""
+    return candidate, result.get("codec", "")
 
 
 def detect_codec(cam: CameraIn, password: str) -> tuple[str, bool, str]:

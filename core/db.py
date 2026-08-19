@@ -34,6 +34,7 @@ CAMERA_EXTRA_COLUMNS = {
     "password_enc": "TEXT",
     "rtsp_path": "TEXT",
     "sub_path": "TEXT",                           # past sifatli 2-oqim (video devor)
+    "sub_codec": "TEXT",                          # sub oqim kodegi (odatda H264)
     "vendor": "TEXT",
     "enabled": "INTEGER NOT NULL DEFAULT 1",
     "note": "TEXT",

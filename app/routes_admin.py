@@ -57,15 +57,16 @@ def admin_list(request: Request, q: str = "", limit: int = 100, offset: int = 0)
 def admin_create(cam: CameraIn, request: Request):
     cam.validate_complete()
     codec, transcode, resolution = detect_codec(cam, cam.password or "")
-    sub_path = detect_sub_path(cam, cam.password or "")
+    sub_path, sub_codec = detect_sub_path(cam, cam.password or "")
     with get_db() as db:
         slug = unique_slug(db, f"{cam.region}_{cam.name}")
         try:
             db.execute(
                 "INSERT INTO cameras (name, region, lat, lng, stream_url, slug, ip, "
-                "port, username, password_enc, rtsp_path, sub_path, vendor, enabled, "
+                "port, username, password_enc, rtsp_path, sub_path, sub_codec, "
+                "vendor, enabled, "
                 "note, codec, resolution, transcode, always_on, node_id, external_id) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     cam.name.strip(), cam.region.strip(), cam.lat, cam.lng,
                     cam.stream_url.strip() if cam.source_type == "manual" else "",
@@ -73,7 +74,8 @@ def admin_create(cam: CameraIn, request: Request):
                     cam.ip.strip() if cam.source_type == "rtsp" else "",
                     cam.port, cam.username.strip(),
                     security.encrypt(cam.password) if cam.password else "",
-                    cam.rtsp_path.strip(), sub_path, cam.vendor, int(cam.enabled),
+                    cam.rtsp_path.strip(), sub_path, sub_codec, cam.vendor,
+                    int(cam.enabled),
                     cam.note.strip(), codec, resolution, int(transcode),
                     int(cam.always_on), cam.node_id, cam.external_id,
                 ),
@@ -113,15 +115,17 @@ def admin_update(ref: str, cam: CameraIn, request: Request):
             codec, transcode = old["codec"] or "", bool(old["transcode"])
             resolution = old["resolution"] or ""
 
-        sub_path = detect_sub_path(cam, password)
+        sub_path, sub_codec = detect_sub_path(cam, password)
         if not sub_path and not responded:  # kamera javob bermadi — eskisi qoladi
             sub_path = old["sub_path"] or ""
+            sub_codec = (old["sub_codec"] or "") if "sub_codec" in old.keys() else ""
 
         try:
             db.execute(
                 "UPDATE cameras SET name=?, region=?, lat=?, lng=?, stream_url=?, "
                 "slug=?, ip=?, port=?, username=?, password_enc=?, rtsp_path=?, "
-                "sub_path=?, vendor=?, enabled=?, note=?, codec=?, resolution=?, "
+                "sub_path=?, sub_codec=?, vendor=?, enabled=?, note=?, codec=?, "
+                "resolution=?, "
                 "transcode=?, always_on=?, node_id=?, external_id=? WHERE id=?",
                 (
                     cam.name.strip(), cam.region.strip(), cam.lat, cam.lng,
@@ -129,7 +133,8 @@ def admin_update(ref: str, cam: CameraIn, request: Request):
                     slug,
                     cam.ip.strip() if cam.source_type == "rtsp" else "",
                     cam.port, cam.username.strip(), password_enc,
-                    cam.rtsp_path.strip(), sub_path, cam.vendor, int(cam.enabled),
+                    cam.rtsp_path.strip(), sub_path, sub_codec, cam.vendor,
+                    int(cam.enabled),
                     cam.note.strip(), codec, resolution, int(transcode),
                     int(cam.always_on), cam.node_id, cam.external_id, camera_id,
                 ),
@@ -154,24 +159,28 @@ def admin_detect_sub():
             "AND ip != '' AND (sub_path IS NULL OR sub_path = '')"
         ).fetchall()
 
-    def job(row) -> tuple[int, str]:
+    def job(row) -> tuple[int, str, str]:
         main = (row["rtsp_path"] or "").strip()
         candidate = channel_path(row["vendor"] or "boshqa",
                                  channel_from_path(main), "sub")
         if candidate == main:
-            return row["id"], ""
+            return row["id"], "", ""
         result = probe(row["ip"], row["port"] or 554, candidate,
                        row["username"] or "",
                        security.decrypt(row["password_enc"]))
-        return row["id"], candidate if result.get("ok") else ""
+        if not result.get("ok"):
+            return row["id"], "", ""
+        return row["id"], candidate, result.get("codec", "")
 
     with ThreadPoolExecutor(max_workers=16) as pool:
         results = list(pool.map(job, rows))
 
-    found = [(sub, cam_id) for cam_id, sub in results if sub]
+    found = [(sub, codec, cam_id) for cam_id, sub, codec in results if sub]
     if found:
         with get_db() as db:
-            db.executemany("UPDATE cameras SET sub_path = ? WHERE id = ?", found)
+            db.executemany(
+                "UPDATE cameras SET sub_path = ?, sub_codec = ? WHERE id = ?",
+                found)
     return {"checked": len(rows), "found": len(found)}
 
 

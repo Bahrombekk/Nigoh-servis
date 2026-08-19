@@ -31,15 +31,16 @@ def list_cameras(request: Request, bbox: str = "", limit: int = 20000):
         return {"total": 0, "shown": 0, "cameras": []}
 
     sql = ("SELECT id, external_id, name, region, lat, lng, ip, port, slug, "
-           "enabled, last_seen, codec, resolution, transcode, always_on "
-           "FROM cameras WHERE enabled = 1")
+           "enabled, last_seen, codec, sub_codec, resolution, transcode, "
+           "always_on FROM cameras WHERE enabled = 1")
     params: list = []
     if regions is not None:
         sql += f" AND region IN ({','.join('?' * len(regions))})"
         params += regions
     count_sql, count_params = sql.replace(
         "SELECT id, external_id, name, region, lat, lng, ip, port, slug, "
-        "enabled, last_seen, codec, resolution, transcode, always_on ",
+        "enabled, last_seen, codec, sub_codec, resolution, transcode, "
+        "always_on ",
         "SELECT COUNT(*) "), list(params)
     if bbox:
         try:
@@ -68,6 +69,7 @@ def list_cameras(request: Request, bbox: str = "", limit: int = 20000):
             "state": camera_state(r),
             "last_seen": r["last_seen"] or "",
             "codec": r["codec"] or "",
+            "sub_codec": r["sub_codec"] or "",
             "resolution": r["resolution"] or "",
             "transcode": bool(r["transcode"]),
             "always_on": bool(r["always_on"]),
