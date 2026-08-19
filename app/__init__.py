@@ -7,6 +7,7 @@ Qatlamlar:
     app/helpers.py        umumiy tarjima qatlami (baza → brauzer/MediaMTX)
     app/routes_auth.py    /api/v1/auth/*
     app/routes_public.py  /api/v1/cameras/*   (kirishsiz)
+    app/routes_streams.py /api/v1/streams     (batch oqim chiptalari)
     app/routes_stats.py   /api/v1/stats/*     (kirishsiz — dashboard tarixi)
     app/routes_admin.py   /api/v1/admin/*     (super-admin)
 
@@ -33,6 +34,7 @@ from .routes_admin import router as admin_router
 from .routes_auth import router as auth_router
 from .routes_public import router as public_router
 from .routes_stats import router as stats_router
+from .routes_streams import router as streams_router
 
 API_DESCRIPTION = """\
 IP kameralarni boshqarish va tarqatish servisi. MediaMTX ustidagi
@@ -90,7 +92,8 @@ def create_app() -> FastAPI:
 
     # /api/v1 — asosiy (hujjatlangan); /api — eski manzillar, xuddi shu
     # endpointlar (test frontend va MediaMTX auth manzili buzilmasin).
-    for router in (auth_router, public_router, stats_router, admin_router):
+    for router in (auth_router, public_router, streams_router, stats_router,
+                   admin_router):
         app.include_router(router, prefix="/api/v1")
         app.include_router(router, prefix="/api", include_in_schema=False)
 
