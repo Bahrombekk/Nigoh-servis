@@ -65,6 +65,7 @@ _requested: dict[int, float] = {}   # camera_id -> oxirgi so'ralgan (monotonic)
 _done: dict[int, float] = {}        # camera_id -> oxirgi urinish (epoch)
 _last_total = 0                     # oxirgi tsikldagi kameralar soni
 _last_clean = 0.0
+_cycle = {"total": 0, "ok": 0, "duration_ms": 0, "at": ""}
 _lock = threading.Lock()
 _started = False
 _live_sem = threading.BoundedSemaphore(LIVE_SLOTS)
@@ -76,6 +77,12 @@ def path_for(slug: str) -> Path:
 
 def cold_interval(total: int) -> float:
     return max(COLD_MIN_INTERVAL, total * COLD_PER_CAMERA)
+
+
+def cycle_stats() -> dict:
+    """Oxirgi tsikl haqida — /health va konsol 'Fon vazifalari' uchun."""
+    with _lock:
+        return dict(_cycle)
 
 
 def max_age() -> float:
@@ -274,9 +281,14 @@ def _loop() -> None:
                 started = time.monotonic()
                 with ThreadPoolExecutor(max_workers=WORKERS) as pool:
                     results = list(pool.map(_attempt, due))
-                log("snapshots", "cycle", total=len(due),
-                    ok=sum(1 for r in results if r),
-                    duration_ms=int((time.monotonic() - started) * 1000))
+                stats = {"total": len(due),
+                         "ok": sum(1 for r in results if r),
+                         "duration_ms": int((time.monotonic() - started) * 1000),
+                         "at": datetime.now(timezone.utc).isoformat(
+                             timespec="seconds")}
+                with _lock:
+                    _cycle.update(stats)
+                log("snapshots", "cycle", **stats)
         except Exception as exc:                # fon vazifa yiqilmasin
             log("snapshots", "cycle_failed", level="error", error=str(exc))
         time.sleep(TICK)

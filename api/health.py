@@ -14,7 +14,7 @@ import time
 
 from fastapi import APIRouter
 
-from core import bus, health
+from core import bus, health, snapshots
 from media import sync as mediamtx_sync
 
 router = APIRouter(tags=["health"])
@@ -56,4 +56,5 @@ def service_health():
         "readers": runtime["readers"] if runtime else 0,
         "warm": mediamtx_sync.warm_count(),
         "sse_subscribers": bus.subscriber_count(),
+        "snapshots": snapshots.cycle_stats(),
     }

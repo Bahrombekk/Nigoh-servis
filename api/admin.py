@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from core import health, security
+from core import fast_start, health, security
 from core.db import get_db, unique_slug
 from core.fast_start import channel_from_path
 from core.rtsp_probe import probe
@@ -506,6 +506,63 @@ def admin_user_delete(user_id: int, me=Depends(require_admin)):
 
 # ---------- MediaMTX ----------
 
+@router.get("/runtime")
+def admin_runtime():
+    """Faol yo'llarning jonli xaritasi: slug -> ready/readers/baytlar.
+
+    Servis konsoli shu orqali kamera kesimida kirish tezligini (ikki
+    so'rov orasidagi bayt farqidan) va tomoshabinlar sonini chizadi.
+    Faqat lokal tugun — uzoq tugunlar salomatligi /admin/nodes da.
+    """
+    paths = mediamtx_sync.list_active_paths()
+    if paths is None:
+        return {"mediamtx": False, "paths": {}}
+    return {"mediamtx": True, "paths": {
+        name: {
+            "ready": bool(item.get("ready")),
+            "readers": len(item.get("readers") or []),
+            "bytes_received": int(item.get("bytesReceived") or 0),
+            "bytes_sent": int(item.get("bytesSent") or 0),
+            "warm": mediamtx_sync.is_warm(name),
+        } for name, item in paths.items()
+    }}
+
+
+@router.post("/cameras/{ref}/keyframe")
+def admin_keyframe(ref: str, stream: str = "main"):
+    """Kameradan darhol keyframe so'raydi (ONVIF/ISAPI) — diagnostika amali.
+
+    `sent: true` — kamera qabul qildi; `false` — qo'llamaydi yoki 2 soniya
+    ichida takror so'rov (bosim himoyasi).
+    """
+    with get_db() as db:
+        row = resolve_ref(db, ref)
+    if row is None:
+        raise HTTPException(404, "Kamera topilmadi")
+    if not row["ip"]:
+        raise HTTPException(400, "Bu kamera tayyor oqim — keyframe so'ralmaydi")
+    sent = fast_start.request_keyframe(
+        row["ip"], row["username"] or "",
+        security.decrypt(row["password_enc"]),
+        row["rtsp_path"] or "", row["vendor"] or "",
+        stream="sub" if stream == "sub" else "main")
+    return {"sent": bool(sent)}
+
+
+def _dir_size_mb(path) -> tuple[float, int]:
+    total, count = 0, 0
+    try:
+        for f in path.glob("*"):
+            try:
+                total += f.stat().st_size
+                count += 1
+            except OSError:
+                pass
+    except OSError:
+        pass
+    return round(total / 1_048_576, 1), count
+
+
 @router.get("/status")
 def admin_status():
     """Tizim salomatligi bir qarashda — 5000 kamerani ko'z bilan emas,
@@ -527,9 +584,17 @@ def admin_status():
             "readers": runtime["readers"] if runtime else 0,
             "stalled": stalled,
         })
+    from core import snapshots
+    from core.db import DB_PATH
+    from core.log import LOG_PATH
+    db_mb = round(DB_PATH.stat().st_size / 1_048_576, 1) if DB_PATH.exists() else 0
+    log_mb = round(LOG_PATH.stat().st_size / 1_048_576, 1) if LOG_PATH.exists() else 0
+    snap_mb, snap_files = _dir_size_mb(snapshots.SNAP_DIR)
     return {
         "mediamtx": mediamtx_sync.api_available(),
         "health": health.sweep_stats(),
+        "disk": {"snapshots_mb": snap_mb, "snapshots_files": snap_files,
+                 "db_mb": db_mb, "log_mb": log_mb},
         "stalled": sorted(reconciler.stalled_paths()),
         "nodes": nodes,
     }
