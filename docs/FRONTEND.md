@@ -1,5 +1,11 @@
 # Nigoh — frontendchi uchun qo'llanma
 
+> **Eslatma (2026-08-19):** loyiha mikroservisga o'tdi — bu hujjatning
+> ba'zi qismlari eskirgan: `PUBLIC_VIEW`, `operator` roli, `stats`,
+> Telegram olib tashlandi; kirish faqat `X-API-Key`; `app/` endi `api/`,
+> UI `ENABLE_UI=1` bilan ochiladi. Dolzarb integratsiya qo'llanmasi:
+> [INTEGRATION.md](INTEGRATION.md).
+
 Bu hujjat kameralar bilan **hech qachon ishlamagan** frontendchi uchun
 yozilgan. Yaxshi yangilik: kamera protokollarini (RTSP va h.k.) umuman
 bilishingiz shart emas — servis hammasini oddiy HTTP API ga aylantirib

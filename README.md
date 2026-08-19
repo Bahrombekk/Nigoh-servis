@@ -86,10 +86,15 @@ Interaktiv hujjat serverning o'zida: **`/docs`** (Swagger) va **`/redoc`**.
 
 | Bo'lim | Prefiks | Kirish |
 |---|---|---|
-| Kameralar (xarita, oqim, surat) | `/api/v1/cameras` | ochiq |
-| Dashboard tarixi | `/api/v1/stats` | ochiq |
-| Kirish/chiqish | `/api/v1/auth` | — |
-| Boshqaruv (CRUD, NVR, skaner, tugunlar) | `/api/v1/admin` | sessiya |
+| Kameralar (ro'yxat, holat, oqim, surat) | `/api/v1/cameras` | X-API-Key |
+| Batch oqim chiptalari (128 tagacha) | `/api/v1/streams` | X-API-Key |
+| Jonli holat (SSE) | `/api/v1/events` | X-API-Key |
+| Qurilma skani (SSE) va pasporti | `/api/v1/devices` | X-API-Key |
+| Boshqaruv (CRUD, NVR, tugunlar) | `/api/v1/admin` | X-API-Key |
+| Salomatlik + egress | `/health` | ochiq |
+| Kirish/chiqish (debug UI) | `/api/v1/auth` | ENABLE_UI=1 |
+
+Asosiy tizimga ulash bo'yicha to'liq qo'llanma: **`docs/INTEGRATION.md`**.
 
 Har bir kamerada yagona **`state`** maydoni bor:
 `disabled` (admin o'chirgan) · `unknown` (hali tekshirilmagan) ·
@@ -97,17 +102,11 @@ Har bir kamerada yagona **`state`** maydoni bor:
 `online`. Probe kamera **kodeki bilan birga o'lchami, FPS va audio**
 borligini ham qaytaradi.
 
-### Rollar
+### Kirish va rollar
 
-Ikki rol bor: **admin** hammasini ko'radi va boshqaradi; **operator**
-faqat o'ziga biriktirilgan hududlardagi kameralarni ko'radi (xarita
-ro'yxati, oqim va surat shu ro'yxat bilan cheklanadi). Operatorlar
-`/api/v1/admin/users` orqali yaratiladi:
-
-```json
-{"username": "operator1", "password": "...", "role": "operator",
- "regions": ["Toshkent", "Buxoro"]}
-```
+Rollar, hududlar va foydalanuvchi boshqaruvi **asosiy tizimda** — Nigoh
+ularni yuritmaydi. `/api/v1/admin/users` faqat debug UI'ga kiradigan
+qo'shimcha adminlar uchun.
 
 Kirish yagona: barcha API `X-API-Key` talab qiladi (`NIGOH_API_KEY`
 majburiy — busiz servis ishga tushmaydi). Debug UI (`ENABLE_UI=1`,
@@ -265,15 +264,21 @@ bilan faqat `from media import sync` chegarasi orqali gaplashadi:
 
 ```
 main.py                  kirish nuqtasi: CLI, bootstrap, uvicorn
-app/                     BACKEND (web-qatlam)
-  ├─ __init__.py         create_app() — ilovani yig'ish, static
+api/                     BACKEND (web-qatlam)
+  ├─ __init__.py         create_app() — ilovani yig'ish
   ├─ config.py           portlar, RTSP shablonlari (muhit o'zgaruvchilari)
   ├─ models.py           so'rov modellari (Pydantic)
-  ├─ helpers.py          baza qatori → brauzer/MediaMTX ko'rinishlari
+  ├─ deps.py             yagona kirish (X-API-Key)
+  ├─ helpers.py          baza qatori → mijoz/MediaMTX ko'rinishlari
   ├─ bootstrap.py        birinchi ishga tushirish, admin yaratish
-  ├─ routes_auth.py      /api/auth/*    — kirish/chiqish
-  ├─ routes_public.py    /api/cameras/* — xarita, oqim, surat (kirishsiz)
-  └─ routes_admin.py     /api/admin/*   — CRUD, NVR import, skaner, MediaMTX
+  ├─ auth.py             /api/v1/auth/*    — stream auth + debug UI login
+  ├─ cameras.py          /api/v1/cameras/* — ro'yxat, holat, oqim, surat
+  ├─ streams.py          /api/v1/streams   — batch oqim chiptalari
+  ├─ events.py           /api/v1/events    — SSE holat o'zgarishlari
+  ├─ devices.py          /api/v1/devices/* — skan (SSE), pasport
+  ├─ nodes.py            /api/v1/admin/nodes — MediaMTX tugunlari
+  ├─ health.py           /health — salomatlik + egress
+  └─ admin.py            /api/v1/admin/*   — CRUD, NVR import, foydalanuvchilar
 media/                   MEDIAMTX QATLAMI
   ├─ sync.py             mediamtx.yml yaratish, jonli API, FFmpeg buyruqlari
   └─ launcher.py         talab bo'yicha o'girish jarayoni

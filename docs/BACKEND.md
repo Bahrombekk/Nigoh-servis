@@ -1,5 +1,11 @@
 # Nigoh — backendchi uchun qo'llanma
 
+> **Eslatma (2026-08-19):** loyiha mikroservisga o'tdi — bu hujjatning
+> ba'zi qismlari eskirgan: `PUBLIC_VIEW`, `operator` roli, `stats`,
+> Telegram olib tashlandi; kirish faqat `X-API-Key`; `app/` endi `api/`,
+> UI `ENABLE_UI=1` bilan ochiladi. Dolzarb integratsiya qo'llanmasi:
+> [INTEGRATION.md](INTEGRATION.md).
+
 Bu hujjat kameralar bilan **hech qachon ishlamagan** backendchi uchun.
 Nigoh — tayyor kamera mikroservisi: siz uni o'z tizimingizga oddiy REST
 servis sifatida ulaysiz, kamera protokollari (RTSP, kodeklar, oqimlar)
