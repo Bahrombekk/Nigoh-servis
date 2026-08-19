@@ -154,10 +154,28 @@ proksilang yoki shu proksida X-API-Key qo'shing.)
 GET /api/v1/cameras/{ref}/snapshot     -> image/jpeg, ETag bilan
 ```
 
-Suratlar serverda diskda turadi va o'zi yangilanadi: so'ralgan kamera —
-har 10 s, qolgan onlaynlar — har 5 daqiqa. `If-None-Match` yuborsangiz
-o'zgarmagan surat `304` qaytadi. Yangilanish payti SSE `snapshot`
-hodisasida.
+Suratlar serverda diskda turadi va o'zi yangilanadi (so'ralgan kamera
+tez-tez, qolgan onlaynlar kamera soniga moslashgan oraliqda).
+`If-None-Match` yuborsangiz o'zgarmagan surat `304` qaytadi.
+Yangilanish payti SSE `snapshot` hodisasida.
+
+Muhim semantika:
+
+- **Kamera `offline`/`disabled` bo'lsa — `404`.** Bir hafta oldingi
+  kadr "jonli" bo'lib ko'rinmasin. `<img>`/`poster` 404 da o'zi qora
+  bo'ladi — qo'shimcha kod kerak emas.
+- Surat holat "online" desa ham haddan eski bo'lsa — `404` (kamera
+  kadr bermay qo'ygan holat).
+- **`?stale=1`** — oxirgi ma'lum kadr baribir beriladi ("oxirgi kadrni
+  ko'rish" tugmasi uchun; kalit baribir shart).
+- Javobda `X-Snapshot-At` (UTC) va `X-Snapshot-Age` (soniya) bor —
+  "3 daq oldin" yozuvi yoki xiralashtirish kabi qarorlarni shu asosda
+  o'zingiz qiling; servis faqat ko'rsat/ko'rsatma'ni hal qiladi.
+
+**Va eng muhimi:** surat so'rovini kutmang — SSE'da `state: offline`
+kelgan zahoti o'sha katakning `poster`ini tozalang va OFFLINE belgisini
+qo'ying. Endpoint'dagi `404` — ikkinchi himoya qatlami, birinchi yechim
+SSE'da.
 
 ## Salomatlik va sig'im
 

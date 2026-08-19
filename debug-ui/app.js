@@ -766,6 +766,7 @@ function buildWall() {
     const down = cam.online === false;
     const pinned = state.pinned.includes(cam.id);
     const tile = document.createElement("div");
+    tile.dataset.id = cam.id;      // SSE holat hodisasi katakni shu orqali topadi
     tile.className = "tile" + (down ? " down" : "") +
                      (cam.id === state.selectedId ? " sel" : "");
     tile.innerHTML =
@@ -910,6 +911,37 @@ function syncWallAuto() {
     buildWall();
   }, 12000);
 }
+
+/* Jonli holat (SSE): kamera offline bo'lganda katakdagi rasm DARHOL
+   yo'qoladi — keyingi surat so'rovini kutmaydi. Eski kadr jonli bo'lib
+   ko'rinishining haqiqiy yechimi shu; endpoint'dagi 404 — ikkinchi
+   himoya qatlami. Uzilsa 10 soniyada qayta ulanadi. */
+function startStateEvents() {
+  let es;
+  try { es = new EventSource("/api/v1/events"); } catch (e) { return; }
+  es.addEventListener("state", (e) => {
+    let d;
+    try { d = JSON.parse(e.data); } catch (err) { return; }
+    const cam = state.cameras.find((c) => c.id === d.id);
+    if (cam) { cam.state = d.state; cam.online = d.state === "online"; }
+    const tile = document.querySelector('#wall-grid .tile[data-id="' + d.id + '"]');
+    if (!tile) return;
+    const video = tile.querySelector("video");
+    const badge = tile.querySelector(".t-head .st");
+    if (d.state === "offline") {
+      if (video) video.removeAttribute("poster");
+      tile.classList.add("down");
+      if (badge) badge.textContent = "OFFLINE";
+    } else if (d.state === "online") {
+      tile.classList.remove("down");
+      if (badge) badge.textContent = "LIVE";
+    } else if (d.state === "stalled" && badge) {
+      badge.textContent = "MUZLAGAN";
+    }
+  });
+  es.onerror = () => { es.close(); setTimeout(startStateEvents, 10000); };
+}
+startStateEvents();
 
 /* Server egress'i devor sarlavhasida — ko'payish nuqtasi serverda, u
    ko'rinishi shart: 80% da sariq, 95% da qizil. Chegara qo'yilmaydi. */
