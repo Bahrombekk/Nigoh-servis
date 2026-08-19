@@ -1,4 +1,6 @@
 """Nigoh — so'rov modellari (Pydantic)."""
+import re
+
 from fastapi import HTTPException
 from pydantic import BaseModel, Field, field_validator
 
@@ -22,6 +24,9 @@ class CameraIn(BaseModel):
     # kameralar soni ortishi bilan tarmoq ham, GPU ham tugaydi.
     always_on: bool = False
     note: str = Field(default="", max_length=500)
+    # Tashqi tizim identifikatori — keyin `ext:<qiymat>` bilan murojaat
+    # qilinadi. Bo'sh = berilmagan. Takrorlanmas bo'lishi shart.
+    external_id: str = Field(default="", max_length=120)
 
     # RTSP kamera uchun
     ip: str = Field(default="", max_length=100)
@@ -42,6 +47,16 @@ class CameraIn(BaseModel):
     def _check_source(cls, v: str) -> str:
         if v not in ("rtsp", "manual"):
             raise ValueError("source_type faqat 'rtsp' yoki 'manual' bo'lishi mumkin")
+        return v
+
+    @field_validator("external_id")
+    @classmethod
+    def _check_external(cls, v: str) -> str:
+        v = v.strip()
+        # URL yo'lida ishlatiladi — faqat xavfsiz belgilar.
+        if v and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", v):
+            raise ValueError("external_id faqat harf, raqam, nuqta, chiziqcha "
+                             "va pastki chiziqdan iborat bo'lishi mumkin")
         return v
 
     def validate_complete(self) -> None:

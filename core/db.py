@@ -43,6 +43,9 @@ CAMERA_EXTRA_COLUMNS = {
     "always_on": "INTEGER NOT NULL DEFAULT 0",    # doim tayyor tursinmi
     "last_seen": "TEXT",                          # oxirgi marta onlayn bo'lgan vaqt (UTC)
     "node_id": "INTEGER NOT NULL DEFAULT 1",      # qaysi MediaMTX tuguni tortadi
+    # Tashqi tizim identifikatori: asosiy tizim o'z ID'si bilan murojaat
+    # qiladi (ext:...), mapping jadval yuritmaydi.
+    "external_id": "TEXT",
 }
 
 # Kamera ko'payganda xaritani va ro'yxatni tez ushlab turadigan indekslar.
@@ -54,6 +57,9 @@ INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at)",
     "CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts)",
     "CREATE INDEX IF NOT EXISTS idx_cameras_node ON cameras(node_id)",
+    # Bo'sh/NULL qiymatlar cheklovga tushmaydi — external_id ixtiyoriy.
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_cameras_external "
+    "ON cameras(external_id) WHERE external_id IS NOT NULL AND external_id != ''",
 ]
 
 

@@ -31,6 +31,22 @@ def media_host(request: Request) -> str:
     return "localhost" if host == "0.0.0.0" else host
 
 
+def resolve_ref(db, ref: str):
+    """Kamera qatori `ref` bo'yicha: '123' — ichki id, 'ext:...' — tashqi id.
+
+    Asosiy tizim o'z identifikatori bilan murojaat qila oladi — mapping
+    jadval yuritish shart emas. Topilmasa None.
+    """
+    ref = (ref or "").strip()
+    if ref.startswith("ext:"):
+        return db.execute("SELECT * FROM cameras WHERE external_id = ?",
+                          (ref[4:],)).fetchone()
+    if ref.isdigit():
+        return db.execute("SELECT * FROM cameras WHERE id = ?",
+                          (int(ref),)).fetchone()
+    return None
+
+
 # ---------- MediaMTX tugunlari ----------
 
 _node_cache: dict[int, tuple[float, dict | None]] = {}
@@ -169,6 +185,7 @@ def admin_camera(row, request: Request) -> dict:
     data = public_camera(row, request)
     data.update({
         "slug": row["slug"],
+        "external_id": row["external_id"] or "",
         "state": camera_state(row),
         "resolution": row["resolution"] or "",
         "source_type": "rtsp" if row["ip"] else "manual",

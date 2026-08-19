@@ -15,7 +15,7 @@ from media import sync as mediamtx_sync
 from .config import CHANNEL_VENDORS, PORT, VENDORS
 from .helpers import (admin_camera, cameras_for_mediamtx, channel_path,
                       clear_node_cache, detect_codec, detect_sub_path,
-                      mask_config, require_admin)
+                      mask_config, require_admin, resolve_ref)
 from .models import CameraIn, NodeIn, NvrIn, ProbeIn, ScanIn, UserIn
 
 # Prefiks nisbiy — create_app uni /api/v1 (asosiy) va /api (eski) ostida ulaydi.
@@ -60,34 +60,38 @@ def admin_create(cam: CameraIn, request: Request):
     sub_path = detect_sub_path(cam, cam.password or "")
     with get_db() as db:
         slug = unique_slug(db, f"{cam.region}_{cam.name}")
-        db.execute(
-            "INSERT INTO cameras (name, region, lat, lng, stream_url, slug, ip, "
-            "port, username, password_enc, rtsp_path, sub_path, vendor, enabled, "
-            "note, codec, resolution, transcode, always_on, node_id) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                cam.name.strip(), cam.region.strip(), cam.lat, cam.lng,
-                cam.stream_url.strip() if cam.source_type == "manual" else "",
-                slug,
-                cam.ip.strip() if cam.source_type == "rtsp" else "",
-                cam.port, cam.username.strip(),
-                security.encrypt(cam.password) if cam.password else "",
-                cam.rtsp_path.strip(), sub_path, cam.vendor, int(cam.enabled),
-                cam.note.strip(), codec, resolution, int(transcode),
-                int(cam.always_on), cam.node_id,
-            ),
-        )
+        try:
+            db.execute(
+                "INSERT INTO cameras (name, region, lat, lng, stream_url, slug, ip, "
+                "port, username, password_enc, rtsp_path, sub_path, vendor, enabled, "
+                "note, codec, resolution, transcode, always_on, node_id, external_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    cam.name.strip(), cam.region.strip(), cam.lat, cam.lng,
+                    cam.stream_url.strip() if cam.source_type == "manual" else "",
+                    slug,
+                    cam.ip.strip() if cam.source_type == "rtsp" else "",
+                    cam.port, cam.username.strip(),
+                    security.encrypt(cam.password) if cam.password else "",
+                    cam.rtsp_path.strip(), sub_path, cam.vendor, int(cam.enabled),
+                    cam.note.strip(), codec, resolution, int(transcode),
+                    int(cam.always_on), cam.node_id, cam.external_id,
+                ),
+            )
+        except sqlite3.IntegrityError:
+            raise HTTPException(409, f"external_id band: {cam.external_id}")
         row = db.execute("SELECT * FROM cameras WHERE slug = ?", (slug,)).fetchone()
     return admin_camera(row, request)
 
 
-@router.put("/cameras/{camera_id}")
-def admin_update(camera_id: int, cam: CameraIn, request: Request):
+@router.put("/cameras/{ref}")
+def admin_update(ref: str, cam: CameraIn, request: Request):
     cam.validate_complete()
     with get_db() as db:
-        old = db.execute("SELECT * FROM cameras WHERE id = ?", (camera_id,)).fetchone()
+        old = resolve_ref(db, ref)
         if old is None:
             raise HTTPException(404, "Kamera topilmadi")
+        camera_id = old["id"]
 
         # Parol bo'sh qoldirilsa — eskisi saqlanadi.
         if cam.password:
@@ -113,22 +117,25 @@ def admin_update(camera_id: int, cam: CameraIn, request: Request):
         if not sub_path and not responded:  # kamera javob bermadi — eskisi qoladi
             sub_path = old["sub_path"] or ""
 
-        db.execute(
-            "UPDATE cameras SET name=?, region=?, lat=?, lng=?, stream_url=?, "
-            "slug=?, ip=?, port=?, username=?, password_enc=?, rtsp_path=?, "
-            "sub_path=?, vendor=?, enabled=?, note=?, codec=?, resolution=?, "
-            "transcode=?, always_on=?, node_id=? WHERE id=?",
-            (
-                cam.name.strip(), cam.region.strip(), cam.lat, cam.lng,
-                cam.stream_url.strip() if cam.source_type == "manual" else "",
-                slug,
-                cam.ip.strip() if cam.source_type == "rtsp" else "",
-                cam.port, cam.username.strip(), password_enc,
-                cam.rtsp_path.strip(), sub_path, cam.vendor, int(cam.enabled),
-                cam.note.strip(), codec, resolution, int(transcode),
-                int(cam.always_on), cam.node_id, camera_id,
-            ),
-        )
+        try:
+            db.execute(
+                "UPDATE cameras SET name=?, region=?, lat=?, lng=?, stream_url=?, "
+                "slug=?, ip=?, port=?, username=?, password_enc=?, rtsp_path=?, "
+                "sub_path=?, vendor=?, enabled=?, note=?, codec=?, resolution=?, "
+                "transcode=?, always_on=?, node_id=?, external_id=? WHERE id=?",
+                (
+                    cam.name.strip(), cam.region.strip(), cam.lat, cam.lng,
+                    cam.stream_url.strip() if cam.source_type == "manual" else "",
+                    slug,
+                    cam.ip.strip() if cam.source_type == "rtsp" else "",
+                    cam.port, cam.username.strip(), password_enc,
+                    cam.rtsp_path.strip(), sub_path, cam.vendor, int(cam.enabled),
+                    cam.note.strip(), codec, resolution, int(transcode),
+                    int(cam.always_on), cam.node_id, cam.external_id, camera_id,
+                ),
+            )
+        except sqlite3.IntegrityError:
+            raise HTTPException(409, f"external_id band: {cam.external_id}")
         row = db.execute("SELECT * FROM cameras WHERE id = ?", (camera_id,)).fetchone()
     return admin_camera(row, request)
 
@@ -168,12 +175,13 @@ def admin_detect_sub():
     return {"checked": len(rows), "found": len(found)}
 
 
-@router.delete("/cameras/{camera_id}", status_code=204)
-def admin_delete(camera_id: int):
+@router.delete("/cameras/{ref}", status_code=204)
+def admin_delete(ref: str):
     with get_db() as db:
-        cur = db.execute("DELETE FROM cameras WHERE id = ?", (camera_id,))
-        if cur.rowcount == 0:
+        row = resolve_ref(db, ref)
+        if row is None:
             raise HTTPException(404, "Kamera topilmadi")
+        db.execute("DELETE FROM cameras WHERE id = ?", (row["id"],))
 
 
 # ---------- NVR import va skaner ----------

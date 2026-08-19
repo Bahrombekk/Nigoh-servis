@@ -6,7 +6,7 @@ from core.db import get_db
 from media import sync as mediamtx_sync
 
 from .helpers import (allowed_regions, camera_for_mediamtx, camera_state,
-                      node_info, stream_urls)
+                      node_info, resolve_ref, stream_urls)
 
 # Prefiks nisbiy — create_app uni /api/v1 (asosiy) va /api (eski) ostida ulaydi.
 router = APIRouter(prefix="/cameras", tags=["cameras"])
@@ -30,16 +30,16 @@ def list_cameras(request: Request, bbox: str = "", limit: int = 20000):
     if regions is not None and not regions:
         return {"total": 0, "shown": 0, "cameras": []}
 
-    sql = ("SELECT id, name, region, lat, lng, ip, port, slug, enabled, "
-           "last_seen, codec, resolution, transcode, always_on "
+    sql = ("SELECT id, external_id, name, region, lat, lng, ip, port, slug, "
+           "enabled, last_seen, codec, resolution, transcode, always_on "
            "FROM cameras WHERE enabled = 1")
     params: list = []
     if regions is not None:
         sql += f" AND region IN ({','.join('?' * len(regions))})"
         params += regions
     count_sql, count_params = sql.replace(
-        "SELECT id, name, region, lat, lng, ip, port, slug, enabled, "
-        "last_seen, codec, resolution, transcode, always_on ",
+        "SELECT id, external_id, name, region, lat, lng, ip, port, slug, "
+        "enabled, last_seen, codec, resolution, transcode, always_on ",
         "SELECT COUNT(*) "), list(params)
     if bbox:
         try:
@@ -59,7 +59,8 @@ def list_cameras(request: Request, bbox: str = "", limit: int = 20000):
         "shown": len(rows),
         # IP tashqariga chiqmaydi — undan faqat tiriklik holati hisoblanadi.
         "cameras": [{
-            "id": r["id"], "name": r["name"], "region": r["region"],
+            "id": r["id"], "external_id": r["external_id"] or "",
+            "name": r["name"], "region": r["region"],
             "lat": r["lat"], "lng": r["lng"],
             "online": health.online(r["ip"], r["port"]),
             # Yagona holat: disabled / unknown / offline / stalled / online.
@@ -74,20 +75,19 @@ def list_cameras(request: Request, bbox: str = "", limit: int = 20000):
     }
 
 
-@router.get("/{camera_id}/stream")
-def camera_stream(camera_id: int, request: Request, hevc: int = 0,
+@router.get("/{ref}/stream")
+def camera_stream(ref: str, request: Request, hevc: int = 0,
                   quality: str = ""):
     """Bitta kameraning oqim manzili — ko'rish boshlanganda so'raladi.
 
+    `ref` — ichki id (`123`) yoki tashqi id (`ext:cam-toshkent-014`).
     `hevc=1` — brauzer H.265 ni o'zi o'qiy oladi, o'girish kerak emas.
     `quality=sub` — past sifatli 2-oqim (video devor setkasi uchun);
     kamerada sub yo'l bo'lmasa asosiy oqim qaytadi.
     """
     with get_db() as db:
-        row = db.execute(
-            "SELECT * FROM cameras WHERE id = ? AND enabled = 1", (camera_id,)
-        ).fetchone()
-        if row is None:
+        row = resolve_ref(db, ref)
+        if row is None or not row["enabled"]:
             raise HTTPException(404, "Kamera topilmadi")
         camera = camera_for_mediamtx(row)
 
@@ -119,18 +119,17 @@ def camera_stream(camera_id: int, request: Request, hevc: int = 0,
     return stream_urls(row, request, hevc_ok=bool(hevc), quality=quality)
 
 
-@router.get("/{camera_id}/snapshot")
-def camera_snapshot(camera_id: int, request: Request):
+@router.get("/{ref}/snapshot")
+def camera_snapshot(ref: str, request: Request):
     """Kameraning JPEG surati — video ulangunicha darhol ko'rsatish uchun.
 
-    Player suratni poster sifatida qo'yadi: his qilinadigan ochilish
-    ~100 ms bo'ladi, video esa orqa fonda ulanadi.
+    `ref` — ichki id yoki `ext:...`. Player suratni poster sifatida
+    qo'yadi: his qilinadigan ochilish ~100 ms bo'ladi, video esa orqa
+    fonda ulanadi.
     """
     with get_db() as db:
-        row = db.execute(
-            "SELECT * FROM cameras WHERE id = ? AND enabled = 1", (camera_id,)
-        ).fetchone()
-    if row is None or not row["ip"]:
+        row = resolve_ref(db, ref)
+    if row is None or not row["enabled"] or not row["ip"]:
         raise HTTPException(404, "Kamera topilmadi")
     regions = allowed_regions(request)
     if regions is not None and row["region"] not in regions:
