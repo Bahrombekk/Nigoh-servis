@@ -1,15 +1,72 @@
 """Nigoh — autentifikatsiya endpointlari."""
+import threading
+import time
 from urllib.parse import parse_qs
 
 from fastapi import APIRouter, HTTPException, Request, Response
 
 from core import security
 from core.db import get_db
+from core.log import log
 
 from .models import LoginIn
 
 # Prefiks nisbiy — create_app uni /api/v1 (asosiy) va /api (eski) ostida ulaydi.
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+
+# ---------- login brute-force himoyasi ----------
+#
+# IP bo'yicha eksponensial kechikish: dastlabki 5 xato jazosiz (barmoq
+# xatosi uchun), keyin har xato kutishni ikki baravar oshiradi
+# (1s, 2s, 4s ... eng ko'pi 30s). So'rov javob olishdan oldin shu yerda
+# kutib turadi — parol terish qurollari sekinlashadi. Har xato jurnalga
+# `login_failed` bo'lib yoziladi — fail2ban shu satr bo'yicha ip'ni
+# butunlay bloklashi mumkin.
+
+_FAIL_FREE = 5           # shu songacha kechikish yo'q
+_FAIL_MAX_DELAY = 30.0   # soniya
+_FAIL_TTL = 3600.0       # soniya — shuncha tinch turgan ip hisobi unutiladi
+_fails: dict[str, tuple[int, float]] = {}    # ip -> (xato soni, oxirgi vaqt)
+_fails_lock = threading.Lock()
+
+
+def _client_ip(request: Request) -> str:
+    # Nginx ortida haqiqiy manzil X-Forwarded-For'da (DEPLOY.md namunasi
+    # uni har doim qo'yadi); to'g'ridan ulanishda socket manzili.
+    fwd = request.headers.get("x-forwarded-for", "")
+    if fwd:
+        return fwd.split(",")[0].strip()
+    return request.client.host if request.client else ""
+
+
+def _fail_delay(ip: str) -> float:
+    now = time.monotonic()
+    with _fails_lock:
+        if len(_fails) > 1000:               # xotira cheksiz o'smasin
+            for k, (_, t) in list(_fails.items()):
+                if now - t > _FAIL_TTL:
+                    _fails.pop(k, None)
+        count, last = _fails.get(ip, (0, 0.0))
+        if now - last > _FAIL_TTL:
+            count = 0
+        if count < _FAIL_FREE:
+            return 0.0
+        return min(2.0 ** (count - _FAIL_FREE), _FAIL_MAX_DELAY)
+
+
+def _note_fail(ip: str) -> None:
+    now = time.monotonic()
+    with _fails_lock:
+        count, last = _fails.get(ip, (0, 0.0))
+        if now - last > _FAIL_TTL:
+            count = 0
+        _fails[ip] = (count + 1, now)
+
+
+def _clear_fails(ip: str) -> None:
+    with _fails_lock:
+        _fails.pop(ip, None)
 
 
 @router.post("/stream")
@@ -41,7 +98,12 @@ def stream_auth(body: dict):
 
 
 @router.post("/login")
-def login(body: LoginIn, response: Response):
+def login(body: LoginIn, request: Request, response: Response):
+    ip = _client_ip(request)
+    delay = _fail_delay(ip)
+    if delay:
+        time.sleep(delay)   # sync endpoint threadpool'da — boshqalarni bloklamaydi
+
     with get_db() as db:
         security.purge_expired_sessions(db)
         row = db.execute(
@@ -52,7 +114,11 @@ def login(body: LoginIn, response: Response):
         if row is None or not security.verify_password(
             body.password, row["pw_hash"], row["pw_salt"]
         ):
+            _note_fail(ip)
+            log("auth", "login_failed", level="warning",
+                ip=ip, username=body.username)
             raise HTTPException(401, "Login yoki parol noto'g'ri")
+        _clear_fails(ip)
         token = security.create_session(db, row["id"])
         username, role = row["username"], row["role"]
 
