@@ -66,8 +66,14 @@ docker compose up -d --build
 
 ## HTTPS (tavsiya qilinadi)
 
-Parollar ochiq HTTP orqali yurmasligi uchun oldiga nginx qo'ying.
-API uchun namuna (video portlari alohida qoladi):
+Parollar ochiq HTTP orqali yurmasligi uchun oldiga nginx qo'ying va
+`.env` da `MEDIA_BASE=https://kamera.example.uz/media` qo'ying — shunda
+video ham shu domen ostidan (HTTPS) yuradi, brauzerning mixed-content
+blokiga tushmaydi va 8888/8889-portlarni tashqariga ochish shart emas.
+
+`X-Forwarded-For` majburiy: MediaMTX tomoshabinning haqiqiy IP'sini shu
+sarlavhadan oladi (aks holda hamma 127.0.0.1 bo'lib ko'rinadi va HLS
+sessiyalari aralashadi).
 
 ```nginx
 server {
@@ -76,18 +82,33 @@ server {
     ssl_certificate     /etc/letsencrypt/live/kamera.example.uz/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/kamera.example.uz/privkey.pem;
 
+    # API + UI
     location / {
         proxy_pass http://127.0.0.1:8010;
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-For $remote_addr;
+    }
+
+    # HLS video (MEDIA_BASE=/media bo'lganda)
+    location /media/hls/ {
+        proxy_pass http://127.0.0.1:8888/;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_buffering off;
+    }
+
+    # WebRTC signal (WHEP)
+    location /media/whep/ {
+        proxy_pass http://127.0.0.1:8889/;
+        proxy_set_header X-Forwarded-For $remote_addr;
     }
 }
 ```
 
-Eslatma: sahifa HTTPS'da ochilsa, brauzer HTTP'dagi videoni bloklaydi
-(mixed content) — 8888/8889 ni ham xuddi shunday HTTPS proksidan
-o'tkazing yoki `MEDIA_HOST` ga HTTPS beradigan manzil qo'ying. WebRTC'ning
-UDP qismi (8189) proksisiz to'g'ridan ishlayveradi.
+WebRTC'ning UDP qismi (8189) proksisiz to'g'ridan ishlayveradi —
+firewall'da ochiq tursin; ulanolmasa brauzer o'zi HLS'ga o'tadi. Uzoq
+MediaMTX tugunlari `MEDIA_BASE` ga kirmaydi — ular o'z `public_host`
+manzilida qoladi.
 
 ## Bir nechta MediaMTX tuguni (kameralar har xil joylarda bo'lsa)
 

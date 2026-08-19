@@ -24,16 +24,17 @@ def stream_auth(body: dict):
     action = str(body.get("action") or "")
     path = str(body.get("path") or "")
     query = str(body.get("query") or "")
+    token = (parse_qs(query).get("token") or [""])[0]
 
-    # O'z jarayonlarimiz — MediaMTX bilan bitta mashinada: launcher'ning
-    # FFmpeg'i o'girilgan oqimni publish/read qiladi, snapshot zaxirasi
-    # RTSP o'qiydi. Ularga chipta kerak emas.
-    if ip in ("127.0.0.1", "::1", "localhost"):
+    # O'z jarayonlarimiz (launcher FFmpeg'i, snapshot zaxirasi) ichki
+    # chipta bilan yuradi — publish ham, read ham mumkin. IP'ga qarab
+    # ishonib bo'lmaydi: nginx proksi ortida barcha tomoshabin 127.0.0.1
+    # bo'lib ko'rinadi, IP istisno chipta tekshiruvini butunlay o'chirardi.
+    if security.internal_token_ok(token):
         return {"ok": True}
 
     # Tashqaridan faqat tomosha — va faqat chipta bilan.
     if action in ("read", "playback"):
-        token = (parse_qs(query).get("token") or [""])[0]
         if security.stream_access_ok(ip, path, token):
             return {"ok": True}
     raise HTTPException(401, "Oqimga ruxsat yo'q")

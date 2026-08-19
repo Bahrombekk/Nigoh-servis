@@ -292,7 +292,9 @@ def _ffmpeg_snapshot(slug: str) -> bytes | None:
     exe = _ffmpeg_exe()
     if not exe or not slug:
         return None
-    url = f"rtsp://127.0.0.1:{os.environ.get('MEDIAMTX_RTSP_PORT', '8554')}/{slug}"
+    from . import security   # kech import: modul yukida kalit o'qilmasin
+    url = (f"rtsp://127.0.0.1:{os.environ.get('MEDIAMTX_RTSP_PORT', '8554')}"
+           f"/{slug}?token={security.internal_token()}")
     try:
         out = subprocess.run(
             [exe, "-hide_banner", "-loglevel", "error",

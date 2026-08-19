@@ -247,6 +247,10 @@ def build_config(cameras: list[dict], auth_url: str | None = None,
         "webrtcAddress": f":{webrtc_port}",
         "webrtcAllowOrigins": ["*"],
         "webrtcLocalUDPAddress": ":8189",
+        # Nginx (127.0.0.1) orqali kelgan so'rovlarda haqiqiy tomoshabin
+        # IP'si X-Forwarded-For sarlavhasidan olinadi — auth va HLS
+        # sessiyalari to'g'ri IP bilan ishlaydi.
+        "webrtcTrustedProxies": ["127.0.0.1"],
 
         # HLS — WebRTC ishlamagan brauzerlar uchun zaxira.
         "hls": True,
@@ -259,6 +263,7 @@ def build_config(cameras: list[dict], auth_url: str | None = None,
         "hlsSegmentDuration": "1s",
         "hlsPartDuration": "200ms",
         "hlsAllowOrigins": ["*"],
+        "hlsTrustedProxies": ["127.0.0.1"],
 
         "rtmp": False,
         "srt": False,

@@ -117,6 +117,26 @@ def stream_access_ok(ip: str, path: str, token: str) -> bool:
     return alive
 
 
+# ---------- ichki jarayonlar chiptasi ----------
+#
+# Launcher'ning FFmpeg'i (o'girish) va snapshot zaxirasi MediaMTX'ga
+# 127.0.0.1 dan ulanadi, lekin IP'ga ishonib bo'lmaydi: nginx proksi
+# ortida barcha tomoshabin ham 127.0.0.1 bo'lib ko'rinadi. Shuning uchun
+# ichki jarayonlar muddatsiz, secret.key'dan hosil qilingan alohida
+# chipta bilan yuradi — kalit almashsa chipta ham almashadi.
+
+_internal_key = hashlib.sha256(b"nigoh-internal:" + _load_key()).digest()
+
+
+def internal_token() -> str:
+    """Ichki jarayonlar (FFmpeg) uchun muddatsiz chipta."""
+    return base64.urlsafe_b64encode(_internal_key[:20]).decode().rstrip("=")
+
+
+def internal_token_ok(token: str) -> bool:
+    return bool(token) and hmac.compare_digest(token, internal_token())
+
+
 # ---------- admin paroli ----------
 
 def hash_password(password: str, salt: str | None = None) -> tuple[str, str]:

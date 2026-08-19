@@ -15,6 +15,7 @@ import subprocess
 import sys
 import time
 
+from core import security
 from core.db import get_db
 
 from .sync import RTSP_PORT, ffmpeg_path, has_nvenc, transcode_args
@@ -84,8 +85,11 @@ def main() -> int:
 
     # Manba — kameraning o'zi emas, MediaMTX'dagi xom yo'l: kamera bilan
     # bitta ulanish yetadi, uni ham xom, ham o'girilgan ko'rinishda beramiz.
-    source = f"rtsp://127.0.0.1:{RTSP_PORT}/{lookup}"
-    destination = f"rtsp://127.0.0.1:{RTSP_PORT}/{slug}"
+    # Ichki chipta shart: auth endi IP'ga qarab ruxsat bermaydi (proksi
+    # ortida hamma 127.0.0.1 bo'lib ko'rinadi).
+    auth = f"?token={security.internal_token()}"
+    source = f"rtsp://127.0.0.1:{RTSP_PORT}/{lookup}{auth}"
+    destination = f"rtsp://127.0.0.1:{RTSP_PORT}/{slug}{auth}"
 
     exe = ffmpeg_path()
     if not exe:
