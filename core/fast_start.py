@@ -291,19 +291,11 @@ def _ffmpeg_exe() -> str:
     return shutil.which("ffmpeg") or ""
 
 
-def _ffmpeg_snapshot(slug: str) -> bytes | None:
-    """Zaxira yo'l: MediaMTX'dagi oqimdan bitta kadr olinadi.
-
-    HTTP-snapshot bermaydigan kameralar uchun — MediaMTX kamerani baribir
-    talab bo'yicha tortadi, biz undan lokal ulanish orqali kadr olamiz
-    (kameraga qo'shimcha ulanish ochilmaydi).
-    """
+def _ffmpeg_frame(url: str) -> bytes | None:
+    """Istalgan RTSP manzildan bitta JPEG kadr (FFmpeg bilan)."""
     exe = _ffmpeg_exe()
-    if not exe or not slug:
+    if not exe or not url:
         return None
-    from . import security   # kech import: modul yukida kalit o'qilmasin
-    url = (f"rtsp://127.0.0.1:{os.environ.get('MEDIAMTX_RTSP_PORT', '8554')}"
-           f"/{slug}?token={security.internal_token()}")
     try:
         out = subprocess.run(
             [exe, "-hide_banner", "-loglevel", "error",
@@ -315,6 +307,40 @@ def _ffmpeg_snapshot(slug: str) -> bytes | None:
         return None
     data = out.stdout
     return data if data[:2] == b"\xff\xd8" else None
+
+
+def _ffmpeg_snapshot(slug: str) -> bytes | None:
+    """Zaxira yo'l: MediaMTX'dagi oqimdan bitta kadr olinadi.
+
+    HTTP-snapshot bermaydigan kameralar uchun — MediaMTX kamerani baribir
+    talab bo'yicha tortadi, biz undan lokal ulanish orqali kadr olamiz
+    (kameraga qo'shimcha ulanish ochilmaydi).
+    """
+    if not slug:
+        return None
+    from . import security   # kech import: modul yukida kalit o'qilmasin
+    return _ffmpeg_frame(
+        f"rtsp://127.0.0.1:{os.environ.get('MEDIAMTX_RTSP_PORT', '8554')}"
+        f"/{slug}?token={security.internal_token()}")
+
+
+def device_snapshot(ip: str, username: str, password: str, channel: int,
+                    vendor: str = "", rtsp_url: str = "") -> bytes | None:
+    """Hali bazaga saqlanmagan qurilmadan bitta JPEG (skan ko'rinishi).
+
+    Avval kameraning HTTP-snapshot manzillari (eng tez), ishlamasa
+    to'g'ridan RTSP'dan kadr. Keshsiz — skanda har kanal bir marta.
+    """
+    if not ip:
+        return None
+    for url in _snapshot_candidates(vendor, ip, username, password, channel):
+        try:
+            data = _fetch_image(url, username, password)
+        except (urllib.error.URLError, OSError, ValueError):
+            continue
+        if data:
+            return data
+    return _ffmpeg_frame(rtsp_url) if rtsp_url else None
 
 
 def snapshot(camera_id: int, ip: str, username: str, password: str,

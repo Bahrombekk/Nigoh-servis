@@ -9,6 +9,7 @@ Qatlamlar:
     app/routes_public.py  /api/v1/cameras/*   (kirishsiz)
     app/routes_streams.py /api/v1/streams     (batch oqim chiptalari)
     app/routes_events.py  /api/v1/events      (SSE — holat o'zgarishlari)
+    app/routes_devices.py /api/v1/devices/*   (skan: job + SSE natijalar)
     app/routes_stats.py   /api/v1/stats/*     (kirishsiz — dashboard tarixi)
     app/routes_admin.py   /api/v1/admin/*     (super-admin)
 
@@ -37,6 +38,7 @@ from .config import VENDORS
 from .deps import require_key
 from .routes_admin import router as admin_router
 from .routes_auth import router as auth_router
+from .routes_devices import router as devices_router
 from .routes_events import router as events_router
 from .routes_public import router as public_router
 from .routes_stats import router as stats_router
@@ -115,7 +117,7 @@ def create_app() -> FastAPI:
     app.include_router(auth_router, prefix="/api/v1")
     app.include_router(auth_router, prefix="/api", include_in_schema=False)
     for router in (public_router, streams_router, events_router,
-                   stats_router, admin_router):
+                   devices_router, stats_router, admin_router):
         app.include_router(router, prefix="/api/v1",
                            dependencies=[Depends(require_key)])
         app.include_router(router, prefix="/api", include_in_schema=False,
