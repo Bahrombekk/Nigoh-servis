@@ -235,7 +235,7 @@ def api_key_ok(request: Request) -> bool:
 
 
 def current_user(request: Request):
-    """Sessiyadagi foydalanuvchi (admin yoki operator), bo'lmasa None."""
+    """Debug UI sessiyasidagi foydalanuvchi, bo'lmasa None."""
     token = request.cookies.get(security.SESSION_COOKIE)
     with get_db() as db:
         return security.session_admin(db, token)
@@ -251,25 +251,6 @@ def require_admin(request: Request):
     if user["role"] != "admin":
         raise HTTPException(403, "Bu bo'lim faqat admin uchun")
     return user
-
-
-def allowed_regions(request: Request) -> list[str] | None:
-    """Foydalanuvchi qaysi hududlarni ko'ra oladi.
-
-    None — cheklov yo'q (API kalit yoki admin); ro'yxat — operator:
-    faqat shu hududlar (bo'sh = hech narsa). Anonim so'rov bu yergacha
-    odatda yetmaydi (require_key 401 beradi), yetsa ham hech narsa
-    ko'rmaydi.
-    """
-    if api_key_ok(request):
-        return None
-    user = current_user(request)
-    if user is None:
-        return []
-    if user["role"] == "admin":
-        return None
-    with get_db() as db:
-        return security.user_regions(db, user["id"])
 
 
 def camera_for_mediamtx(row) -> dict | None:

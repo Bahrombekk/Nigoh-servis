@@ -10,8 +10,7 @@ Qatlamlar:
     app/routes_streams.py /api/v1/streams     (batch oqim chiptalari)
     app/routes_events.py  /api/v1/events      (SSE — holat o'zgarishlari)
     app/routes_devices.py /api/v1/devices/*   (skan: job + SSE natijalar)
-    app/routes_stats.py   /api/v1/stats/*     (kirishsiz — dashboard tarixi)
-    app/routes_admin.py   /api/v1/admin/*     (super-admin)
+    app/routes_admin.py   /api/v1/admin/*     (kameralar CRUD, tugunlar)
 
 API ikki prefiksda tinglaydi:
 
@@ -41,7 +40,6 @@ from .routes_auth import router as auth_router
 from .routes_devices import router as devices_router
 from .routes_events import router as events_router
 from .routes_public import router as public_router
-from .routes_stats import router as stats_router
 from .routes_streams import router as streams_router
 
 API_DESCRIPTION = """\
@@ -59,9 +57,9 @@ Bo'limlar:
 * **cameras** — ro'yxat, batch holat, oqim manzili (chiptali), surat.
 * **streams** — batch oqim chiptalari (bitta so'rovda 128 tagacha).
 * **events** — SSE: holat o'zgarishlari jonli.
-* **stats** — dashboard tarixi (24 soat / 7 kun).
-* **admin** — kameralar CRUD, NVR import, skaner, foydalanuvchilar,
-  MediaMTX tugunlari va sinxronlash.
+* **devices** — skan (SSE), qurilma pasporti.
+* **admin** — kameralar CRUD, NVR import, MediaMTX tugunlari va
+  sinxronlash. Xarita, rollar va dashboard asosiy tizimda.
 
 Kamera holati (`state`): `disabled / unknown / offline / stalled / online`.
 Tugun holati (`status`): `online / degraded / offline`.
@@ -85,20 +83,6 @@ def create_app() -> FastAPI:
     def index():
         return FileResponse(BASE_DIR / "static" / "index.html")
 
-    @app.get("/static/uz.geojson", include_in_schema=False)
-    def uz_boundary():
-        """O'zbekiston chegarasi (OSM, ADM0) — xaritada hududni ajratish uchun."""
-        return FileResponse(BASE_DIR / "static" / "uz.geojson",
-                            media_type="application/geo+json",
-                            headers={"Cache-Control": "max-age=86400"})
-
-    @app.get("/static/uz_regions.geojson", include_in_schema=False)
-    def uz_regions():
-        """Viloyat chegaralari (ADM1) — nuqtadan hududni aniqlash uchun."""
-        return FileResponse(BASE_DIR / "static" / "uz_regions.geojson",
-                            media_type="application/geo+json",
-                            headers={"Cache-Control": "max-age=86400"})
-
     @app.get("/api/v1/vendors", tags=["cameras"],
              dependencies=[Depends(require_key)])
     @app.get("/api/vendors", include_in_schema=False,
@@ -117,7 +101,7 @@ def create_app() -> FastAPI:
     app.include_router(auth_router, prefix="/api/v1")
     app.include_router(auth_router, prefix="/api", include_in_schema=False)
     for router in (public_router, streams_router, events_router,
-                   devices_router, stats_router, admin_router):
+                   devices_router, admin_router):
         app.include_router(router, prefix="/api/v1",
                            dependencies=[Depends(require_key)])
         app.include_router(router, prefix="/api", include_in_schema=False,

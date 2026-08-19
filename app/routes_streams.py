@@ -14,8 +14,8 @@ from core import fast_start
 from core.db import get_db
 from media import sync as mediamtx_sync
 
-from .helpers import (allowed_regions, camera_for_mediamtx, camera_state,
-                      node_info, resolve_ref, stream_urls)
+from .helpers import (camera_for_mediamtx, camera_state, node_info,
+                      resolve_ref, stream_urls)
 
 # Prefiks nisbiy — create_app uni /api/v1 (asosiy) va /api (eski) ostida ulaydi.
 router = APIRouter(prefix="/streams", tags=["streams"])
@@ -46,13 +46,12 @@ def batch_streams(body: StreamsIn, request: Request):
 
     Javob `streams` lug'ati so'ralgan id bilan kalitlanadi. Muvaffaqiyat:
     `{webrtc, hls, poster, mode}`; muammo: `{error}` — `topilmadi`,
-    `ruxsat yo'q`, `disabled`, `offline`. `egress_estimate_mbps` —
-    hammasi birdan ko'rilsa serverdan chiqadigan taxminiy trafik.
+    `disabled`, `offline`. `egress_estimate_mbps` — hammasi birdan
+    ko'rilsa serverdan chiqadigan taxminiy trafik.
     """
     if body.quality not in ("", "sub"):
         raise HTTPException(400, "quality faqat '' yoki 'sub' bo'lishi mumkin")
 
-    regions = allowed_regions(request)
     with get_db() as db:
         rows = {str(ref): resolve_ref(db, str(ref)) for ref in body.ids}
 
@@ -60,8 +59,6 @@ def batch_streams(body: StreamsIn, request: Request):
         key, row = item
         if row is None:
             return key, {"error": "topilmadi"}, 0.0
-        if regions is not None and row["region"] not in regions:
-            return key, {"error": "ruxsat yo'q"}, 0.0
         state = camera_state(row)
         if state in ("disabled", "offline"):
             return key, {"error": state}, 0.0

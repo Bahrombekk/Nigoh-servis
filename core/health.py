@@ -18,7 +18,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
-from . import bus, stats
+from . import bus
 from .db import get_db
 from .log import log
 
@@ -83,13 +83,6 @@ def _sweep() -> None:
                 "UPDATE cameras SET last_seen = ? WHERE ip = ? AND port = ?",
                 [(now_iso, ip, port) for ip, port in alive],
             )
-
-    # Dashboard tarixiga yoziladi: hudud kesimidagi suratlar va
-    # uzildi/ulandi hodisalari. Yozilmasa ham kuzatuv to'xtamaydi.
-    try:
-        stats.record_sweep(fresh)
-    except Exception as exc:
-        log("health", "stats_write_failed", level="error", error=str(exc))
 
     with _lock:
         _statuses.clear()               # o'chirilgan manzillar chiqib ketadi

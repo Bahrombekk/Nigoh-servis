@@ -161,17 +161,6 @@ def init_db() -> None:
             db.execute("ALTER TABLE admins ADD COLUMN role TEXT NOT NULL "
                        "DEFAULT 'admin'")
 
-        # Operator qaysi hududlarni ko'ra oladi (admin uchun yozuv bo'lmaydi —
-        # u hammasini ko'radi).
-        db.execute(
-            """
-            CREATE TABLE IF NOT EXISTS user_regions (
-                user_id INTEGER NOT NULL,
-                region TEXT NOT NULL,
-                UNIQUE (user_id, region)
-            )
-            """
-        )
         db.execute(
             """
             CREATE TABLE IF NOT EXISTS sessions (
@@ -224,30 +213,11 @@ def init_db() -> None:
                  int(os.environ.get("WEBRTC_PORT", "8889"))),
             )
 
-        # Dashboard statistikasi: hudud kesimidagi 5 daqiqalik suratlar va
-        # uzilish/ulanish hodisalari (core/stats.py yozadi).
-        db.execute(
-            """
-            CREATE TABLE IF NOT EXISTS stats_region (
-                ts TEXT NOT NULL,
-                region TEXT NOT NULL,
-                total INTEGER NOT NULL,
-                online INTEGER NOT NULL
-            )
-            """
-        )
-        db.execute(
-            """
-            CREATE TABLE IF NOT EXISTS stats_event (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                ts TEXT NOT NULL,
-                camera_id INTEGER NOT NULL,
-                name TEXT NOT NULL,
-                region TEXT NOT NULL,
-                kind TEXT NOT NULL
-            )
-            """
-        )
+        # Kesish (mikroservis rejasi, 3.1): statistika, Telegram va
+        # operator hududlari asosiy tizimga ko'chdi — eski bazalardan
+        # jadvallar olib tashlanadi. Yangi bazada allaqachon yo'q.
+        for legacy in ("stats_region", "stats_event", "user_regions"):
+            db.execute(f"DROP TABLE IF EXISTS {legacy}")
 
         for statement in INDEXES:
             db.execute(statement)

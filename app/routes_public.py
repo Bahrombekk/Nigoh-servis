@@ -5,8 +5,8 @@ from core import fast_start, health, security, snapshots
 from core.db import get_db
 from media import sync as mediamtx_sync
 
-from .helpers import (allowed_regions, camera_for_mediamtx, camera_state,
-                      node_info, resolve_ref, stream_urls)
+from .helpers import (camera_for_mediamtx, camera_state, node_info,
+                      resolve_ref, stream_urls)
 
 # Prefiks nisbiy — create_app uni /api/v1 (asosiy) va /api (eski) ostida ulaydi.
 router = APIRouter(prefix="/cameras", tags=["cameras"])
@@ -22,21 +22,11 @@ def list_cameras(request: Request, bbox: str = "", limit: int = 20000):
 
     `bbox` berilsa (minLat,minLng,maxLat,maxLng) faqat shu to'rtburchak
     ichidagilar qaytariladi.
-
-    Ko'rinish: API kalit va admin hammasini ko'radi; operator faqat
-    o'ziga biriktirilgan hududlarni.
     """
-    regions = allowed_regions(request)
-    if regions is not None and not regions:
-        return {"total": 0, "shown": 0, "cameras": []}
-
     sql = ("SELECT id, external_id, name, region, lat, lng, ip, port, slug, "
            "enabled, last_seen, codec, sub_codec, resolution, transcode, "
            "always_on FROM cameras WHERE enabled = 1")
     params: list = []
-    if regions is not None:
-        sql += f" AND region IN ({','.join('?' * len(regions))})"
-        params += regions
     count_sql, count_params = sql.replace(
         "SELECT id, external_id, name, region, lat, lng, ip, port, slug, "
         "enabled, last_seen, codec, sub_codec, resolution, transcode, "
@@ -84,13 +74,7 @@ def cameras_status(request: Request, ids: str = "", all: int = 0):
     `?ids=1,2,ext:cam-14` — tanlanganlar; `?all=1` — hammasi. Keyin faqat
     o'zgarishlarni SSE yetkazadi, poll qilish shart emas.
 
-    `sub_codec` va `snapshot_at` maydonlari sxemada paydo bo'lguncha
-    bo'sh qaytadi (reja 2.7 va 2.3).
     """
-    regions = allowed_regions(request)
-    if regions is not None and not regions:
-        return {"total": 0, "cameras": []}
-
     with get_db() as db:
         if all:
             rows = db.execute("SELECT * FROM cameras ORDER BY id").fetchall()
@@ -102,9 +86,6 @@ def cameras_status(request: Request, ids: str = "", all: int = 0):
                     if r is not None]
         else:
             raise HTTPException(400, "ids=1,2,... yoki all=1 bering")
-
-    if regions is not None:
-        rows = [r for r in rows if r["region"] in regions]
 
     def out(r):
         keys = r.keys()
@@ -137,11 +118,6 @@ def camera_stream(ref: str, request: Request, hevc: int = 0,
         if row is None or not row["enabled"]:
             raise HTTPException(404, "Kamera topilmadi")
         camera = camera_for_mediamtx(row)
-
-    # Chipta shu yerda beriladi — ko'rinish nazorati ham shu nuqtada.
-    regions = allowed_regions(request)
-    if regions is not None and row["region"] not in regions:
-        raise HTTPException(403, "Bu kamerani ko'rishga ruxsat yo'q")
 
     # Yo'l o'z tugunidagi MediaMTX'da borligiga ishonch hosil qilamiz —
     # u qayta ishga tushgan bo'lsa ham ko'rish shu yerda tiklanadi.
@@ -180,9 +156,6 @@ def camera_snapshot(ref: str, request: Request):
         row = resolve_ref(db, ref)
     if row is None or not row["enabled"] or not row["ip"]:
         raise HTTPException(404, "Kamera topilmadi")
-    regions = allowed_regions(request)
-    if regions is not None and row["region"] not in regions:
-        raise HTTPException(403, "Bu kamerani ko'rishga ruxsat yo'q")
 
     # Surat disk zaxirasidan (core/snapshots yangilab turadi); birinchi
     # so'rovda jonli olinadi. ETag — brauzer/asosiy tizim o'zgarmagan

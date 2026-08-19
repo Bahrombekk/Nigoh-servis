@@ -419,8 +419,7 @@ def _user_view(db, row) -> dict:
     return {
         "id": row["id"], "username": row["username"], "role": row["role"],
         "created_at": row["created_at"],
-        "regions": (security.user_regions(db, row["id"])
-                    if row["role"] == "operator" else []),
+        "regions": [],     # rollar/hududlar asosiy tizimda — bu yerda yo'q
     }
 
 
@@ -448,13 +447,11 @@ def admin_user_create(body: UserIn):
         try:
             cur = db.execute(
                 "INSERT INTO admins (username, pw_hash, pw_salt, role) "
-                "VALUES (?, ?, ?, ?)",
-                (body.username.strip(), pw_hash, salt, body.role),
+                "VALUES (?, ?, ?, 'admin')",
+                (body.username.strip(), pw_hash, salt),
             )
         except sqlite3.IntegrityError:
             raise HTTPException(400, "Bunday login allaqachon bor")
-        security.set_user_regions(
-            db, cur.lastrowid, body.regions if body.role == "operator" else [])
         row = db.execute("SELECT id, username, role, created_at FROM admins "
                          "WHERE id = ?", (cur.lastrowid,)).fetchone()
         return _user_view(db, row)
@@ -468,14 +465,9 @@ def admin_user_update(user_id: int, body: UserIn):
                          (user_id,)).fetchone()
         if old is None:
             raise HTTPException(404, "Foydalanuvchi topilmadi")
-        if old["role"] == "admin" and body.role != "admin":
-            admins = db.execute("SELECT COUNT(*) FROM admins "
-                                "WHERE role = 'admin'").fetchone()[0]
-            if admins <= 1:
-                raise HTTPException(400, "Oxirgi adminni operator qilib bo'lmaydi")
         try:
-            db.execute("UPDATE admins SET username = ?, role = ? WHERE id = ?",
-                       (body.username.strip(), body.role, user_id))
+            db.execute("UPDATE admins SET username = ? WHERE id = ?",
+                       (body.username.strip(), user_id))
         except sqlite3.IntegrityError:
             raise HTTPException(400, "Bunday login allaqachon bor")
         if body.password:
@@ -484,8 +476,6 @@ def admin_user_update(user_id: int, body: UserIn):
                        (pw_hash, salt, user_id))
             # Parol almashdi — eski sessiyalar bekor.
             db.execute("DELETE FROM sessions WHERE admin_id = ?", (user_id,))
-        security.set_user_regions(
-            db, user_id, body.regions if body.role == "operator" else [])
         row = db.execute("SELECT id, username, role, created_at FROM admins "
                          "WHERE id = ?", (user_id,)).fetchone()
         return _user_view(db, row)
@@ -500,14 +490,10 @@ def admin_user_delete(user_id: int, me=Depends(require_admin)):
                          (user_id,)).fetchone()
         if row is None:
             raise HTTPException(404, "Foydalanuvchi topilmadi")
-        if row["role"] == "admin":
-            admins = db.execute("SELECT COUNT(*) FROM admins "
-                                "WHERE role = 'admin'").fetchone()[0]
-            if admins <= 1:
-                raise HTTPException(400, "Oxirgi admin o'chirilmaydi")
+        if db.execute("SELECT COUNT(*) FROM admins").fetchone()[0] <= 1:
+            raise HTTPException(400, "Oxirgi admin o'chirilmaydi")
         db.execute("DELETE FROM admins WHERE id = ?", (user_id,))
         db.execute("DELETE FROM sessions WHERE admin_id = ?", (user_id,))
-        db.execute("DELETE FROM user_regions WHERE user_id = ?", (user_id,))
 
 
 # ---------- MediaMTX ----------
@@ -641,7 +627,7 @@ def admin_status():
 @router.get("/events")
 def admin_events(limit: int = 100):
     """Media qatlamining so'nggi hodisalari: oqim muzladi/tiklandi,
-    MediaMTX qayta ishga tushdi. Kamera uzilish tarixi stats_event'da."""
+    MediaMTX qayta ishga tushdi. Jonli holat o'zgarishlari SSE'da (/events)."""
     with get_db() as db:
         rows = db.execute(
             "SELECT ts, kind, ip, port, slug, detail FROM events "

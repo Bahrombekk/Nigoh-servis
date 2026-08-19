@@ -182,24 +182,6 @@ def session_admin(db, token: str | None):
     return row
 
 
-def user_regions(db, user_id: int) -> list[str]:
-    """Operatorga biriktirilgan hududlar (admin uchun bo'sh — u hammasini ko'radi)."""
-    rows = db.execute(
-        "SELECT region FROM user_regions WHERE user_id = ? ORDER BY region",
-        (user_id,),
-    ).fetchall()
-    return [r["region"] for r in rows]
-
-
-def set_user_regions(db, user_id: int, regions: list[str]) -> None:
-    db.execute("DELETE FROM user_regions WHERE user_id = ?", (user_id,))
-    cleaned = sorted({r.strip() for r in regions if r.strip()})
-    db.executemany(
-        "INSERT OR IGNORE INTO user_regions (user_id, region) VALUES (?, ?)",
-        [(user_id, region) for region in cleaned],
-    )
-
-
 def delete_session(db, token: str | None) -> None:
     if token:
         db.execute("DELETE FROM sessions WHERE token = ?", (token,))

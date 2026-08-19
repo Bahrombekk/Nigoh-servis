@@ -91,19 +91,13 @@ class NvrIn(BaseModel):
 
 
 class UserIn(BaseModel):
-    """Foydalanuvchi: admin hammasini boshqaradi, operator faqat o'ziga
-    biriktirilgan hududlardagi kameralarni ko'radi."""
+    """Debug UI foydalanuvchisi. Rollar asosiy tizimda — bu yerda hamma
+    admin; maydon eski mijozlar buzilmasin deb qabul qilinadi, ammo
+    e'tiborga olinmaydi."""
     username: str = Field(min_length=1, max_length=64)
     password: str | None = Field(default=None, max_length=200)  # None = o'zgarmasin
-    role: str = Field(default="operator")
-    regions: list[str] = Field(default_factory=list)   # operator uchun
-
-    @field_validator("role")
-    @classmethod
-    def _check_role(cls, v: str) -> str:
-        if v not in ("admin", "operator"):
-            raise ValueError("role faqat 'admin' yoki 'operator' bo'lishi mumkin")
-        return v
+    role: str = Field(default="admin")
+    regions: list[str] = Field(default_factory=list)   # e'tiborga olinmaydi
 
 
 class NodeIn(BaseModel):

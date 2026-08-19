@@ -142,9 +142,7 @@ def me(request: Request):
     token = request.cookies.get(security.SESSION_COOKIE)
     with get_db() as db:
         user = security.session_admin(db, token)
-        regions = (security.user_regions(db, user["id"])
-                   if user is not None and user["role"] == "operator" else [])
     if user is None:
         return {"authenticated": False}
     return {"authenticated": True, "username": user["username"],
-            "role": user["role"], "regions": regions}
+            "role": user["role"], "regions": []}

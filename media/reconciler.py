@@ -24,7 +24,7 @@ import time
 from datetime import datetime, timezone
 from typing import Callable
 
-from core import alerts, bus, events
+from core import bus, events
 from core.db import get_db
 from core.log import log
 
@@ -101,7 +101,6 @@ def _spawn() -> bool:
             events.add(db, "mediamtx", detail="MediaMTX qayta ishga tushirildi")
     except Exception:
         pass
-    alerts.send_async("⚠️ MediaMTX yiqilgan edi — qayta ishga tushirildi")
     # API ko'tarilishini qisqa kutamiz — yo'llar shu tickning o'zida tiklansin.
     deadline = time.monotonic() + STARTUP_WAIT
     while time.monotonic() < deadline:
@@ -171,9 +170,6 @@ def _check_stalls(node: dict) -> None:
                     "state": "stalled" if kind == "stalled" else "online",
                     "at": at,
                 })
-    alerts.send_async("\n".join(
-        f"{'🧊 muzladi' if kind == 'stalled' else '🟢 tiklandi'}: {display}"
-        for display, name, kind in changes))
 
 
 def _tick(load_cameras: Callable[[], list[dict]], announce: bool) -> bool:
