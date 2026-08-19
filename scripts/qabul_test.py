@@ -1,7 +1,7 @@
 """Nigoh mikroservisining qabul testi — YANGI (bo'sh) test konteyneriga qarshi.
 
 Ishga tushirish:
-    docker run -d --name nigoh-sinov -p 8021:8010 \n      -e ADMIN_PAROL=sinov-admin-987 -e NIGOH_API_KEY=test-kalit-abc123 \n      nigoh:latest
+    docker run -d --name nigoh-sinov -p 8021:8010 \n      -e ADMIN_PAROL=sinov-admin-987 -e NIGOH_API_KEY=test-kalit-abc123 \n      -e ENABLE_UI=1 nigoh:latest
     python scripts/qabul_test.py
 
 Muhit orqali moslash: NIGOH_BASE, NIGOH_KEY, NIGOH_ADMIN_PAROL.
@@ -143,28 +143,21 @@ check("8.1 admin login", s == 200 and d["role"] == "admin", (s, d))
 s, d = req("/api/v1/auth/me", opener=op)
 check("8.2 /me admin", s == 200 and d["authenticated"] and d["role"] == "admin", d)
 
-# ---------- 9. Operator: rol va hudud cheklovi ----------
+# ---------- 9. Debug UI foydalanuvchilari (rollar asosiy tizimda) ----------
 s, d = req("/api/v1/admin/users", "POST",
-           {"username": "op1", "password": "op1parol", "role": "operator",
-            "regions": ["Sinovobod"]}, headers=KEY)
-check("9.1 operator yaratildi", s == 201 and d["regions"] == ["Sinovobod"], (s, d))
+           {"username": "op1", "password": "op1parol"}, headers=KEY)
+check("9.1 foydalanuvchi yaratildi (hamma admin)",
+      s == 201 and d["role"] == "admin" and d["regions"] == [], (s, d))
 op_id = d["id"]
 cj2 = http.cookiejar.CookieJar()
 op2 = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj2))
 s, d = req("/api/v1/auth/login", "POST",
            {"username": "op1", "password": "op1parol"}, opener=op2)
-check("9.2 operator login", s == 200 and d["role"] == "operator", (s, d))
+check("9.2 login ishlaydi", s == 200 and d["role"] == "admin", (s, d))
 s, d = req("/api/v1/cameras", opener=op2)
-check("9.3 operator faqat o'z hududini ko'radi", s == 200 and d["total"] == 1
-      and d["cameras"][0]["region"] == "Sinovobod", d)
-s, d = req("/api/v1/cameras/1/stream", opener=op2)   # demo kamera boshqa hududda
-check("9.4 begona hudud oqimi 403", s == 403, s)
-s, d = req(f"/api/v1/cameras/{cam_id}/stream", opener=op2)
-check("9.5 o'z hududi oqimi ochiladi", s == 200 and "token=" in d.get("stream_url", ""), s)
-s, d = req("/api/v1/admin/users", opener=op2)
-check("9.6 operator admin bo'limiga 403", s == 403, s)
+check("9.3 hudud filtri yo'q — hammasini ko'radi", s == 200 and d["total"] >= 7, d)
 s, d = req("/api/v1/admin/users/" + str(op_id), "DELETE", headers=KEY)
-check("9.7 operator o'chirildi", s == 204, s)
+check("9.4 foydalanuvchi o'chirildi", s == 204, s)
 
 # ---------- 10. MediaMTX sinxron va hodisalar ----------
 s, d = req("/api/v1/admin/mediamtx/sync", "POST", headers=KEY)

@@ -3,6 +3,16 @@ chcp 65001 >nul
 title Nigoh — kamera xaritasi
 cd /d "%~dp0"
 
+rem Lokal ishga tushirish — debug UI yoqiq bo'lsin (ishlab chiqarishda 0).
+if not defined ENABLE_UI set ENABLE_UI=1
+rem NIGOH_API_KEY majburiy (servis usiz ko'tarilmaydi). Lokal sinov uchun
+rem vaqtinchalik kalit beriladi — tashqi tarmoqqa ochmang; haqiqiy muhitda
+rem o'zingizning uzun kalitingizni qo'ying.
+if not defined NIGOH_API_KEY (
+  set NIGOH_API_KEY=lokal-dev-kalit-%RANDOM%%RANDOM%
+  echo   [i] NIGOH_API_KEY berilmagan - vaqtinchalik lokal kalit ishlatiladi.
+)
+
 echo.
 echo   NIGOH — ishga tushmoqda
 echo   ------------------------

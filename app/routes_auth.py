@@ -12,7 +12,13 @@ from core.log import log
 from .models import LoginIn
 
 # Prefiks nisbiy — create_app uni /api/v1 (asosiy) va /api (eski) ostida ulaydi.
+#
+# Ikkita router: `router` (/auth/stream) HAR DOIM ulanadi — uni MediaMTX
+# chaqiradi, usiz birorta oqim ochilmaydi. `ui_router` (login/logout/me)
+# faqat ENABLE_UI=1 bo'lganda ulanadi — ishlab chiqarishda login yuzasi
+# umuman yo'q.
 router = APIRouter(prefix="/auth", tags=["auth"])
+ui_router = APIRouter(prefix="/auth", tags=["auth"])
 
 
 # ---------- login brute-force himoyasi ----------
@@ -97,7 +103,7 @@ def stream_auth(body: dict):
     raise HTTPException(401, "Oqimga ruxsat yo'q")
 
 
-@router.post("/login")
+@ui_router.post("/login")
 def login(body: LoginIn, request: Request, response: Response):
     ip = _client_ip(request)
     delay = _fail_delay(ip)
@@ -129,7 +135,7 @@ def login(body: LoginIn, request: Request, response: Response):
     return {"username": username, "role": role}
 
 
-@router.post("/logout")
+@ui_router.post("/logout")
 def logout(request: Request, response: Response):
     with get_db() as db:
         security.delete_session(db, request.cookies.get(security.SESSION_COOKIE))
@@ -137,7 +143,7 @@ def logout(request: Request, response: Response):
     return {"ok": True}
 
 
-@router.get("/me")
+@ui_router.get("/me")
 def me(request: Request):
     token = request.cookies.get(security.SESSION_COOKIE)
     with get_db() as db:

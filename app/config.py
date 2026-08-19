@@ -7,10 +7,11 @@ import os
 
 PORT = int(os.environ.get("PORT", "8010"))
 
-# Debug UI (xarita, admin panel): 1 — cookie login ishlaydi va sahifa
-# beriladi; 0 — faqat API. Bu servisning haqiqat manbai X-API-Key, UI
-# faqat "backend'da xatomi yoki kamerada?" savoliga javob vositasi.
-ENABLE_UI = os.environ.get("ENABLE_UI", "1") != "0"
+# Debug UI (xarita, admin panel): standart O'CHIQ — ishlab chiqarishda
+# servis faqat API. ENABLE_UI=1 qilinsa sahifa (/), debug-ui/ static va
+# cookie login ulanadi — "backend'da xatomi yoki kamerada?" savoliga
+# javob beradigan diagnostika vositasi.
+ENABLE_UI = os.environ.get("ENABLE_UI", "0") == "1"
 
 # Yagona kirish: tashqi backend `X-API-Key` sarlavhasi bilan kiradi —
 # cookie/login kerak emas. Ishga tushirish uchun MAJBURIY (bo'sh bo'lsa

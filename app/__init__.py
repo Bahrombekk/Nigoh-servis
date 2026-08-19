@@ -33,10 +33,11 @@ from fastapi.staticfiles import StaticFiles
 from core import bus
 from core.db import BASE_DIR
 
-from .config import VENDORS
+from .config import ENABLE_UI, VENDORS
 from .deps import require_key
 from .routes_admin import router as admin_router
 from .routes_auth import router as auth_router
+from .routes_auth import ui_router as auth_ui_router
 from .routes_devices import router as devices_router
 from .routes_events import router as events_router
 from .routes_public import router as public_router
@@ -79,9 +80,16 @@ def create_app() -> FastAPI:
         # orqali yetkazadi.
         bus.set_loop(asyncio.get_running_loop())
 
-    @app.get("/", include_in_schema=False)
-    def index():
-        return FileResponse(BASE_DIR / "static" / "index.html")
+    if ENABLE_UI:
+        @app.get("/", include_in_schema=False)
+        def index():
+            return FileResponse(BASE_DIR / "debug-ui" / "index.html")
+    else:
+        @app.get("/", include_in_schema=False)
+        def index():
+            # UI o'chiq — servis o'zini tanishtiradi, boshqa hech narsa.
+            return {"service": "nigoh", "docs": "/docs",
+                    "auth": "X-API-Key sarlavhasi"}
 
     @app.get("/api/v1/vendors", tags=["cameras"],
              dependencies=[Depends(require_key)])
@@ -107,8 +115,15 @@ def create_app() -> FastAPI:
         app.include_router(router, prefix="/api", include_in_schema=False,
                            dependencies=[Depends(require_key)])
 
-    # Qolgan static fayllar (style.css, app.js) — yuqoridagi maxsus
-    # yo'llardan keyin ulanadi, shuning uchun ular ustun turadi.
-    app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
+    # Debug UI faqat bayroq bilan: login endpointlari va static fayllar
+    # ishlab chiqarishda umuman ro'yxatga olinmaydi — hujum yuzasi yo'q.
+    if ENABLE_UI:
+        app.include_router(auth_ui_router, prefix="/api/v1")
+        app.include_router(auth_ui_router, prefix="/api",
+                           include_in_schema=False)
+        # URL /static bo'lib qoladi (index.html shunga yozilgan), papka
+        # esa debug-ui/ — nomi vazifasini aytib turadi.
+        app.mount("/static", StaticFiles(directory=BASE_DIR / "debug-ui"),
+                  name="static")
 
     return app
