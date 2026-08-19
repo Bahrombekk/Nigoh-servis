@@ -21,9 +21,10 @@ import os
 import subprocess
 import threading
 import time
+from datetime import datetime, timezone
 from typing import Callable
 
-from core import alerts, events
+from core import alerts, bus, events
 from core.db import get_db
 from core.log import log
 
@@ -122,7 +123,7 @@ def _check_stalls(node: dict) -> None:
     active = sync.list_active_paths(node["api_base"])
     if active is None:
         return
-    changes: list[tuple[str, str]] = []          # (ko'rsatma nomi, holat)
+    changes: list[tuple[str, str, str]] = []     # (ko'rsatma, yo'l, holat)
     with _lock:
         for name, item in active.items():
             key = (node_id, name)
@@ -134,9 +135,9 @@ def _check_stalls(node: dict) -> None:
                 if key not in _stalled:
                     display = name if node_id == 1 else f"{name}@{node['name']}"
                     _stalled[key] = display
-                    changes.append((display, "stalled"))
+                    changes.append((display, name, "stalled"))
             elif key in _stalled:
-                changes.append((_stalled.pop(key), "resumed"))
+                changes.append((_stalled.pop(key), name, "resumed"))
         for key in list(_stalled):
             if key[0] == node_id and key[1] not in active:
                 _stalled.pop(key)                 # oqim yopildi — muzlash tugadi
@@ -146,15 +147,33 @@ def _check_stalls(node: dict) -> None:
                             for n, i in active.items()})
     if not changes:
         return
+    at = datetime.now(timezone.utc).isoformat(timespec="seconds")
     with get_db() as db:
-        for display, kind in changes:
+        for display, name, kind in changes:
             events.add(db, kind, slug=display,
                        detail="oqim muzladi" if kind == "stalled" else "oqim tiklandi")
             log("reconciler", f"stream_{kind}",
                 level="warning" if kind == "stalled" else "info", path=display)
+
+            # SSE: yo'l nomidan kamera topiladi (suffikslar olib tashlanadi).
+            # `resumed` tashqariga `online` bo'lib chiqadi — abonent uchun
+            # holat lug'ati bitta: online/offline/stalled.
+            base = name
+            for suffix in (sync.TRANSCODE_SUFFIX, sync.SUB_SUFFIX):
+                if base.endswith(suffix):
+                    base = base[: -len(suffix)]
+            row = db.execute("SELECT id, external_id FROM cameras WHERE slug = ?",
+                             (base,)).fetchone()
+            if row:
+                bus.publish("state", {
+                    "id": row["id"],
+                    "external_id": row["external_id"] or "",
+                    "state": "stalled" if kind == "stalled" else "online",
+                    "at": at,
+                })
     alerts.send_async("\n".join(
         f"{'🧊 muzladi' if kind == 'stalled' else '🟢 tiklandi'}: {display}"
-        for display, kind in changes))
+        for display, name, kind in changes))
 
 
 def _tick(load_cameras: Callable[[], list[dict]], announce: bool) -> bool:

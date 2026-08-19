@@ -18,7 +18,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
-from . import stats
+from . import bus, stats
 from .db import get_db
 from .log import log
 
@@ -63,6 +63,16 @@ def _sweep() -> None:
 
     fresh = dict(zip(pairs, results))
 
+    # Holat o'zgarganlarni SSE abonentlariga e'lon qilamiz. Birinchi sweep
+    # (eski qiymat yo'q) e'lon qilinmaydi — ulanish paytidagi boshlang'ich
+    # holat /cameras/status dan olinadi, hodisa faqat o'zgarish demak.
+    with _lock:
+        old = dict(_statuses)
+    changed = [pair for pair, ok in fresh.items()
+               if pair in old and old[pair] != ok]
+    if changed:
+        _publish_changes(changed, fresh)
+
     # Tirik chiqqanlarning "oxirgi onlayn" vaqti bazaga yoziladi — server
     # qayta ishga tushsa ham tarix yo'qolmaydi.
     alive = [pair for pair, ok in fresh.items() if ok]
@@ -89,6 +99,34 @@ def _sweep() -> None:
             duration_ms=int((time.monotonic() - started) * 1000),
             at=datetime.now(timezone.utc).isoformat(),
         )
+
+
+def _publish_changes(changed: list[tuple[str, int]],
+                     fresh: dict[tuple[str, int], bool]) -> None:
+    """O'zgargan manzillardagi kameralarni SSE'ga uzatadi.
+
+    Bitta NVR manzili ortida o'nlab kamera bo'lishi mumkin — hodisa
+    kamera kesimida (id/external_id bilan) beriladi.
+    """
+    with get_db() as db:
+        rows = db.execute(
+            "SELECT id, external_id, ip, port FROM cameras "
+            "WHERE enabled = 1 AND ip IS NOT NULL AND ip != ''"
+        ).fetchall()
+    by_pair: dict[tuple[str, int], list] = {}
+    for row in rows:
+        by_pair.setdefault((row["ip"], row["port"] or 554), []).append(row)
+
+    at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    for pair in changed:
+        state = "online" if fresh[pair] else "offline"
+        for row in by_pair.get(pair, []):
+            bus.publish("state", {
+                "id": row["id"],
+                "external_id": row["external_id"] or "",
+                "state": state,
+                "at": at,
+            })
 
 
 def sweep_stats() -> dict:

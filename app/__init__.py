@@ -8,6 +8,7 @@ Qatlamlar:
     app/routes_auth.py    /api/v1/auth/*
     app/routes_public.py  /api/v1/cameras/*   (kirishsiz)
     app/routes_streams.py /api/v1/streams     (batch oqim chiptalari)
+    app/routes_events.py  /api/v1/events      (SSE — holat o'zgarishlari)
     app/routes_stats.py   /api/v1/stats/*     (kirishsiz — dashboard tarixi)
     app/routes_admin.py   /api/v1/admin/*     (super-admin)
 
@@ -23,15 +24,19 @@ MediaMTX bilan aloqa alohida `media/` paketida — backend unga faqat
 `from media import sync` orqali murojaat qiladi. Umumiy infratuzilma
 (db, security, health, rtsp_probe, fast_start) `core/` paketida.
 """
+import asyncio
+
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from core import bus
 from core.db import BASE_DIR
 
 from .config import VENDORS
 from .routes_admin import router as admin_router
 from .routes_auth import router as auth_router
+from .routes_events import router as events_router
 from .routes_public import router as public_router
 from .routes_stats import router as stats_router
 from .routes_streams import router as streams_router
@@ -66,6 +71,12 @@ def create_app() -> FastAPI:
         description=API_DESCRIPTION,
     )
 
+    @app.on_event("startup")
+    async def _bus_loop():
+        # Fon thread'lari (health, reconciler) SSE hodisalarini shu loop
+        # orqali yetkazadi.
+        bus.set_loop(asyncio.get_running_loop())
+
     @app.get("/", include_in_schema=False)
     def index():
         return FileResponse(BASE_DIR / "static" / "index.html")
@@ -92,8 +103,8 @@ def create_app() -> FastAPI:
 
     # /api/v1 — asosiy (hujjatlangan); /api — eski manzillar, xuddi shu
     # endpointlar (test frontend va MediaMTX auth manzili buzilmasin).
-    for router in (auth_router, public_router, streams_router, stats_router,
-                   admin_router):
+    for router in (auth_router, public_router, streams_router, events_router,
+                   stats_router, admin_router):
         app.include_router(router, prefix="/api/v1")
         app.include_router(router, prefix="/api", include_in_schema=False)
 
