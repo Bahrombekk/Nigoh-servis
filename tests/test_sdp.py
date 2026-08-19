@@ -1,5 +1,4 @@
-from core.rtsp_probe import (sdp_codec, sdp_fps, sdp_resolution,
-                             sdp_video_control)
+from core.rtsp_probe import sdp_codec, sdp_fps, sdp_resolution, sdp_video_control
 
 DESCRIBE = """RTSP/1.0 200 OK\r
 Content-Base: rtsp://10.0.0.1:554/Streaming/Channels/101/\r

@@ -37,10 +37,10 @@ from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
 from pathlib import Path
 
+import yaml
+
 from core.db import DATA_DIR
 from core.rtsp_probe import build_rtsp_url
-
-import yaml
 
 # Loyiha ildizi — bu fayl media/ ichida turadi. mediamtx.yml ma'lumotlar
 # katalogida (standart — ildiz; konteynerda NIGOH_DATA volume).

@@ -9,8 +9,8 @@ DIQQAT: faqat sinov konteyneriga qarshi yuriting — test kamera va
 foydalanuvchi yaratib o'chiradi, demo bazani (6 kamera) kutadi.
 """
 import http.cookiejar
-import os
 import json
+import os
 import urllib.error
 import urllib.request
 
@@ -95,7 +95,7 @@ check("4.2 javobda parol yo'q, has_password bor",
       "password" not in cam and cam.get("has_password") is True, list(cam))
 check("4.3 state maydoni bor", cam.get("state") in
       ("online", "offline", "unknown", "stalled", "disabled"), cam.get("state"))
-s, d = req(f"/api/v1/admin/cameras?q=Sinov", headers=KEY)
+s, d = req("/api/v1/admin/cameras?q=Sinov", headers=KEY)
 check("4.4 qidiruv topadi", s == 200 and d["total"] == 1, d["total"])
 upd = dict(new_cam, name="Sinov kamera 2", password=None)
 s, d = req(f"/api/v1/admin/cameras/{cam_id}", "PUT", upd, headers=KEY)

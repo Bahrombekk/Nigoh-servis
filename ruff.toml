@@ -1,0 +1,8 @@
+# Lint qamrovi aniq belgilangan — CI va lokal tekshiruv bir xil natija
+# bersin (global konfiguratsiyalar aralashmasin).
+target-version = "py312"
+
+[lint]
+# E4/E7/E9 — muhim uslub xatolari, F — haqiqiy xatolar (ishlatilmagan
+# import, nomsiz o'zgaruvchi...), I — import tartibi.
+select = ["E4", "E7", "E9", "F", "I"]

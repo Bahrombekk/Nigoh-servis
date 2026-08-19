@@ -14,9 +14,16 @@ from media import reconciler
 from media import sync as mediamtx_sync
 
 from .config import CHANNEL_VENDORS, VENDORS
-from .helpers import (admin_camera, cameras_for_mediamtx, channel_path,
-                      detect_codec, detect_sub_path,
-                      mask_config, require_admin, resolve_ref)
+from .helpers import (
+    admin_camera,
+    cameras_for_mediamtx,
+    channel_path,
+    detect_codec,
+    detect_sub_path,
+    mask_config,
+    require_admin,
+    resolve_ref,
+)
 from .models import CameraIn, NvrIn, ProbeIn, ScanIn, UserIn
 
 # Prefiks nisbiy — create_app uni /api/v1 (asosiy) va /api (eski) ostida ulaydi.

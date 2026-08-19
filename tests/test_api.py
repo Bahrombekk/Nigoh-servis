@@ -49,7 +49,7 @@ def test_ui_ochiq_login_yoq(client):
 
 
 def test_kamera_crud_va_external_id(client):
-    cam = _yangi(client, "Ext sinov", ext="api-test-1")
+    _yangi(client, "Ext sinov", ext="api-test-1")
     try:
         # ext: orqali oqim (1.1 qabul mezoni)
         r = client.get("/api/v1/cameras/ext:api-test-1/stream", headers=KEY)

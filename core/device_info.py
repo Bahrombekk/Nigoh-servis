@@ -13,8 +13,7 @@ import re
 import urllib.error
 import urllib.request
 
-from .fast_start import (HTTP_PORT, TIMEOUT, _auth_opener, _security_header,
-                         _soap)
+from .fast_start import HTTP_PORT, TIMEOUT, _auth_opener, _security_header, _soap
 
 _DEVICE_NS = "http://www.onvif.org/ver10/device/wsdl"
 _ONVIF_PATHS = ("/onvif/device_service", "/onvif/Device")

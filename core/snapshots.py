@@ -14,10 +14,9 @@ Har muvaffaqiyatli yangilanish SSE'ga `snapshot` hodisasi bo'lib chiqadi.
 """
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
-
-from concurrent.futures import ThreadPoolExecutor
 
 from . import bus, fast_start, health, security
 from .db import DATA_DIR, get_db

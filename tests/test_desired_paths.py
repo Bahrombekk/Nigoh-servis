@@ -1,5 +1,11 @@
-from media.sync import (SUB_SUFFIX, TRANSCODE_SUFFIX, desired_paths,
-                        mark_warm, source_path, _warm)
+from media.sync import (
+    SUB_SUFFIX,
+    TRANSCODE_SUFFIX,
+    _warm,
+    desired_paths,
+    mark_warm,
+    source_path,
+)
 
 
 def _cam(**extra):

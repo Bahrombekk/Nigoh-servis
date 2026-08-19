@@ -318,7 +318,7 @@ def _ffmpeg_snapshot(slug: str) -> bytes | None:
     """
     if not slug:
         return None
-    from . import security   # kech import: modul yukida kalit o'qilmasin
+    from . import security  # kech import: modul yukida kalit o'qilmasin
     return _ffmpeg_frame(
         f"rtsp://127.0.0.1:{os.environ.get('MEDIAMTX_RTSP_PORT', '8554')}"
         f"/{slug}?token={security.internal_token()}")

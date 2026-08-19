@@ -20,7 +20,6 @@ from core.db import get_db
 
 from .sync import RTSP_PORT, ffmpeg_path, has_nvenc, transcode_args
 
-
 # Xom oqimni MediaMTX o'zi tortadi (FFmpeg kerak emas). Bu skript faqat
 # o'girish uchun chaqiriladi: `<kamera>_h264` so'ralganda.
 TRANSCODE_SUFFIX = "_h264"

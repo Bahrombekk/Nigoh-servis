@@ -14,8 +14,13 @@ from core import fast_start
 from core.db import get_db
 from media import sync as mediamtx_sync
 
-from .helpers import (camera_for_mediamtx, camera_state, node_info,
-                      resolve_ref, stream_urls)
+from .helpers import (
+    camera_for_mediamtx,
+    camera_state,
+    node_info,
+    resolve_ref,
+    stream_urls,
+)
 
 # Prefiks nisbiy — create_app uni /api/v1 (asosiy) va /api (eski) ostida ulaydi.
 router = APIRouter(prefix="/streams", tags=["streams"])

@@ -16,8 +16,8 @@ import yaml
 # Skript scripts/ ichidan ishga tushirilganda ham loyiha modullarini topsin.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from core import security                                        # noqa: E402
-from core.db import get_db, init_db, slugify, unique_slug        # noqa: E402
+from core import security  # noqa: E402
+from core.db import get_db, init_db, unique_slug  # noqa: E402
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 CONFIG_PATH = BASE_DIR / "mediamtx.yml"
