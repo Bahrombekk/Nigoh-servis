@@ -1,0 +1,22 @@
+# Nigoh — kamera mikroservisi.
+#
+# Ishga tushirish (Linux server):
+#     cp .env.example .env      # ADMIN_PAROL ni to'ldiring
+#     docker compose up -d --build
+#
+# WebRTC (jonli video) UDP orqali ishlaydi — shu sababli host tarmog'i
+# ishlatiladi: konteyner server portlarini to'g'ridan-to'g'ri egallaydi,
+# port map qilish shart emas. Ochiq bo'lishi kerak: 8010, 8888, 8889 (tcp)
+# va 8189 (udp). 9997/9998 faqat 127.0.0.1 da — tashqariga ochilmaydi.
+services:
+  nigoh:
+    build: .
+    image: nigoh:latest
+    container_name: nigoh
+    restart: unless-stopped
+    network_mode: host
+    env_file: .env
+    volumes:
+      # Baza, shifrlash kaliti, loglar — konteyner yangilansa ham qoladi.
+      # BU PAPKANI ZAXIRALANG: ichida kamera parollari kaliti bor.
+      - ./data:/data

@@ -1,0 +1,42 @@
+# ---- MAXFIY: hech qachon repozitoriyga tushmasin ----
+# Izohlar alohida satrda bo'lishi shart: naqsh yonidagi "#" izoh emas,
+# naqshning bir qismi hisoblanadi va fayl e'tiborsiz qolmaydi.
+
+# Kamera parollarini ochadigan kalit
+secret.key
+
+# Kameralar, shifrlangan parollar, sessiyalar
+cameras.db
+cameras.db-journal
+cameras.db-wal
+cameras.db-shm
+
+# Ichida ochiq RTSP login/parollar bo'lishi mumkin
+mediamtx.yml
+
+# Admin paroli yozib qo'yilgan fayllar
+login_parol.txt
+*parol*.txt
+*.zaxira
+
+# MediaMTX o'zi yaratadigan sertifikatlar
+auto.crt
+auto.key
+
+# ---- Yuklab olinadigan / hosil qilinadigan ----
+venv/
+mediamtx/
+__pycache__/
+*.pyc
+
+# Ish vaqti loglari
+mediamtx.log
+backend.log
+backend.err.log
+nigoh.log
+nigoh.log.*
+
+# ---- Muhit ----
+.env
+.vscode/
+.idea/

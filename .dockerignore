@@ -1,0 +1,31 @@
+# Maxfiy va lokal ma'lumotlar — imagega hech qachon tushmasin
+secret.key
+cameras.db*
+mediamtx.yml
+mediamtx.yml.zaxira
+login_parol.txt
+*parol*.txt
+*.zaxira
+auto.crt
+auto.key
+.env
+
+# Lokal muhit va hosilalar
+venv/
+__pycache__/
+*.pyc
+mediamtx/
+data/
+
+# Loglar
+*.log
+nigoh.log.*
+
+# Boshqalar
+.git/
+.gitignore
+.gitattributes
+.claude/
+.vscode/
+.idea/
+ishga-tushirish.bat

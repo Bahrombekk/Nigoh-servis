@@ -1,0 +1,13 @@
+# Satr oxirlari barcha tizimlarda bir xil bo'lsin — repozitoriyada LF.
+* text=auto eol=lf
+
+# Windows uchun mo'ljallangan skriptlar CRLF bilan qolsin,
+# aks holda cmd.exe ularni noto'g'ri o'qiydi.
+*.bat text eol=crlf
+
+# Ikkilik fayllar tegilmasin.
+*.png binary
+*.jpg binary
+*.ico binary
+*.db binary
+*.key binary
