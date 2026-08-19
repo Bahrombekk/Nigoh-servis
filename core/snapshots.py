@@ -7,8 +7,23 @@ uchun qilingan. Bazada faqat `snapshot_at` (oxirgi surat vaqti).
 Yangilash pog'onalari (fon vazifasi, parallellik 8):
 
   * issiq — oxirgi 5 daqiqada so'ralgan kamera: har 10 soniyada;
-  * sovuq — qolganlar: har 5 daqiqada, faqat tirik (online) bo'lsa;
+  * sovuq — qolganlar: kamera soniga moslashadigan oraliqda (kamida
+    5 daqiqa, 5000 kamerada ~17 daqiqa), faqat tirik (online) bo'lsa;
   * o'chiq (disabled) yoki o'chib qolgan (offline): umuman yangilanmaydi.
+
+Jadval FAZA bilan tarqatilgan: har kamera id'sidan hisoblangan barqaror
+siljish oladi va absolyut vaqt oynasida o'z uyasida bir marta olinadi.
+Shu tufayli:
+
+  * birinchi ishga tushishda 5000 surat birdan so'ralmaydi;
+  * restartdan keyin diskdagi yangi fayllar qayta olinmaydi (fayl yoshi
+    oynaga sig'sa — bajarilgan hisoblanadi);
+  * birga navbatga tushgan guruhlar shakllanmaydi — oyna "oxirgi
+    yangilanish"ga emas, taqvimga bog'langan.
+
+Urinish muvaffaqiyatsiz bo'lsa ham oyna bajarilgan deb belgilanadi —
+buzuq kamera har tickda qayta urinilib registratorni bo'g'masin;
+keyingi oynada o'zi qayta uriniladi.
 
 Har muvaffaqiyatli yangilanish SSE'ga `snapshot` hodisasi bo'lib chiqadi.
 """
@@ -27,17 +42,59 @@ SNAP_DIR = DATA_DIR / "snapshots"
 TICK = 10.0             # fon tsikli qadami (issiq interval bilan bir xil)
 HOT_WINDOW = 300.0      # so'ralganidan keyin shuncha vaqt "issiq"
 HOT_INTERVAL = 10.0
-COLD_INTERVAL = 300.0
+COLD_MIN_INTERVAL = 300.0
+# Sovuq oraliq kamera soniga moslashadi: umumiy tezlik ~5 surat/soniyada
+# ushlanadi. Registratorlar bo'g'ilsa 0,5 ga ko'taring.
+COLD_PER_CAMERA = 0.2
+# Qadam boshiga zaxira klapan — faza to'g'ri ishlasa tegilmaydi (5000
+# kamerada cho'qqi ~71). Logda muntazam ko'rinsa oraliq noto'g'ri.
+BATCH_LIMIT = 96
 WORKERS = 8
+# read() dagi jonli olish slotlari — 64 katakli devor birinchi ochilganda
+# 64 FFmpeg API threadpool'ini yeb qo'ymasin. Bu himoya, tegmang.
+LIVE_SLOTS = 2
 
-_requested: dict[int, float] = {}   # camera_id -> oxirgi so'ralgan vaqt
-_updated: dict[int, float] = {}     # camera_id -> oxirgi yangilangan vaqt
+_requested: dict[int, float] = {}   # camera_id -> oxirgi so'ralgan (monotonic)
+_done: dict[int, float] = {}        # camera_id -> oxirgi urinish (epoch)
+_last_total = 0                     # oxirgi tsikldagi kameralar soni
 _lock = threading.Lock()
 _started = False
+_live_sem = threading.BoundedSemaphore(LIVE_SLOTS)
 
 
 def path_for(slug: str) -> Path:
     return SNAP_DIR / f"{slug}.jpg"
+
+
+def cold_interval(total: int) -> float:
+    return max(COLD_MIN_INTERVAL, total * COLD_PER_CAMERA)
+
+
+def max_age() -> float:
+    """Suratning "hali yaroqli" yoshi — sovuq oraliqning 3 baravari.
+
+    Yumshoq chegara: asosiy ishni holat tekshiruvi qiladi, bu faqat
+    "holat yolg'on gapiryapti" holatini ushlaydi. Issiq oraliqqa
+    bog'lanmaydi — aks holda barcha sovuq kameralar "eskirgan" chiqadi.
+    """
+    with _lock:
+        total = _last_total
+    return 3 * cold_interval(total)
+
+
+def _offset(camera_id: int, interval: float) -> float:
+    """Kameraning oraliq ichidagi barqaror siljishi — har restartda bir xil.
+
+    Ketma-ket id'lar ham tekis tarqalsin deb oltin nisbat ko'paytmasi
+    ishlatiladi.
+    """
+    return (camera_id * 2654435761) % max(1, int(interval))
+
+
+def _slot(camera_id: int, interval: float, now: float) -> float:
+    """Kameraning joriy (allaqachon kelgan) uyasi — absolyut vaqtda."""
+    off = _offset(camera_id, interval)
+    return ((now - off) // interval) * interval + off
 
 
 def note_request(camera_id: int) -> None:
@@ -50,27 +107,40 @@ def note_request(camera_id: int) -> None:
                 _requested.pop(key, None)
 
 
-def read(row) -> tuple[bytes | None, str]:
+def read(row, live: bool = True) -> tuple[bytes | None, str, float]:
     """Kameraning suratini beradi: avval disk, bo'lmasa jonli olish.
 
-    Qaytaradi (bytes|None, etag). So'rov issiqlik hisobiga yoziladi —
-    keyingi yangilanishlar fon vazifasida har 10 soniyada boradi.
+    Qaytaradi (bytes|None, etag, fayl_vaqti_epoch). So'rov issiqlik
+    hisobiga yoziladi — keyingi yangilanishlar fon vazifasida boradi.
+
+    Jonli olish semafor bilan chegaralangan (LIVE_SLOTS): slot bo'sh
+    bo'lmasa darhol bo'sh qaytadi — 64 katak birdan ochilganda API
+    muzlab qolmaydi, fon tsikli bir necha soniyada to'ldiradi.
+    `live=False` — faqat disk (offline/stale holatlari uchun).
     """
     note_request(row["id"])
     p = path_for(row["slug"] or "")
-    try:
+
+    def _from_disk():
         stat = p.stat()
-        return p.read_bytes(), f'"{int(stat.st_mtime)}-{stat.st_size}"'
+        return (p.read_bytes(),
+                f'"{int(stat.st_mtime)}-{stat.st_size}"', stat.st_mtime)
+
+    try:
+        return _from_disk()
     except OSError:
         pass
-    # Diskda hali yo'q — birinchi so'rov jonli oladi (va diskka yozadi).
-    if capture(row):
+    if live and _live_sem.acquire(blocking=False):
         try:
-            stat = p.stat()
-            return p.read_bytes(), f'"{int(stat.st_mtime)}-{stat.st_size}"'
-        except OSError:
-            pass
-    return None, ""
+            captured = capture(row)
+        finally:
+            _live_sem.release()
+        if captured:
+            try:
+                return _from_disk()
+            except OSError:
+                pass
+    return None, "", 0.0
 
 
 def capture(row) -> bool:
@@ -89,7 +159,7 @@ def capture(row) -> bool:
         log("snapshots", "write_failed", level="error", error=str(exc))
         return False
     with _lock:
-        _updated[row["id"]] = time.monotonic()
+        _done[row["id"]] = time.time()
     with get_db() as db:
         db.execute("UPDATE cameras SET snapshot_at = ? WHERE id = ?",
                    (at, row["id"]))
@@ -100,27 +170,66 @@ def capture(row) -> bool:
 
 
 def _due_cameras() -> list:
-    now = time.monotonic()
+    """Shu tickda olinadigan kameralar — har biri o'z uyasida, bir marta.
+
+    Issiqlar ro'yxat boshida: klapan (BATCH_LIMIT) ishga tushsa devorda
+    ko'rilayotgan kadrlar qurbon bo'lmaydi.
+    """
+    global _last_total
+    now = time.time()
+    mono = time.monotonic()
     with get_db() as db:
         rows = db.execute(
             "SELECT * FROM cameras WHERE enabled = 1 "
             "AND ip IS NOT NULL AND ip != ''"
         ).fetchall()
-    due = []
+    interval_cold = cold_interval(len(rows))
     with _lock:
+        _last_total = len(rows)
         requested = dict(_requested)
-        updated = dict(_updated)
+        done = dict(_done)
+
+    hot_due, cold_due = [], []
     for row in rows:
         alive = health.online(row["ip"], row["port"])
         if alive is False:
             continue                            # offline — urinish behuda
-        hot = now - requested.get(row["id"], -1e9) < HOT_WINDOW
-        interval = HOT_INTERVAL if hot else COLD_INTERVAL
+        hot = mono - requested.get(row["id"], -1e12) < HOT_WINDOW
         if not hot and alive is not True:
             continue                            # sovuq faqat aniq online
-        if now - updated.get(row["id"], -1e9) >= interval:
-            due.append(row)
+        interval = HOT_INTERVAL if hot else interval_cold
+        slot = _slot(row["id"], interval, now)
+        prev = done.get(row["id"])
+        if prev is None:
+            # Restart: diskdagi fayl shu uyadan yangi bo'lsa — bajarilgan.
+            # Busiz har restart 5000 ta behuda surat degani.
+            try:
+                mtime = path_for(row["slug"] or "").stat().st_mtime
+            except OSError:
+                mtime = 0.0
+            if mtime >= slot:
+                with _lock:
+                    _done[row["id"]] = mtime
+                continue
+        elif prev >= slot:
+            continue                            # bu oyna allaqachon bajarilgan
+        (hot_due if hot else cold_due).append(row)
+
+    due = hot_due + cold_due
+    if len(due) > BATCH_LIMIT:
+        log("snapshots", "batch_capped", level="warning",
+            due=len(due), limit=BATCH_LIMIT)
+        due = due[:BATCH_LIMIT]
     return due
+
+
+def _attempt(row) -> bool:
+    """Bitta urinish; natijadan qat'i nazar oyna bajarilgan deb belgilanadi."""
+    try:
+        return capture(row)
+    finally:
+        with _lock:
+            _done[row["id"]] = time.time()
 
 
 def _loop() -> None:
@@ -130,7 +239,7 @@ def _loop() -> None:
             if due:
                 started = time.monotonic()
                 with ThreadPoolExecutor(max_workers=WORKERS) as pool:
-                    results = list(pool.map(capture, due))
+                    results = list(pool.map(_attempt, due))
                 log("snapshots", "cycle", total=len(due),
                     ok=sum(1 for r in results if r),
                     duration_ms=int((time.monotonic() - started) * 1000))

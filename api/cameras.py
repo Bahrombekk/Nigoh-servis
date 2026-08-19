@@ -165,7 +165,7 @@ def camera_snapshot(ref: str, request: Request):
     # Surat disk zaxirasidan (core/snapshots yangilab turadi); birinchi
     # so'rovda jonli olinadi. ETag — brauzer/asosiy tizim o'zgarmagan
     # suratni qayta yuklamaydi (304).
-    data, etag = snapshots.read(row)
+    data, etag, _ = snapshots.read(row)
     if not data:
         raise HTTPException(404, "Kameradan surat olib bo'lmadi")
     if etag and request.headers.get("if-none-match") == etag:
