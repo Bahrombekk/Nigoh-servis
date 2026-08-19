@@ -148,6 +148,8 @@ def camera_stream(ref: str, request: Request, hevc: int = 0,
         api_base = node["api_base"] if node else None
         sub = mediamtx_sync.sub_variant(camera) if quality == "sub" else None
         if sub:
+            # Issiq to'plam: keyingi 10 daqiqada qayta ochilish < 1 s.
+            mediamtx_sync.mark_warm(sub["slug"])
             mediamtx_sync.ensure_path(sub, api_base)
         else:
             mediamtx_sync.ensure_path(camera, api_base)

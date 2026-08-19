@@ -29,6 +29,8 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
+import time
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
@@ -133,6 +135,44 @@ def transcode_args(src_url: str, dst_url: str, gpu: bool = True,
     return _INPUT + video + ["-g", "30", "-bf", "0"] + _OUTPUT + [dst_url]
 
 
+# ---------- issiq to'plam (warm set) ----------
+#
+# Sub oqim ~0,5 Mbit/s va ~15 MB xotira — tayyor tutish deyarli tekin,
+# ochilish esa sourceOnDemand kutishisiz < 1 soniya bo'ladi. Oqim
+# so'ralganda sub yo'l 10 daqiqaga "issiq" belgilanadi: sourceOnDemand
+# o'chiriladi (doim ulangan). Muddati o'tsa reconciler navbatdagi tsiklda
+# farqni ko'rib sovutadi. Asosiy oqim uchun bu qimmat — faqat sub.
+
+WARM_TTL = 600.0       # soniya — oxirgi so'rovdan keyin shuncha issiq turadi
+WARM_LIMIT = 256       # bir vaqtda issiq yo'llar chegarasi
+
+_warm: dict[str, float] = {}          # sub-slug -> muddati (monotonic)
+_warm_lock = threading.Lock()
+
+
+def mark_warm(slug: str) -> bool:
+    """Sub yo'lni issiq qiladi (muddatni yangilaydi). Chegara to'lsa False."""
+    now = time.monotonic()
+    with _warm_lock:
+        for key in [k for k, t in _warm.items() if t <= now]:
+            _warm.pop(key, None)
+        if slug not in _warm and len(_warm) >= WARM_LIMIT:
+            return False
+        _warm[slug] = now + WARM_TTL
+        return True
+
+
+def is_warm(slug: str) -> bool:
+    with _warm_lock:
+        return _warm.get(slug, 0.0) > time.monotonic()
+
+
+def warm_count() -> int:
+    now = time.monotonic()
+    with _warm_lock:
+        return sum(1 for t in _warm.values() if t > now)
+
+
 # ---------- yo'llar ----------
 
 TRANSCODE_SUFFIX = "_h264"
@@ -174,7 +214,8 @@ def source_path(cam: dict) -> dict:
         ),
         # UDP'da paketlar yo'qoladi va tasvir buziladi — TCP majburiy.
         "rtspTransport": "tcp",
-        "sourceOnDemand": not cam.get("always_on"),
+        # Issiq sub yo'llar ham "doim tayyor" hisoblanadi.
+        "sourceOnDemand": not (cam.get("always_on") or is_warm(cam["slug"])),
     }
     if conf["sourceOnDemand"]:
         conf["sourceOnDemandStartTimeout"] = "20s"

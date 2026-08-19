@@ -73,6 +73,8 @@ def batch_streams(body: StreamsIn, request: Request):
             sub = (mediamtx_sync.sub_variant(camera)
                    if body.quality == "sub" else None)
             if sub:
+                # Issiq to'plam: keyingi 10 daqiqada qayta ochilish < 1 s.
+                mediamtx_sync.mark_warm(sub["slug"])
                 mediamtx_sync.ensure_path(sub, api_base)
             else:
                 mediamtx_sync.ensure_path(camera, api_base)
