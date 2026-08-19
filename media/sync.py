@@ -300,7 +300,9 @@ def build_config(cameras: list[dict], auth_url: str | None = None,
         # Doimiy remux qilinsa xom H.265 yo'llari ham bekorga HLS'ga o'giriladi;
         # asosiy yo'l WebRTC bo'lgani uchun bunga hojat yo'q.
         "hlsAlwaysRemux": False,
-        "hlsSegmentCount": 7,
+        # 3 segment × 1 s — bufer 3 soniya: WebRTC ishlamay HLS'ga tushgan
+        # plitkalar jonliroq ko'rinadi (7 da kechikish 7 s gacha edi).
+        "hlsSegmentCount": 3,
         "hlsSegmentDuration": "1s",
         "hlsPartDuration": "200ms",
         "hlsAllowOrigins": ["*"],
