@@ -11,10 +11,12 @@ Admin parolini almashtirish:
 
 Kod tuzilishi:
     main.py            shu fayl — faqat kirish nuqtasi
-    app/               BACKEND: config, modellar, endpointlar
+    api/               BACKEND: config, modellar, endpointlar
     media/             MEDIAMTX QATLAMI: sync (konfiguratsiya/API), launcher
-    core/              UMUMIY: db, security, health, rtsp_probe, fast_start
-    scripts/           yordamchi skriptlar (import_mediamtx)
+    core/              UMUMIY: db, security, health, rtsp_probe, fast_start,
+                       snapshots, device_info, bus
+    debug-ui/          diagnostika sahifasi (ENABLE_UI=1 bo'lganda)
+    scripts/           yordamchi skriptlar (qabul_test, import_mediamtx)
     stream_launcher.py MediaMTX chaqiradigan yupqa qobiq (ildizda turishi shart)
 """
 import os
@@ -22,9 +24,9 @@ import sys
 
 import uvicorn
 
-from app import create_app
-from app.bootstrap import bootstrap, change_admin_password
-from app.config import API_KEY, PORT
+from api import create_app
+from api.bootstrap import bootstrap, change_admin_password
+from api.config import API_KEY, PORT
 
 if "--admin-parol" in sys.argv:
     index_of = sys.argv.index("--admin-parol")

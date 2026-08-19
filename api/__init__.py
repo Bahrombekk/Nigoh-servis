@@ -2,15 +2,17 @@
 
 Qatlamlar:
 
-    app/config.py         sozlamalar (portlar, shablonlar)
-    app/models.py         so'rov modellari (Pydantic)
-    app/helpers.py        umumiy tarjima qatlami (baza → brauzer/MediaMTX)
-    app/routes_auth.py    /api/v1/auth/*
-    app/routes_public.py  /api/v1/cameras/*   (kirishsiz)
-    app/routes_streams.py /api/v1/streams     (batch oqim chiptalari)
-    app/routes_events.py  /api/v1/events      (SSE — holat o'zgarishlari)
-    app/routes_devices.py /api/v1/devices/*   (skan: job + SSE natijalar)
-    app/routes_admin.py   /api/v1/admin/*     (kameralar CRUD, tugunlar)
+    api/config.py    sozlamalar (portlar, shablonlar)
+    api/models.py    so'rov modellari (Pydantic)
+    api/deps.py      yagona kirish (X-API-Key)
+    api/helpers.py   umumiy tarjima qatlami (baza → mijoz/MediaMTX)
+    api/auth.py      /api/v1/auth/*      (stream — doim; login — ENABLE_UI)
+    api/cameras.py   /api/v1/cameras/*   (ro'yxat, holat, oqim, surat)
+    api/streams.py   /api/v1/streams     (batch oqim chiptalari)
+    api/events.py    /api/v1/events      (SSE — holat o'zgarishlari)
+    api/devices.py   /api/v1/devices/*   (skan: job + SSE, pasport)
+    api/nodes.py     /api/v1/admin/nodes (MediaMTX tugunlari)
+    api/admin.py     /api/v1/admin/*     (kameralar CRUD, foydalanuvchilar)
 
 API ikki prefiksda tinglaydi:
 
@@ -33,15 +35,16 @@ from fastapi.staticfiles import StaticFiles
 from core import bus
 from core.db import BASE_DIR
 
+from .admin import router as admin_router
+from .auth import router as auth_router
+from .auth import ui_router as auth_ui_router
+from .cameras import router as cameras_router
 from .config import ENABLE_UI, VENDORS
 from .deps import require_key
-from .routes_admin import router as admin_router
-from .routes_auth import router as auth_router
-from .routes_auth import ui_router as auth_ui_router
-from .routes_devices import router as devices_router
-from .routes_events import router as events_router
-from .routes_public import router as public_router
-from .routes_streams import router as streams_router
+from .devices import router as devices_router
+from .events import router as events_router
+from .nodes import router as nodes_router
+from .streams import router as streams_router
 
 API_DESCRIPTION = """\
 IP kameralarni boshqarish va tarqatish servisi. MediaMTX ustidagi
@@ -108,8 +111,8 @@ def create_app() -> FastAPI:
     # UI kirishi.
     app.include_router(auth_router, prefix="/api/v1")
     app.include_router(auth_router, prefix="/api", include_in_schema=False)
-    for router in (public_router, streams_router, events_router,
-                   devices_router, admin_router):
+    for router in (cameras_router, streams_router, events_router,
+                   devices_router, nodes_router, admin_router):
         app.include_router(router, prefix="/api/v1",
                            dependencies=[Depends(require_key)])
         app.include_router(router, prefix="/api", include_in_schema=False,
