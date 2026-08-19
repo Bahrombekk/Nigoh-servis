@@ -12,8 +12,11 @@ def test_health_kalitsiz_va_shakli():
         assert set(body) == {"ok", "mediamtx", "health", "egress_mbps",
                              "egress_capacity_mbps", "streams", "readers",
                              "warm", "sse_subscribers"}
-        # testda MediaMTX yo'q — bu holat ham to'g'ri ifodalanadi
-        assert body["mediamtx"] is False and body["egress_mbps"] == 0.0
+        # Muhitga bog'lanmaymiz: test mashinasida MediaMTX ishlayotgan
+        # bo'lishi ham mumkin — shakl va turlargina tekshiriladi.
+        assert isinstance(body["mediamtx"], bool)
+        assert body["ok"] == body["mediamtx"]
+        assert body["egress_mbps"] >= 0.0
         assert body["egress_capacity_mbps"] > 0
 
 
