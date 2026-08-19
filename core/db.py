@@ -213,11 +213,7 @@ def init_db() -> None:
                  int(os.environ.get("WEBRTC_PORT", "8889"))),
             )
 
-        # Kesish (mikroservis rejasi, 3.1): statistika, Telegram va
-        # operator hududlari asosiy tizimga ko'chdi — eski bazalardan
-        # jadvallar olib tashlanadi. Yangi bazada allaqachon yo'q.
-        for legacy in ("stats_region", "stats_event", "user_regions"):
-            db.execute(f"DROP TABLE IF EXISTS {legacy}")
+        _run_migrations(db)
 
         for statement in INDEXES:
             db.execute(statement)
@@ -229,6 +225,45 @@ def init_db() -> None:
                 DEMO_CAMERAS,
             )
             _backfill_slugs(db)
+
+
+# ---------- raqamlangan migratsiyalar ----------
+#
+# CAMERA_EXTRA_COLUMNS tsikli "yetishmagan ustunni qo'shish"ni bajaradi —
+# u idempotent va tartibga muhtoj emas. Undan tashqaridagi har qanday
+# sxema o'zgarishi (jadval o'chirish, ma'lumot ko'chirish, indeksni
+# almashtirish) shu ro'yxatga raqam bilan qo'shiladi: har biri bir marta,
+# tartib bilan bajariladi, bajarilgani `schema_version` jadvalida turadi.
+
+
+def _m1_kesish(db) -> None:
+    """Mikroservisga o'tish: statistika, Telegram va operator hududlari
+    asosiy tizimga ko'chdi — jadvallari olib tashlanadi (reja 3.1)."""
+    for legacy in ("stats_region", "stats_event", "user_regions"):
+        db.execute(f"DROP TABLE IF EXISTS {legacy}")
+
+
+MIGRATIONS = [
+    (1, _m1_kesish),
+]
+
+
+def schema_version(db) -> int:
+    db.execute("CREATE TABLE IF NOT EXISTS schema_version "
+               "(version INTEGER NOT NULL, applied_at TEXT NOT NULL "
+               "DEFAULT (datetime('now')))")
+    row = db.execute("SELECT MAX(version) FROM schema_version").fetchone()
+    return row[0] or 0
+
+
+def _run_migrations(db) -> None:
+    current = schema_version(db)
+    for version, migrate in MIGRATIONS:
+        if version <= current:
+            continue
+        migrate(db)
+        db.execute("INSERT INTO schema_version (version) VALUES (?)",
+                   (version,))
 
 
 def _migrate_cameras(db) -> None:
