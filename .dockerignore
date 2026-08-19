@@ -29,3 +29,9 @@ nigoh.log.*
 .vscode/
 .idea/
 ishga-tushirish.bat
+.github/
+tests/
+requirements-dev.txt
+ruff.toml
+# debug-ui ATAYIN imageda qoladi: ENABLE_UI=1 bilan konteynerda ham
+# diagnostika ochish mumkin (~1 MB), standartda baribir o'chiq.

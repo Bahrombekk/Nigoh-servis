@@ -1,4 +1,6 @@
-fastapi>=0.110
-uvicorn[standard]>=0.29
-cryptography>=42.0
-PyYAML>=6.0
+# Aniq versiyalar — build har doim bir xil chiqsin (CI ham shu bilan
+# testlaydi). Yangilash: versiyani ko'tarib, pytest + qabul_test yuritish.
+fastapi==0.141.1
+uvicorn[standard]==0.52.1
+cryptography==50.0.0
+PyYAML==6.0.3

@@ -133,8 +133,10 @@ def create_app() -> FastAPI:
         app.include_router(auth_ui_router, prefix="/api",
                            include_in_schema=False)
         # URL /static bo'lib qoladi (index.html shunga yozilgan), papka
-        # esa debug-ui/ — nomi vazifasini aytib turadi.
-        app.mount("/static", StaticFiles(directory=BASE_DIR / "debug-ui"),
-                  name="static")
+        # esa debug-ui/ — nomi vazifasini aytib turadi. Papka bo'lmasa
+        # (kesilgan image) API baribir ishlayveradi.
+        if (BASE_DIR / "debug-ui").is_dir():
+            app.mount("/static", StaticFiles(directory=BASE_DIR / "debug-ui"),
+                      name="static")
 
     return app

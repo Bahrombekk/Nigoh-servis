@@ -34,9 +34,22 @@ COPY . .
 ENV NIGOH_DATA=/data
 VOLUME /data
 
+# Root emas: jarayon buzilsa ham konteyner ichida imtiyoz yo'q.
+# UID 1000 — host'dagi birinchi foydalanuvchi bilan mos: ./data volume'ini
+# `chown -R 1000:1000 data` qilib berish kifoya (DEPLOY.md).
+RUN useradd --uid 1000 --user-group --no-create-home nigoh \
+    && mkdir -p /data && chown nigoh:nigoh /data
+USER nigoh
+
 # 8010 API+UI · 8554 RTSP · 8888 HLS · 8889 WebRTC · 8189/udp WebRTC media
 # 9997 MediaMTX API va 9998 metrics faqat 127.0.0.1 da — tashqariga ochilmaydi.
 EXPOSE 8010 8554 8888 8889
 EXPOSE 8189/udp
+
+# Salomatlik: /health kalitsiz javob beradi; MediaMTX yiqilsa ok=false
+# bo'lsa ham 200 qaytadi — konteyner tirikligi bilan servis salomatligi
+# ajratilgan (reconciler MediaMTX'ni o'zi ko'taradi).
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s \
+    CMD curl -fsS "http://127.0.0.1:${PORT:-8010}/health" || exit 1
 
 CMD ["python", "main.py"]

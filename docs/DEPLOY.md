@@ -13,21 +13,27 @@
 # 1. Loyihani serverga ko'chiring (git yoki papkani nusxalash)
 cd nigoh
 
-# 2. Sozlamalar
+# 2. Sozlamalar — NIGOH_API_KEY majburiy (usiz servis ko'tarilmaydi)
 cp .env.example .env
-nano .env          # kamida ADMIN_PAROL ni to'ldiring
+nano .env          # NIGOH_API_KEY (openssl rand -hex 32) va ADMIN_PAROL
 
-# 3. Ishga tushirish
+# 3. Ma'lumot papkasi — konteyner root emas (uid 1000)
+mkdir -p data && sudo chown -R 1000:1000 data
+
+# 4. Ishga tushirish
 docker compose up -d --build
 
-# 4. Tekshirish
+# 5. Tekshirish
 docker logs nigoh          # "Uvicorn running" ko'rinishi kerak
-curl http://localhost:8010/api/v1/cameras
+curl http://localhost:8010/health
+curl -H "X-API-Key: SIZNING_KALIT" http://localhost:8010/api/v1/cameras
 ```
 
-Brauzerda: `http://SERVER_IP:8010` — login "Super admin" tugmasi orqali
-(`.env` dagi `ADMIN_PAROL`; berilmagan bo'lsa parol `docker logs nigoh`
-chiqishida bir marta ko'rinadi — saqlab qo'ying).
+Barcha API `X-API-Key` bilan ishlaydi. Debug UI standart holda o'chiq —
+diagnostika kerak bo'lsa `.env` ga `ENABLE_UI=1` qo'ying, shunda
+`http://SERVER_IP:8010` sahifasi ochiladi (login: `.env` dagi
+`ADMIN_PAROL`; berilmagan bo'lsa parol `docker logs nigoh` chiqishida
+bir marta ko'rinadi — saqlab qo'ying).
 
 ## Portlar
 
