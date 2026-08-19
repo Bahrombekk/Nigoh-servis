@@ -199,6 +199,8 @@ def admin_camera(row, request: Request) -> dict:
         "enabled": bool(row["enabled"]),
         "note": row["note"] or "",
         "raw_stream_url": row["stream_url"] or "",
+        "model": (row["model"] or "") if "model" in row.keys() else "",
+        "firmware": (row["firmware"] or "") if "firmware" in row.keys() else "",
         "codec": row["codec"] or "",
         "transcode": bool(row["transcode"]),
         "always_on": bool(row["always_on"]),

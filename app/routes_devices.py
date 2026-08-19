@@ -16,12 +16,13 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from fastapi import APIRouter, HTTPException, Response
 from fastapi.responses import StreamingResponse
 
+from core import device_info as devinfo
 from core import fast_start, security
 from core.db import get_db
 from core.rtsp_probe import build_rtsp_url, probe
 
 from .config import CHANNEL_VENDORS, VENDORS
-from .helpers import channel_path
+from .helpers import channel_path, resolve_ref
 from .models import ScanIn
 
 # Prefiks nisbiy — create_app uni /api/v1 (asosiy) va /api (eski) ostida ulaydi.
@@ -147,6 +148,40 @@ def _run_scan(job: dict, job_id: str, max_channels: int) -> None:
         _emit(job, "error", {"message": f"Skan xatosi: {exc.__class__.__name__}"})
     finally:
         job["done"] = True
+
+
+@router.get("/info")
+def device_information(ip: str = "", username: str = "", password: str = "",
+                       ref: str = ""):
+    """Qurilma pasporti: manufacturer, model, firmware, serial, mac.
+
+    Manba — ONVIF `GetDeviceInformation`, zaxira — Hikvision ISAPI.
+    `ref` berilsa (ichki id yoki ext:...) saqlangan kamera ma'lumotlari
+    ishlatiladi va topilgan model/firmware bazaga yozib qo'yiladi.
+    """
+    camera_id = None
+    if ref:
+        with get_db() as db:
+            row = resolve_ref(db, ref)
+        if row is None:
+            raise HTTPException(404, "Kamera topilmadi")
+        camera_id = row["id"]
+        ip = ip or (row["ip"] or "")
+        username = username or (row["username"] or "")
+        password = password or security.decrypt(row["password_enc"])
+    if not ip:
+        raise HTTPException(400, "ip yoki ref bering")
+
+    info = devinfo.device_info(ip, username, password)
+    if info is None:
+        raise HTTPException(502, "Qurilma pasport bermadi — ONVIF/ISAPI "
+                                 "o'chiq yoki login noto'g'ri")
+    if camera_id is not None and (info["model"] or info["firmware"]):
+        with get_db() as db:
+            db.execute("UPDATE cameras SET model = ?, firmware = ? "
+                       "WHERE id = ?",
+                       (info["model"], info["firmware"], camera_id))
+    return info
 
 
 @router.post("/scan", status_code=202)

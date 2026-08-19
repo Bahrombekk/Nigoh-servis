@@ -46,6 +46,10 @@ CAMERA_EXTRA_COLUMNS = {
     # Tashqi tizim identifikatori: asosiy tizim o'z ID'si bilan murojaat
     # qiladi (ext:...), mapping jadval yuritmaydi.
     "external_id": "TEXT",
+    # Qurilma pasporti (/devices/info to'ldiradi): eski firmware'larni
+    # topish va ta'minotchi bilan gaplashish uchun.
+    "model": "TEXT",
+    "firmware": "TEXT",
 }
 
 # Kamera ko'payganda xaritani va ro'yxatni tez ushlab turadigan indekslar.
