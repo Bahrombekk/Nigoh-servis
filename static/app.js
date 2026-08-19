@@ -825,8 +825,51 @@ function buildWall() {
       // Setkada past sifatli 2-oqim (sub) — 16 plitka tarmoqni bo'g'masin.
       // Sub bo'lmasa server asosiysini beradi; to'liq ekranda asosiyga o'tiladi.
       player.open(cam, HEVC_OK, "sub");
+
+      // To'liq ekranda asosiy oqim JIMGINA almashadi: yashirin ikkinchi
+      // <video>da ochiladi, birinchi kadr kelgach ko'rinadi va sub
+      // yopiladi — bitta elementda src almashtirilsa qora yonib o'tardi.
+      // Asosiy 5 soniyada kelmasa sub qoladi va "SUB" belgisi ko'rinadi.
+      const badge = tile.querySelector(".t-head .st");
+      let mainSwap = null;
+      const startMain = () => {
+        if (mainSwap || player.mode === "manual") return;
+        const v2 = document.createElement("video");
+        v2.muted = true; v2.playsInline = true;
+        v2.style.opacity = "0";
+        tile.insertBefore(v2, tile.querySelector(".t-msg"));
+        const p2 = createPlayer(v2, document.createElement("div"));
+        wallPlayers.push(p2);              // stopWall uni ham to'xtatsin
+        mainSwap = { video: v2, player: p2, ready: false, timer: 0 };
+        mainSwap.timer = setTimeout(() => {
+          if (mainSwap && !mainSwap.ready) {
+            badge.textContent = "SUB";     // asosiy kelmadi — sub qoladi
+            p2.stop(); v2.remove(); mainSwap = null;
+          }
+        }, 5000);
+        v2.addEventListener("playing", () => {
+          if (!mainSwap || mainSwap.video !== v2) return;
+          mainSwap.ready = true;
+          clearTimeout(mainSwap.timer);
+          v2.style.opacity = "1";
+          badge.textContent = "LIVE";
+          player.stop();                   // sub jimgina yopiladi
+        }, { once: true });
+        p2.open(cam, HEVC_OK, "");
+      };
+      const stopMain = () => {
+        if (mainSwap) {
+          clearTimeout(mainSwap.timer);
+          mainSwap.player.stop();
+          mainSwap.video.remove();
+          mainSwap = null;
+        }
+        // Sub'ga qaytamiz — u issiq to'plamda, bir soniyada ochiladi.
+        player.open(cam, HEVC_OK, "sub");
+      };
       tile.addEventListener("fullscreenchange", () => {
-        player.open(cam, HEVC_OK, document.fullscreenElement === tile ? "" : "sub");
+        if (document.fullscreenElement === tile) startMain();
+        else stopMain();
       });
       wallPlayers.push(player);
     } else {
