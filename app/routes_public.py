@@ -1,7 +1,7 @@
 """Nigoh — ochiq (kirishsiz) endpointlar: xarita ro'yxati, oqim, surat."""
 from fastapi import APIRouter, HTTPException, Request, Response
 
-from core import fast_start, health, security
+from core import fast_start, health, security, snapshots
 from core.db import get_db
 from media import sync as mediamtx_sync
 
@@ -181,11 +181,17 @@ def camera_snapshot(ref: str, request: Request):
     regions = allowed_regions(request)
     if regions is not None and row["region"] not in regions:
         raise HTTPException(403, "Bu kamerani ko'rishga ruxsat yo'q")
-    data = fast_start.snapshot(
-        row["id"], row["ip"], row["username"] or "",
-        security.decrypt(row["password_enc"]),
-        row["vendor"] or "", row["rtsp_path"] or "", row["slug"] or "")
+
+    # Surat disk zaxirasidan (core/snapshots yangilab turadi); birinchi
+    # so'rovda jonli olinadi. ETag — brauzer/asosiy tizim o'zgarmagan
+    # suratni qayta yuklamaydi (304).
+    data, etag = snapshots.read(row)
     if not data:
         raise HTTPException(404, "Kameradan surat olib bo'lmadi")
-    return Response(content=data, media_type="image/jpeg",
-                    headers={"Cache-Control": "max-age=5"})
+    if etag and request.headers.get("if-none-match") == etag:
+        return Response(status_code=304,
+                        headers={"ETag": etag, "Cache-Control": "max-age=5"})
+    headers = {"Cache-Control": "max-age=5"}
+    if etag:
+        headers["ETag"] = etag
+    return Response(content=data, media_type="image/jpeg", headers=headers)

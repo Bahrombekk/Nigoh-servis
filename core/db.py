@@ -50,6 +50,9 @@ CAMERA_EXTRA_COLUMNS = {
     # topish va ta'minotchi bilan gaplashish uchun.
     "model": "TEXT",
     "firmware": "TEXT",
+    # Oxirgi muvaffaqiyatli surat vaqti — suratning o'zi diskda
+    # ({DATA_DIR}/snapshots/{slug}.jpg), bazada blob saqlanmaydi.
+    "snapshot_at": "TEXT",
 }
 
 # Kamera ko'payganda xaritani va ro'yxatni tez ushlab turadigan indekslar.

@@ -1,7 +1,7 @@
 """Nigoh — birinchi ishga tushirish tayyorgarligi."""
 import os
 
-from core import health, security
+from core import health, security, snapshots
 from core.db import get_db, init_db
 from core.log import log
 from media import reconciler
@@ -22,6 +22,10 @@ def bootstrap() -> None:
     # Kameralarning tirikligini fonda kuzatib boramiz — xaritada o'chiq
     # kameralar qizil bo'lib ko'rinadi.
     health.start()
+
+    # Suratlar diskda, pog'onali yangilanadi: issiq (so'ralgan) — 10 s,
+    # sovuq online — 5 daqiqa. Poster'lar shu zaxiradan darhol beriladi.
+    snapshots.start()
 
     # mediamtx.yml har ishga tushishda qayta yoziladi: portlar va kirish
     # nazorati sozlamalari kod bilan birga yangilansin. MediaMTX ishlab
