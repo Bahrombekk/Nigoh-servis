@@ -139,13 +139,15 @@ def _media_profiles(ip: str, username: str, password: str) -> list[str]:
 
 
 def _onvif_keyframe(ip: str, username: str, password: str,
-                    rtsp_path: str) -> bool:
+                    rtsp_path: str, stream: str = "main") -> bool:
     tokens = _media_profiles(ip, username, password)
     if not tokens:
         return False
 
     # Profillar odatda kanal tartibida keladi: 1-main, 1-sub, 2-main, ...
-    index = (channel_from_path(rtsp_path) - 1) * 2
+    # Sub oqim so'ralganda keyframe ham sub profilga ketishi kerak — aks
+    # holda so'rov asosiy oqimga tegib, plitka ochilishiga foyda bermaydi.
+    index = (channel_from_path(rtsp_path) - 1) * 2 + (1 if stream == "sub" else 0)
     token = tokens[index] if index < len(tokens) else tokens[0]
 
     body = (
@@ -173,10 +175,11 @@ def _auth_opener(url: str, username: str, password: str):
 
 
 def _isapi_keyframe(ip: str, username: str, password: str,
-                    channel: int) -> bool:
+                    channel: int, stream: str = "main") -> bool:
     """Hikvision'ning o'z usuli — ONVIF o'chirilgan bo'lsa ham ishlaydi."""
+    # ISAPI'da oqim raqami kanalga qo'shib yoziladi: 101 — asosiy, 102 — sub.
     url = (f"http://{ip}:{HTTP_PORT}/ISAPI/Streaming/channels/"
-           f"{channel}01/requestKeyFrame")
+           f"{channel}{'02' if stream == 'sub' else '01'}/requestKeyFrame")
     req = urllib.request.Request(url, data=b"", method="PUT")
     try:
         with _auth_opener(url, username, password).open(req, timeout=TIMEOUT):
@@ -186,31 +189,37 @@ def _isapi_keyframe(ip: str, username: str, password: str,
 
 
 def request_keyframe(ip: str, username: str, password: str,
-                     rtsp_path: str = "", vendor: str = "") -> bool:
-    """Kameradan darhol keyframe (I-frame) yuborishni so'raydi."""
+                     rtsp_path: str = "", vendor: str = "",
+                     stream: str = "main") -> bool:
+    """Kameradan darhol keyframe (I-frame) yuborishni so'raydi.
+
+    `stream="sub"` — so'rov kanalning sub (past sifatli) oqimiga ketadi;
+    devor plitkalari shu oqimni ko'rsatadi.
+    """
     if not ip:
         return False
-    key = (ip, rtsp_path or "")
+    key = (ip, rtsp_path or "", stream)
     now = time.monotonic()
     with _lock:
         if now - _last_keyframe.get(key, 0.0) < 2.0:   # bosimdan saqlanish
             return False
         _last_keyframe[key] = now
 
-    if _onvif_keyframe(ip, username, password, rtsp_path):
+    if _onvif_keyframe(ip, username, password, rtsp_path, stream):
         return True
     if vendor == "hikvision":
         return _isapi_keyframe(ip, username, password,
-                               channel_from_path(rtsp_path))
+                               channel_from_path(rtsp_path), stream)
     return False
 
 
 def request_keyframe_async(ip: str, username: str, password: str,
-                           rtsp_path: str = "", vendor: str = "") -> None:
+                           rtsp_path: str = "", vendor: str = "",
+                           stream: str = "main") -> None:
     """Keyframe so'rovi fonda ketadi — oqim manzili javobini kechiktirmaydi."""
     threading.Thread(
         target=request_keyframe,
-        args=(ip, username, password, rtsp_path, vendor),
+        args=(ip, username, password, rtsp_path, vendor, stream),
         daemon=True,
     ).start()
 

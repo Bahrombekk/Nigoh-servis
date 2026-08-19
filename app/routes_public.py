@@ -110,10 +110,12 @@ def camera_stream(camera_id: int, request: Request, hevc: int = 0,
                 mediamtx_sync.ensure_transcode_path(camera)
         # Kameradan darhol keyframe so'raymiz (ONVIF) — tasvir navbatdagi
         # keyframe'gacha (2-4 s) kutib qolmasin. Fonda ketadi, javobni
-        # kechiktirmaydi; qo'llamaydigan kamera jim rad etadi.
+        # kechiktirmaydi; qo'llamaydigan kamera jim rad etadi. Sub yo'l
+        # ko'rsatilayotganda so'rov ham sub oqimga ketadi.
         fast_start.request_keyframe_async(
             camera["ip"], camera["username"], camera["password"],
-            camera["rtsp_path"], row["vendor"] or "")
+            camera["rtsp_path"], row["vendor"] or "",
+            stream="sub" if sub else "main")
     return stream_urls(row, request, hevc_ok=bool(hevc), quality=quality)
 
 
