@@ -81,6 +81,29 @@ def test_restart_diskdagi_yangi_faylni_takror_olmaydi(tmp_path, monkeypatch):
     health._statuses.pop(("10.77.0.1", 10554), None)
 
 
+def test_yetim_fayllar_tozalanadi(tmp_path, monkeypatch):
+    monkeypatch.setattr(snapshots, "SNAP_DIR", tmp_path)
+    old = time.time() - snapshots.ORPHAN_KEEP - 60
+    # eski yetim — o'chadi; yangi yetim — bir hafta turadi
+    eski = tmp_path / "yoq_kamera_eski.jpg"
+    yangi = tmp_path / "yoq_kamera_yangi.jpg"
+    eski.write_bytes(b"x")
+    yangi.write_bytes(b"x")
+    import os
+    os.utime(eski, (old, old))
+    # bazadagi kamera surati — yoshi qancha bo'lsa ham tegilmaydi
+    from core.db import get_db
+    with get_db() as db:
+        slug = db.execute("SELECT slug FROM cameras LIMIT 1").fetchone()[0]
+    bor = tmp_path / f"{slug}.jpg"
+    bor.write_bytes(b"x")
+    os.utime(bor, (old, old))
+
+    snapshots._clean_orphans()
+    assert not eski.exists()
+    assert yangi.exists() and bor.exists()
+
+
 def test_semafor_uchinchi_jonli_olishni_rad_etadi(monkeypatch):
     monkeypatch.setattr(snapshots, "capture", lambda row: False)
     with snapshots._live_sem:

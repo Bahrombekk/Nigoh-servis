@@ -54,9 +54,17 @@ WORKERS = 8
 # 64 FFmpeg API threadpool'ini yeb qo'ymasin. Bu himoya, tegmang.
 LIVE_SLOTS = 2
 
+# Yetim fayllar: kamera o'chirilganda {slug}.jpg qolib ketadi — kuniga
+# bir tekshiriladi, bazada yo'q va bir haftadan eski fayl o'chiriladi.
+# Bir hafta saqlash ataylab: o'chirish tasodifiy bo'lsa oxirgi kadr
+# diagnostika uchun turadi.
+CLEAN_EVERY = 86_400.0
+ORPHAN_KEEP = 7 * 86_400.0
+
 _requested: dict[int, float] = {}   # camera_id -> oxirgi so'ralgan (monotonic)
 _done: dict[int, float] = {}        # camera_id -> oxirgi urinish (epoch)
 _last_total = 0                     # oxirgi tsikldagi kameralar soni
+_last_clean = 0.0
 _lock = threading.Lock()
 _started = False
 _live_sem = threading.BoundedSemaphore(LIVE_SLOTS)
@@ -232,9 +240,35 @@ def _attempt(row) -> bool:
             _done[row["id"]] = time.time()
 
 
+def _clean_orphans() -> None:
+    """Bazada yo'q slug'larning eski suratlarini o'chiradi."""
+    with get_db() as db:
+        slugs = {r["slug"] for r in db.execute("SELECT slug FROM cameras")}
+    try:
+        files = list(SNAP_DIR.glob("*.jpg"))
+    except OSError:
+        return
+    now, removed = time.time(), 0
+    for f in files:
+        if f.stem in slugs:
+            continue
+        try:
+            if now - f.stat().st_mtime > ORPHAN_KEEP:
+                f.unlink()
+                removed += 1
+        except OSError:
+            pass
+    if removed:
+        log("snapshots", "orphans_cleaned", removed=removed)
+
+
 def _loop() -> None:
+    global _last_clean
     while True:
         try:
+            if time.time() - _last_clean > CLEAN_EVERY:
+                _last_clean = time.time()
+                _clean_orphans()
             due = _due_cameras()
             if due:
                 started = time.monotonic()
