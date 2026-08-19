@@ -7,6 +7,7 @@ uchun Basic ham, Digest ham qo'llab-quvvatlanadi.
 import base64
 import hashlib
 import re
+import secrets
 import socket
 import urllib.parse
 
@@ -28,18 +29,40 @@ def build_rtsp_url(ip: str, port: int, path: str,
 
 
 def _digest_header(username: str, password: str, method: str, uri: str,
-                   challenge: str) -> str:
+                   challenge: str, nc: int = 1,
+                   cnonce: str | None = None) -> str:
+    """Digest Authorization sarlavhasi.
+
+    Kamera `qop` talab qilsa (Axis, ko'p ONVIF qurilma, ba'zi Dahua
+    firmware) RFC 2617 formulasi ishlatiladi: MD5(HA1:nonce:nc:cnonce:
+    qop:HA2). `qop`siz eski RFC 2069 formulasi qoladi. Bitta nonce bilan
+    ikkinchi so'rov (SETUP) yuborilganda `nc` oshirilishi shart.
+    """
     fields = dict(re.findall(r'(\w+)="([^"]*)"', challenge))
     realm = fields.get("realm", "")
     nonce = fields.get("nonce", "")
+    # qop qo'shtirnoqli ham, qo'shtirnoqsiz ham keladi: qop="auth" / qop=auth
+    qop_raw = fields.get("qop", "")
+    if not qop_raw:
+        match = re.search(r'qop=([^,\s"]+)', challenge)
+        qop_raw = match.group(1) if match else ""
+    qop = "auth" if "auth" in [q.strip() for q in qop_raw.split(",")] else ""
+
     md5 = lambda s: hashlib.md5(s.encode()).hexdigest()  # noqa: E731
     ha1 = md5(f"{username}:{realm}:{password}")
     ha2 = md5(f"{method}:{uri}")
-    response = md5(f"{ha1}:{nonce}:{ha2}")
+    if qop:
+        nc_value = f"{nc:08x}"
+        cnonce = cnonce or secrets.token_hex(8)
+        response = md5(f"{ha1}:{nonce}:{nc_value}:{cnonce}:{qop}:{ha2}")
+    else:
+        response = md5(f"{ha1}:{nonce}:{ha2}")
     header = (
         f'Digest username="{username}", realm="{realm}", nonce="{nonce}", '
         f'uri="{uri}", response="{response}"'
     )
+    if qop:
+        header += f', qop={qop}, nc={nc_value}, cnonce="{cnonce}"'
     if "opaque" in fields:
         header += f', opaque="{fields["opaque"]}"'
     return header
@@ -237,8 +260,9 @@ def probe(ip: str, port: int, path: str, username: str = "",
             transport = ["Transport: RTP/AVP/TCP;unicast;interleaved=0-1"]
             setup_auth = ""
             if challenge and challenge.lower().startswith("digest"):
+                # Bitta nonce ichida ikkinchi so'rov — nc oshiriladi.
                 setup_auth = _digest_header(username, password, "SETUP",
-                                            setup_uri, challenge)
+                                            setup_uri, challenge, nc=2)
             elif challenge:
                 token = base64.b64encode(f"{username}:{password}".encode()).decode()
                 setup_auth = f"Basic {token}"
