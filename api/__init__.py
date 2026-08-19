@@ -27,6 +27,7 @@ MediaMTX bilan aloqa alohida `media/` paketida — backend unga faqat
 (db, security, health, rtsp_probe, fast_start) `core/` paketida.
 """
 import asyncio
+from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI
 from fastapi.responses import FileResponse
@@ -70,18 +71,21 @@ Tugun holati (`status`): `online / degraded / offline`.
 """
 
 
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    # Fon thread'lari (health, reconciler, snapshots) SSE hodisalarini
+    # shu loop orqali yetkazadi.
+    bus.set_loop(asyncio.get_running_loop())
+    yield
+
+
 def create_app() -> FastAPI:
     app = FastAPI(
         title="Nigoh API",
         version="1.0",
         description=API_DESCRIPTION,
+        lifespan=_lifespan,
     )
-
-    @app.on_event("startup")
-    async def _bus_loop():
-        # Fon thread'lari (health, reconciler) SSE hodisalarini shu loop
-        # orqali yetkazadi.
-        bus.set_loop(asyncio.get_running_loop())
 
     if ENABLE_UI:
         @app.get("/", include_in_schema=False)

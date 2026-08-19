@@ -1,0 +1,4 @@
+# Faqat ishlab chiqish/CI uchun — ishlab chiqarish konteyneriga kirmaydi.
+pytest
+httpx        # fastapi.testclient shuni talab qiladi
+ruff
