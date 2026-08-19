@@ -1,4 +1,7 @@
-"""Nigoh — ochiq (kirishsiz) endpointlar: xarita ro'yxati, oqim, surat."""
+"""Nigoh — kameralar: ro'yxat, holat, oqim manzillari va surat."""
+import time
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, HTTPException, Request, Response
 
 from core import fast_start, health, snapshots
@@ -150,28 +153,55 @@ def camera_stream(ref: str, request: Request, hevc: int = 0,
 
 
 @router.get("/{ref}/snapshot")
-def camera_snapshot(ref: str, request: Request):
+def camera_snapshot(ref: str, request: Request, stale: int = 0):
     """Kameraning JPEG surati — video ulangunicha darhol ko'rsatish uchun.
 
     `ref` — ichki id yoki `ext:...`. Player suratni poster sifatida
     qo'yadi: his qilinadigan ochilish ~100 ms bo'ladi, video esa orqa
     fonda ulanadi.
+
+    Offline/o'chirilgan kamerada `404` — bir hafta oldingi kadr jonli
+    bo'lib ko'rinmasin (kuzatuvda eng yomon xato — xatoga o'xshamaydigani).
+    `stalled` esa ko'rsatiladi: kamera tarmoqda, HTTP surat odatda
+    ishlayveradi va aynan shunda kadr kerak. Fayl diskda qoladi —
+    `?stale=1` bilan oxirgi ma'lum kadrni olish mumkin (diagnostika).
+    Javob sarlavhalari `X-Snapshot-At` / `X-Snapshot-Age` — kadr yoshiga
+    qarab qarorni iste'molchi qiladi (yozuv, xiralashtirish).
     """
     with get_db() as db:
         row = resolve_ref(db, ref)
     if row is None or not row["enabled"] or not row["ip"]:
         raise HTTPException(404, "Kamera topilmadi")
 
-    # Surat disk zaxirasidan (core/snapshots yangilab turadi); birinchi
-    # so'rovda jonli olinadi. ETag — brauzer/asosiy tizim o'zgarmagan
-    # suratni qayta yuklamaydi (304).
-    data, etag, _ = snapshots.read(row)
+    # DIQQAT: holat va yosh tekshiruvi ETag/304 dan OLDIN turadi — aks
+    # holda keshi bor mijoz offline kamerada ham 304 olib eski kadrni
+    # ko'rsatishda davom etadi va butun to'siq behuda ketadi.
+    blocked = camera_state(row) in ("offline", "disabled")
+    if blocked and not stale:
+        raise HTTPException(404, "Kamera offline — surat berilmaydi "
+                                 "(oxirgi kadr: ?stale=1)")
+
+    # Offline'da jonli olishga urinilmaydi — semafor slotini band qilib
+    # FFmpeg'ni timeout'gacha kuttirishning ma'nosi yo'q.
+    data, etag, at_epoch = snapshots.read(row, live=not blocked)
     if not data:
         raise HTTPException(404, "Kameradan surat olib bo'lmadi")
-    if etag and request.headers.get("if-none-match") == etag:
-        return Response(status_code=304,
-                        headers={"ETag": etag, "Cache-Control": "max-age=5"})
+
+    # Yosh bo'yicha zaxira chegara: holat online desa-yu surat olish
+    # muntazam yiqilayotgan bo'lsa, eskirgan kadr baribir to'siladi.
+    # Chegara sovuq oraliqqa bog'langan (3×) — issiqqa emas.
+    age = max(0, int(time.time() - at_epoch)) if at_epoch else None
+    if not stale and age is not None and age > snapshots.max_age():
+        raise HTTPException(404, "Surat eskirgan — kamera yangi kadr "
+                                 "bermayapti (oxirgi kadr: ?stale=1)")
+
     headers = {"Cache-Control": "max-age=5"}
+    if at_epoch:
+        headers["X-Snapshot-At"] = datetime.fromtimestamp(
+            at_epoch, timezone.utc).isoformat(timespec="seconds")
+        headers["X-Snapshot-Age"] = str(age)
     if etag:
         headers["ETag"] = etag
+        if request.headers.get("if-none-match") == etag:
+            return Response(status_code=304, headers=headers)
     return Response(content=data, media_type="image/jpeg", headers=headers)
