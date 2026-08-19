@@ -44,6 +44,7 @@ from .config import ENABLE_UI, VENDORS
 from .deps import require_key
 from .devices import router as devices_router
 from .events import router as events_router
+from .health import router as health_router
 from .nodes import router as nodes_router
 from .streams import router as streams_router
 
@@ -115,6 +116,9 @@ def create_app() -> FastAPI:
     # UI kirishi.
     app.include_router(auth_router, prefix="/api/v1")
     app.include_router(auth_router, prefix="/api", include_in_schema=False)
+    # /health kalitsiz va prefikssiz — Docker HEALTHCHECK shu manzilga
+    # qaraydi; ichida sir yo'q.
+    app.include_router(health_router)
     for router in (cameras_router, streams_router, events_router,
                    devices_router, nodes_router, admin_router):
         app.include_router(router, prefix="/api/v1",

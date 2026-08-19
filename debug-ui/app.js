@@ -911,6 +911,22 @@ function syncWallAuto() {
   }, 12000);
 }
 
+/* Server egress'i devor sarlavhasida — ko'payish nuqtasi serverda, u
+   ko'rinishi shart: 80% da sariq, 95% da qizil. Chegara qo'yilmaydi. */
+setInterval(async () => {
+  const el = $("wall-egress");
+  if (!el || state.tab !== "wall") return;
+  try {
+    const h = await (await fetch("/health")).json();
+    if (!h.egress_capacity_mbps) return;
+    const share = h.egress_mbps / h.egress_capacity_mbps;
+    el.textContent = "egress " + h.egress_mbps.toFixed(0) + "/" +
+                     h.egress_capacity_mbps + " Mbit/s";
+    el.style.color = share >= 0.95 ? "#ff5d6c"
+                   : share >= 0.8 ? "#ffd166" : "";
+  } catch (e) { el.textContent = ""; }
+}, 5000);
+
 document.querySelectorAll("#wall-sizes button").forEach((b) =>
   b.addEventListener("click", () => {
     state.wallSize = Number(b.dataset.wsize);
