@@ -473,9 +473,26 @@ function createPlayer(video, msgEl) {
           // sekinmas va CSP'ga befarq.
           enableWorker: false});
         p.hls = hls;
+        // Pleyer jurnali — konsolda [hls] bilan boshlanadi. Video chiqmasa
+        // qaysi bosqichda qotganini shu yozuvlar aytadi.
+        hls.on(Hls.Events.MEDIA_ATTACHED, () =>
+          console.log("[hls] videoga ulandi (MediaSource ochildi)"));
+        hls.on(Hls.Events.MANIFEST_PARSED, (_, d) =>
+          console.log(`[hls] manifest o'qildi: ${d.levels.length} daraja`));
+        hls.on(Hls.Events.LEVEL_LOADED, (_, d) =>
+          console.log(`[hls] playlist: ${d.details.fragments.length} segment,`
+            + ` jonli=${d.details.live}, boshi=${d.details.startSN}`));
+        hls.on(Hls.Events.FRAG_LOADING, (_, d) =>
+          console.log(`[hls] segment so'ralmoqda: №${d.frag.sn}`));
+        hls.on(Hls.Events.FRAG_BUFFERED, (_, d) =>
+          console.log(`[hls] segment buferda: №${d.frag.sn}`));
+        hls.on(Hls.Events.ERROR, (_, d) =>
+          console.log(`[hls] XATO: ${d.details} fatal=${d.fatal}`));
+        video.addEventListener("playing", () => console.log("[hls] video ketdi"),
+          {once: true});
         hls.loadSource(url);
         hls.attachMedia(video);
-        video.play().catch(() => {});
+        video.play().catch((e) => console.log("[hls] play rad etildi:", e.name));
         hls.on(Hls.Events.ERROR, (_, d) => {
           if (staleFn() || !d.fatal) return;
           hls.destroy(); p.hls = null;
