@@ -66,6 +66,11 @@ class CameraIn(BaseModel):
             raise HTTPException(400, "Oqim manzili kiritilmagan")
 
 
+class EnabledIn(BaseModel):
+    """Kamerani yoqish/o'chirib qo'yish — to'liq PUT talab qilinmasin."""
+    enabled: bool
+
+
 class NvrIn(BaseModel):
     """Bitta NVR/registratordagi kanallarni birdaniga qo'shish.
 

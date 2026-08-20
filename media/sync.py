@@ -300,9 +300,12 @@ def build_config(cameras: list[dict], auth_url: str | None = None,
         # Doimiy remux qilinsa xom H.265 yo'llari ham bekorga HLS'ga o'giriladi;
         # asosiy yo'l WebRTC bo'lgani uchun bunga hojat yo'q.
         "hlsAlwaysRemux": False,
-        # 3 segment × 1 s — bufer 3 soniya: WebRTC ishlamay HLS'ga tushgan
-        # plitkalar jonliroq ko'rinadi (7 da kechikish 7 s gacha edi).
-        "hlsSegmentCount": 3,
+        # MediaMTX 1.20+ Low-Latency HLS uchun kamida 7 segment talab
+        # qiladi (kami bilan muxer "requires at least 7 segments" deb
+        # yiqiladi va HLS 500 qaytaradi). Kechikishni segment soni emas,
+        # 200 ms'lik partlar ushlab turadi — 7×1 s bufer bunga xalal
+        # bermaydi.
+        "hlsSegmentCount": 7,
         "hlsSegmentDuration": "1s",
         "hlsPartDuration": "200ms",
         "hlsAllowOrigins": ["*"],

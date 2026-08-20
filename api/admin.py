@@ -2,10 +2,13 @@
 foydalanuvchilar va MediaMTX holati. Tugunlar alohida: api/nodes.py."""
 import math
 import sqlite3
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
+from core import device_info as devinfo
 from core import fast_start, health, security
 from core.db import get_db, unique_slug
 from core.fast_start import channel_from_path
@@ -24,11 +27,43 @@ from .helpers import (
     require_admin,
     resolve_ref,
 )
-from .models import CameraIn, NvrIn, ProbeIn, ScanIn, UserIn
+from .models import CameraIn, EnabledIn, NvrIn, ProbeIn, ScanIn, UserIn
 
 # Prefiks nisbiy — create_app uni /api/v1 (asosiy) va /api (eski) ostida ulaydi.
 router = APIRouter(prefix="/admin", tags=["admin"],
                    dependencies=[Depends(require_admin)])
+
+
+def _fill_passport(camera_ids: list[int], ip: str,
+                   username: str, password: str) -> None:
+    """Qurilma pasportini (model/firmware) fonda so'rab bazaga yozadi.
+
+    ONVIF/ISAPI sekin javob berishi mumkin — yaratish so'rovini
+    kuttirmaslik uchun alohida ipda yuradi. Qurilma pasport bermasa
+    jimgina o'tib ketiladi — bu majburiy ma'lumot emas.
+    """
+    info = devinfo.device_info(ip, username, password)
+    if not info or not (info["model"] or info["firmware"]):
+        return
+    with get_db() as db:
+        db.executemany(
+            "UPDATE cameras SET model = ?, firmware = ? WHERE id = ?",
+            [(info["model"], info["firmware"], cid) for cid in camera_ids],
+        )
+
+
+def _enrich_new_camera(camera_ids: list[int], ip: str, port: int,
+                       username: str, password: str) -> None:
+    """Yangi qo'shilgan kamera sahifasi darhol to'liq bo'lsin:
+    holat hozir tekshiriladi (tez, ≤1.5 s), pasport fonda to'ladi."""
+    if not ip:
+        return
+    health.check_now(ip, port)
+    threading.Thread(
+        target=_fill_passport,
+        args=(camera_ids, ip, username, password),
+        daemon=True,
+    ).start()
 
 
 # ---------- kameralar CRUD ----------
@@ -64,6 +99,20 @@ def admin_list(request: Request, q: str = "", limit: int = 100, offset: int = 0)
 @router.post("/cameras", status_code=201)
 def admin_create(cam: CameraIn, request: Request):
     cam.validate_complete()
+    # Takror qo'shishdan himoya: bitta IP+port+yo'l — bitta kamera.
+    # (Skan sahifasida "Qo'shish" ikki bosilsa jimgina nusxa paydo
+    # bo'lardi.) Xohlagan takror ataylab bo'lsa, yo'lni o'zgartiring.
+    if cam.source_type == "rtsp":
+        with get_db() as db:
+            dup = db.execute(
+                "SELECT name FROM cameras WHERE ip = ? AND port = ? "
+                "AND rtsp_path = ?",
+                (cam.ip.strip(), cam.port, cam.rtsp_path.strip()),
+            ).fetchone()
+        if dup:
+            raise HTTPException(
+                409, f"Bu kamera allaqachon qo'shilgan: «{dup['name']}» "
+                     "(o'sha IP, port va RTSP yo'l)")
     codec, transcode, resolution = detect_codec(cam, cam.password or "")
     sub_path, sub_codec = detect_sub_path(cam, cam.password or "")
     with get_db() as db:
@@ -91,6 +140,10 @@ def admin_create(cam: CameraIn, request: Request):
         except sqlite3.IntegrityError:
             raise HTTPException(409, f"external_id band: {cam.external_id}")
         row = db.execute("SELECT * FROM cameras WHERE slug = ?", (slug,)).fetchone()
+    # Javob "Tekshirilmagan" bo'lib ketmasin: holat hozir aniqlanadi,
+    # model/firmware fonda to'ladi.
+    _enrich_new_camera([row["id"]], row["ip"] or "", row["port"] or 554,
+                       row["username"] or "", cam.password or "")
     return admin_camera(row, request)
 
 
@@ -150,6 +203,9 @@ def admin_update(ref: str, cam: CameraIn, request: Request):
         except sqlite3.IntegrityError:
             raise HTTPException(409, f"external_id band: {cam.external_id}")
         row = db.execute("SELECT * FROM cameras WHERE id = ?", (camera_id,)).fetchone()
+    # Manzil/parol o'zgargan bo'lishi mumkin — holat va pasport yangilanadi.
+    _enrich_new_camera([camera_id], row["ip"] or "", row["port"] or 554,
+                       row["username"] or "", password)
     return admin_camera(row, request)
 
 
@@ -199,6 +255,83 @@ def admin_delete(ref: str):
         if row is None:
             raise HTTPException(404, "Kamera topilmadi")
         db.execute("DELETE FROM cameras WHERE id = ?", (row["id"],))
+
+
+@router.post("/cameras/{ref}/enabled")
+def admin_set_enabled(ref: str, body: EnabledIn, request: Request):
+    """Kamerani yoqish/o'chirib qo'yish — to'liq tahrirsiz, bir bosishda.
+    O'chirilgan kameraga oqim ham, surat ham berilmaydi; reconciler
+    MediaMTX yo'lini o'zi olib tashlaydi."""
+    with get_db() as db:
+        row = resolve_ref(db, ref)
+        if row is None:
+            raise HTTPException(404, "Kamera topilmadi")
+        db.execute("UPDATE cameras SET enabled = ? WHERE id = ?",
+                   (int(body.enabled), row["id"]))
+        row = db.execute("SELECT * FROM cameras WHERE id = ?",
+                         (row["id"],)).fetchone()
+    return admin_camera(row, request)
+
+
+@router.get("/cameras/{ref}/uptime")
+def admin_uptime(ref: str, hours: int = 168):
+    """Kameraning ish vaqti tarixi: qachon uzilgan/qaytgan, jami qancha
+    o'chiq turgan, uptime foizi. Manba — events jadvalidagi online/offline
+    o'tishlari (saqlash muddati 30 kun, shundan uzuni so'ralmaydi)."""
+    hours = max(1, min(hours, 24 * 30))
+    now = datetime.now(timezone.utc)
+    since = now - timedelta(hours=hours)
+    with get_db() as db:
+        row = resolve_ref(db, ref)
+        if row is None:
+            raise HTTPException(404, "Kamera topilmadi")
+        transitions = db.execute(
+            "SELECT ts, kind FROM events WHERE slug = ? "
+            "AND kind IN ('online', 'offline') AND ts >= ? ORDER BY ts, id",
+            (row["slug"], since.strftime("%Y-%m-%d %H:%M:%S")),
+        ).fetchall()
+
+    def parse(ts: str) -> datetime:
+        # SQLite datetime('now') — UTC, lekin zonasiz satr.
+        return datetime.fromisoformat(ts).replace(tzinfo=timezone.utc)
+
+    # Davr boshidagi holat: birinchi o'tishning teskarisi; o'tish umuman
+    # bo'lmasa — hozirgi holat butun davrga taalluqli.
+    if transitions:
+        state_at_start = ("offline" if transitions[0]["kind"] == "online"
+                          else "online")
+    else:
+        alive = health.online(row["ip"], row["port"])
+        state_at_start = "offline" if alive is False else "online"
+
+    segments = []                      # [{state, from, to, seconds}]
+    cursor, state = since, state_at_start
+    for tr in transitions:
+        t = parse(tr["ts"])
+        if t > cursor:
+            segments.append({"state": state, "from": cursor.isoformat(),
+                             "to": t.isoformat(),
+                             "seconds": int((t - cursor).total_seconds())})
+        cursor, state = t, tr["kind"]
+    segments.append({"state": state, "from": cursor.isoformat(),
+                     "to": now.isoformat(),
+                     "seconds": int((now - cursor).total_seconds())})
+
+    offline_s = sum(s["seconds"] for s in segments if s["state"] == "offline")
+    total_s = max(1, int((now - since).total_seconds()))
+    outages = sum(1 for tr in transitions if tr["kind"] == "offline")
+    last_offline = next((tr["ts"] for tr in reversed(transitions)
+                         if tr["kind"] == "offline"), None)
+    return {
+        "hours": hours,
+        "uptime_pct": round(100 * (total_s - offline_s) / total_s, 2),
+        "offline_seconds": offline_s,
+        "outages": outages,
+        "last_offline_at": last_offline,
+        "segments": segments,
+        "transitions": [{"ts": tr["ts"], "kind": tr["kind"]}
+                        for tr in transitions],
+    }
 
 
 # ---------- NVR import va skaner ----------
@@ -299,10 +432,19 @@ def admin_nvr_import(body: NvrIn):
     keep = [p for p in planned if p["ok"] or not body.probe]
     password_enc = security.encrypt(body.password) if body.password else ""
     created = 0
+    created_ids: list[int] = []
     with get_db() as db:
         for item in keep:
+            # Takror kanal (o'sha IP+port+yo'l) qayta saqlanmaydi.
+            if db.execute(
+                "SELECT 1 FROM cameras WHERE ip = ? AND port = ? "
+                "AND rtsp_path = ?",
+                (body.ip.strip(), body.port, item["rtsp_path"]),
+            ).fetchone():
+                item["message"] = "allaqachon qo'shilgan — o'tkazib yuborildi"
+                continue
             slug = unique_slug(db, f"{body.region}_{item['name']}")
-            db.execute(
+            cur = db.execute(
                 "INSERT INTO cameras (name, region, lat, lng, stream_url, slug, ip, "
                 "port, username, password_enc, rtsp_path, sub_path, vendor, enabled, "
                 "note, codec, resolution, transcode, always_on, node_id) "
@@ -314,7 +456,13 @@ def admin_nvr_import(body: NvrIn):
                  item["codec"], item["resolution"], int(item["transcode"]),
                  body.node_id),
             )
+            created_ids.append(cur.lastrowid)
             created += 1
+
+    # NVR manzili bitta — holat bir tekshiruvda, pasport fonda to'ladi.
+    if created_ids:
+        _enrich_new_camera(created_ids, body.ip.strip(), body.port,
+                           body.username.strip(), body.password)
 
     return {"planned": planned, "created": created,
             "skipped": len(planned) - created,

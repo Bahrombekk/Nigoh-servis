@@ -8,7 +8,8 @@ Yangilash pog'onalari (fon vazifasi, parallellik 8):
 
   * issiq — oxirgi 5 daqiqada so'ralgan kamera: har 10 soniyada;
   * sovuq — qolganlar: kamera soniga moslashadigan oraliqda (kamida
-    5 daqiqa, 5000 kamerada ~17 daqiqa), faqat tirik (online) bo'lsa;
+    10 daqiqa — SNAP_INTERVAL bilan o'zgartiriladi, 5000 kamerada
+    ~17 daqiqa), faqat tirik (online) bo'lsa;
   * o'chiq (disabled) yoki o'chib qolgan (offline): umuman yangilanmaydi.
 
 Jadval FAZA bilan tarqatilgan: har kamera id'sidan hisoblangan barqaror
@@ -27,6 +28,7 @@ keyingi oynada o'zi qayta uriniladi.
 
 Har muvaffaqiyatli yangilanish SSE'ga `snapshot` hodisasi bo'lib chiqadi.
 """
+import os
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -42,7 +44,10 @@ SNAP_DIR = DATA_DIR / "snapshots"
 TICK = 10.0             # fon tsikli qadami (issiq interval bilan bir xil)
 HOT_WINDOW = 300.0      # so'ralganidan keyin shuncha vaqt "issiq"
 HOT_INTERVAL = 10.0
-COLD_MIN_INTERVAL = 300.0
+# Sovuq oraliq: hech kim so'ramayotgan kamera surati shu oraliqda bir
+# yangilanadi. Surat "jonli" bo'lishi shart emas — standart 10 daqiqa,
+# kerak bo'lsa SNAP_INTERVAL muhit o'zgaruvchisi bilan o'zgartiriladi.
+COLD_MIN_INTERVAL = float(os.environ.get("SNAP_INTERVAL", "600"))
 # Sovuq oraliq kamera soniga moslashadi: umumiy tezlik ~5 surat/soniyada
 # ushlanadi. Registratorlar bo'g'ilsa 0,5 ga ko'taring.
 COLD_PER_CAMERA = 0.2

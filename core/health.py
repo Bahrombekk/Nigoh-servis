@@ -18,7 +18,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
-from . import bus
+from . import bus, events
 from .db import get_db
 from .log import log
 
@@ -103,7 +103,7 @@ def _publish_changes(changed: list[tuple[str, int]],
     """
     with get_db() as db:
         rows = db.execute(
-            "SELECT id, external_id, ip, port FROM cameras "
+            "SELECT id, external_id, slug, ip, port FROM cameras "
             "WHERE enabled = 1 AND ip IS NOT NULL AND ip != ''"
         ).fetchall()
     by_pair: dict[tuple[str, int], list] = {}
@@ -111,15 +111,20 @@ def _publish_changes(changed: list[tuple[str, int]],
         by_pair.setdefault((row["ip"], row["port"] or 554), []).append(row)
 
     at = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    for pair in changed:
-        state = "online" if fresh[pair] else "offline"
-        for row in by_pair.get(pair, []):
-            bus.publish("state", {
-                "id": row["id"],
-                "external_id": row["external_id"] or "",
-                "state": state,
-                "at": at,
-            })
+    # O'tishlar bazaga ham yoziladi — kamera qachon/qancha o'chiq turgani
+    # tarixи shu yozuvlardan hisoblanadi (uptime statistikasi).
+    with get_db() as db:
+        for pair in changed:
+            state = "online" if fresh[pair] else "offline"
+            for row in by_pair.get(pair, []):
+                events.add(db, state, ip=pair[0], port=pair[1],
+                           slug=row["slug"])
+                bus.publish("state", {
+                    "id": row["id"],
+                    "external_id": row["external_id"] or "",
+                    "state": state,
+                    "at": at,
+                })
 
 
 def sweep_stats() -> dict:
@@ -158,3 +163,31 @@ def online(ip: str | None, port: int | None) -> bool | None:
         return None
     with _lock:
         return _statuses.get((ip, port or 554))
+
+
+def check_now(ip: str | None, port: int | None) -> bool | None:
+    """Bitta manzilni darhol tekshiradi — yangi kamera navbatdagi sweep'ni
+    (60 s gacha) kutib "Tekshirilmagan" bo'lib turmasin. Natija umumiy
+    xaritaga yoziladi, tirik chiqsa last_seen ham yangilanadi."""
+    if not ip:
+        return None
+    pair = (ip, port or 554)
+    ok = _tcp_ok(pair)
+    with _lock:
+        old = _statuses.get(pair)
+        _statuses[pair] = ok
+    with get_db() as db:
+        # O'tish shu yerda yuz berdi — sweep endi ko'rmaydi, tarixga o'zimiz
+        # yozamiz.
+        if old is not None and old != ok:
+            for row in db.execute(
+                "SELECT slug FROM cameras WHERE ip = ? AND port = ?", pair
+            ).fetchall():
+                events.add(db, "online" if ok else "offline",
+                           ip=pair[0], port=pair[1], slug=row["slug"])
+        if ok:
+            db.execute(
+                "UPDATE cameras SET last_seen = ? WHERE ip = ? AND port = ?",
+                (datetime.now(timezone.utc).isoformat(), pair[0], pair[1]),
+            )
+    return ok

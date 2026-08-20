@@ -29,6 +29,12 @@ mediamtx/
 __pycache__/
 *.pyc
 
+# Kamera suratlari (lokal ishga tushirishda ildizda paydo bo'ladi)
+snapshots/
+
+# Skrinshotlar (suhbat uchun vaqtinchalik)
+image*.png
+
 # Ish vaqti loglari
 mediamtx.log
 backend.log

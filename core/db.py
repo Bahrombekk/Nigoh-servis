@@ -15,15 +15,10 @@ DATA_DIR = Path(os.environ.get("NIGOH_DATA") or BASE_DIR)
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 DB_PATH = DATA_DIR / "cameras.db"
 
+# Ilgari yangi baza demo kameralar bilan to'ldirilardi — endi seed yo'q
+# (server bo'sh boshlanadi). Konstanta 2-migratsiya uchun qoldi: mavjud
+# bazalardagi demo yozuvlarni shu manzil bo'yicha topib o'chiradi.
 DEMO_STREAM = "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
-DEMO_CAMERAS = [
-    ("Amir Temur xiyoboni", "Toshkent", 41.3111, 69.2797, DEMO_STREAM),
-    ("Chorsu bozori", "Toshkent", 41.3266, 69.2345, DEMO_STREAM),
-    ("Registon maydoni", "Samarqand", 39.6547, 66.9758, DEMO_STREAM),
-    ("Labi Hovuz", "Buxoro", 39.7747, 64.4197, DEMO_STREAM),
-    ("Farg'ona markazi", "Farg'ona", 40.3864, 71.7864, DEMO_STREAM),
-    ("Urganch markazi", "Xorazm", 41.5500, 60.6333, DEMO_STREAM),
-]
 
 # Eski bazani yangi ustunlar bilan to'ldirish uchun (ALTER TABLE).
 CAMERA_EXTRA_COLUMNS = {
@@ -218,14 +213,6 @@ def init_db() -> None:
         for statement in INDEXES:
             db.execute(statement)
 
-        if db.execute("SELECT COUNT(*) FROM cameras").fetchone()[0] == 0:
-            db.executemany(
-                "INSERT INTO cameras (name, region, lat, lng, stream_url) "
-                "VALUES (?, ?, ?, ?, ?)",
-                DEMO_CAMERAS,
-            )
-            _backfill_slugs(db)
-
 
 # ---------- raqamlangan migratsiyalar ----------
 #
@@ -243,8 +230,19 @@ def _m1_kesish(db) -> None:
         db.execute(f"DROP TABLE IF EXISTS {legacy}")
 
 
+def _m2_demo_tozalash(db) -> None:
+    """Eski seed'dan qolgan demo kameralarni o'chiradi — ishlab
+    chiqarish bazasi bo'sh boshlanishi kerak. Faqat aynan demo oqim
+    manziliga qaragan, IP'siz yozuvlar ketadi — haqiqiylarga tegilmaydi."""
+    db.execute(
+        "DELETE FROM cameras WHERE stream_url = ? AND (ip IS NULL OR ip = '')",
+        (DEMO_STREAM,),
+    )
+
+
 MIGRATIONS = [
     (1, _m1_kesish),
+    (2, _m2_demo_tozalash),
 ]
 
 

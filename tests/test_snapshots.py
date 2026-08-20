@@ -23,10 +23,10 @@ def test_offset_barqaror_va_tekis():
 
 
 def test_cold_interval_moslashadi():
-    assert snapshots.cold_interval(200) == 300.0     # kichikda o'zgarmaydi
-    assert snapshots.cold_interval(1000) == 300.0
+    assert snapshots.cold_interval(200) == 600.0     # kichikda o'zgarmaydi
+    assert snapshots.cold_interval(1000) == 600.0
     assert snapshots.cold_interval(5000) == 1000.0   # ~17 daqiqa
-    assert snapshots.max_age() >= 3 * 300.0
+    assert snapshots.max_age() >= 3 * 600.0
 
 
 def test_slot_oynada_bir_marta():
@@ -92,9 +92,13 @@ def test_yetim_fayllar_tozalanadi(tmp_path, monkeypatch):
     import os
     os.utime(eski, (old, old))
     # bazadagi kamera surati — yoshi qancha bo'lsa ham tegilmaydi
+    # (baza endi bo'sh boshlanadi — kamerani testning o'zi yaratadi)
     from core.db import get_db
+    slug = "test_yetim_bor_kamera"
     with get_db() as db:
-        slug = db.execute("SELECT slug FROM cameras LIMIT 1").fetchone()[0]
+        db.execute(
+            "INSERT INTO cameras (name, region, lat, lng, stream_url, slug) "
+            "VALUES ('Yetim test', 'Test', 0, 0, '', ?)", (slug,))
     bor = tmp_path / f"{slug}.jpg"
     bor.write_bytes(b"x")
     os.utime(bor, (old, old))
