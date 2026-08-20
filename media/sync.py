@@ -313,6 +313,11 @@ def build_config(cameras: list[dict], auth_url: str | None = None,
 
         "rtmp": False,
         "srt": False,
+        # MoQ (MediaMTX 1.20+) o'chiq: u QUIC uchun auto.key/auto.crt
+        # yozmoqchi bo'ladi, konteynerda esa ishchi papkaga yozish huquqi
+        # yo'q — MediaMTX shu xato bilan butunlay yiqilardi. Bizga MoQ
+        # kerak emas (WebRTC + HLS yetarli).
+        "moq": False,
 
         "paths": {} if remote else (camera_paths(cameras) or {}),
     }
