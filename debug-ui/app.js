@@ -444,8 +444,12 @@ function createPlayer(video, msgEl) {
       if (staleFn()) { pc.close(); return; }
       await pc.setRemoteDescription({type: "answer", sdp: answer});
       await new Promise((resolve, reject) => {
+        // srcObject'ga qarab bo'lmaydi: track hodisasi ICE ulanmasidan
+        // oldin ham keladi (signal bosqichida). Faqat haqiqiy ulanish
+        // (connectionState) hisob — aks holda UDP yopiq muhitda qora
+        // ekranda qotib, HLS'ga tushmasdik.
         const timer = setTimeout(() => {
-          if (video.srcObject) resolve();
+          if (pc.connectionState === "connected") resolve();
           else { pc.close(); reject(new Error("WebRTC jim")); }
         }, 6000);
         pc.addEventListener("connectionstatechange", () => {
