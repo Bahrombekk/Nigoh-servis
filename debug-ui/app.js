@@ -466,7 +466,12 @@ function createPlayer(video, msgEl) {
       if (isHls && window.Hls && Hls.isSupported()) {
         const hls = new Hls({lowLatencyMode: true, maxBufferLength: 6,
           backBufferLength: 6, liveSyncDurationCount: 1,
-          manifestLoadingTimeOut: 25000});
+          manifestLoadingTimeOut: 25000,
+          // Worker blob/eval bilan yaratiladi — qattiq CSP (masalan,
+          // oldindagi proxy qo'shgani) uni bloklasa hls.js jim qotadi:
+          // playlist aylanadi, segment so'ralmaydi. Worker'siz rejim
+          // sekinmas va CSP'ga befarq.
+          enableWorker: false});
         p.hls = hls;
         hls.loadSource(url);
         hls.attachMedia(video);
