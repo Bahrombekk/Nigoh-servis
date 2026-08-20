@@ -375,6 +375,13 @@ document.addEventListener("keydown", (e) => {
 /* ═════════ video pleyer (devor uchun) ═════════ */
 const FAIL_MSG = "oqim ochilmadi";
 
+/* WebRTC bu muhitda ishlamasa (UDP yopiq), har ochilishda 3-6 soniya
+   bekorga kutmaslik uchun yiqilish eslab qolinadi va keyingi ochilishlar
+   to'g'ridan HLS'dan boshlanadi. Har 10 daqiqada bir qayta uriniladi —
+   tarmoq ochilib qolsa tez yo'lga o'zi qaytadi. */
+let _rtcFailedAt = 0;
+const RTC_RETRY_MS = 10 * 60 * 1000;
+
 function createPlayer(video, msgEl) {
   const p = {video, msgEl, hls: null, pc: null, token: 0, mode: ""};
 
@@ -408,8 +415,10 @@ function createPlayer(video, msgEl) {
     function attach(urls, staleFn, onFail) {
       video.addEventListener("playing", () => { if (!staleFn()) msgEl.textContent = ""; },
         {once: true});
-      if (urls.webrtc_url) {
+      const rtcWorth = Date.now() - _rtcFailedAt > RTC_RETRY_MS;
+      if (urls.webrtc_url && rtcWorth) {
         playWebRtc(urls.webrtc_url, staleFn).catch(() => {
+          _rtcFailedAt = Date.now();
           if (staleFn()) return;
           playHls(urls.stream_url, staleFn, onFail);
         });
@@ -448,10 +457,12 @@ function createPlayer(video, msgEl) {
         // oldin ham keladi (signal bosqichida). Faqat haqiqiy ulanish
         // (connectionState) hisob — aks holda UDP yopiq muhitda qora
         // ekranda qotib, HLS'ga tushmasdik.
+        // ICE odatda 1-2 soniyada ulanadi; ulanmasa kutish HLS'ni
+        // kechiktiradi xolos — 3,5 soniya yetarli.
         const timer = setTimeout(() => {
           if (pc.connectionState === "connected") resolve();
           else { pc.close(); reject(new Error("WebRTC jim")); }
-        }, 6000);
+        }, 3500);
         pc.addEventListener("connectionstatechange", () => {
           if (pc.connectionState === "connected") { clearTimeout(timer); resolve(); }
           if (pc.connectionState === "failed") { clearTimeout(timer); pc.close();
@@ -471,8 +482,12 @@ function createPlayer(video, msgEl) {
       video.load();
       const isHls = url.includes(".m3u8");
       if (isHls && window.Hls && Hls.isSupported()) {
-        const hls = new Hls({lowLatencyMode: true, maxBufferLength: 6,
-          backBufferLength: 6, liveSyncDurationCount: 1,
+        // liveSync 2 segment (~4 s) — jonli chetiga 1 segment yaqin
+        // turishdan barqarorroq: tarmoq titrasa ham qotmaydi. Bufer 12 s —
+        // qisqa uzilishlarni yutib yuboradi.
+        const hls = new Hls({lowLatencyMode: true, maxBufferLength: 12,
+          backBufferLength: 8, liveSyncDurationCount: 2,
+          maxLiveSyncPlaybackRate: 1.1,
           manifestLoadingTimeOut: 25000,
           // Worker blob/eval bilan yaratiladi — qattiq CSP (masalan,
           // oldindagi proxy qo'shgani) uni bloklasa hls.js jim qotadi:
