@@ -296,18 +296,17 @@ def build_config(cameras: list[dict], auth_url: str | None = None,
         # HLS — WebRTC ishlamagan brauzerlar uchun zaxira.
         "hls": True,
         "hlsAddress": f":{hls_port}",
-        "hlsVariant": "lowLatency",
+        # Oddiy fMP4 rejimi (lowLatency EMAS): LL-HLS'ning 200 ms'lik
+        # qismlari oldindagi proxy'lar buferida qotib, qora ekran berardi.
+        # Oddiy HLS 1 s'lik butun segmentlar bilan ishlaydi — har qanday
+        # proxy orqali o'tadi; kechikish ~3-5 s, zaxira yo'l uchun maqbul.
+        "hlsVariant": "fmp4",
         # Doimiy remux qilinsa xom H.265 yo'llari ham bekorga HLS'ga o'giriladi;
         # asosiy yo'l WebRTC bo'lgani uchun bunga hojat yo'q.
         "hlsAlwaysRemux": False,
-        # MediaMTX 1.20+ Low-Latency HLS uchun kamida 7 segment talab
-        # qiladi (kami bilan muxer "requires at least 7 segments" deb
-        # yiqiladi va HLS 500 qaytaradi). Kechikishni segment soni emas,
-        # 200 ms'lik partlar ushlab turadi — 7×1 s bufer bunga xalal
-        # bermaydi.
+        # 7×1 s segment — tez boshlanish va mo''tadil bufer.
         "hlsSegmentCount": 7,
         "hlsSegmentDuration": "1s",
-        "hlsPartDuration": "200ms",
         "hlsAllowOrigins": ["*"],
         "hlsTrustedProxies": ["127.0.0.1"],
 
