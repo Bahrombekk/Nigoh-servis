@@ -462,6 +462,13 @@ function createPlayer(video, msgEl) {
 
     function playHls(url, staleFn, onFail) {
       if (!url) { msgEl.textContent = FAIL_MSG; return; }
+      // WebRTC muvaffaqiyatsiz tugab HLS'ga tushganda uning o'lik oqimi
+      // videoda qolib ketadi; srcObject har doim src'dan ustun bo'lgani
+      // uchun tozalanmasa MediaSource ochilmaydi — abadiy qora ekran.
+      if (p.pc) { p.pc.close(); p.pc = null; }
+      video.srcObject = null;
+      video.removeAttribute("src");
+      video.load();
       const isHls = url.includes(".m3u8");
       if (isHls && window.Hls && Hls.isSupported()) {
         const hls = new Hls({lowLatencyMode: true, maxBufferLength: 6,
