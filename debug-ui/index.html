@@ -17,7 +17,7 @@
   <p class="gate-sub">Kameralarni tarqatuvchi servisning diagnostika paneli.
     Kirish faqat texnik xodimlar uchun.</p>
   <div class="gate-err" id="gerr"></div>
-  <div class="field"><label for="u">Login</label><input id="u" value="admin" autocomplete="username"></div>
+  <div class="field"><label for="u">Login</label><input id="u" autocomplete="username"></div>
   <div class="field"><label for="p">Parol</label><input id="p" type="password" autocomplete="current-password"></div>
   <button class="btn wide" id="glogin">Kirish</button>
   <p class="gate-note">Kamera parollari bu yerdan ko'rinmaydi va o'zgartirilmaydi.
@@ -29,7 +29,8 @@
   <nav>
     <div class="nav-brand"><b>NIGOH</b><span>konsol</span></div>
     <div class="nav-search" id="palopen">Izlash… <span class="kbd" style="margin-left:auto">Ctrl K</span></div>
-    <button class="nav-item sel" data-p="cams">Kameralar <span class="ct" id="nc">—</span></button>
+    <button class="nav-item sel" data-p="home">Holat <span class="ct" id="nh">—</span></button>
+    <button class="nav-item" data-p="cams">Kameralar <span class="ct" id="nc">—</span></button>
     <button class="nav-item" data-p="wall">Devor <span class="ct" id="nw">—</span></button>
     <button class="nav-item" data-p="diag">Diagnostika</button>
     <button class="nav-item" data-p="sys">Tizim</button>
@@ -41,11 +42,23 @@
   </nav>
 
   <main>
+    <!-- holat (bosh sahifa): bir qarashda "hammasi yaxshimi?" -->
+    <section class="page on" id="p-home">
+      <div class="head"><h1>Holat</h1><p id="hsum">yuklanmoqda…</p></div>
+      <div class="stats" id="hstats"></div>
+      <div id="hprob"></div>
+      <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr));margin-top:14px">
+        <div class="card"><h3>So'nggi uzilishlar va xatolar</h3><div id="hev"></div></div>
+        <div class="card"><h3>Fon vazifalari</h3><dl class="kv" id="hjobs"></dl></div>
+      </div>
+    </section>
+
     <!-- kameralar -->
-    <section class="page on" id="p-cams">
+    <section class="page" id="p-cams">
       <div class="head"><h1>Kameralar</h1><p id="csum">yuklanmoqda…</p></div>
       <div class="tools" id="cfilt">
         <button class="chip sel" data-f="all">Hammasi <span class="n"></span></button>
+        <button class="chip warn" data-f="prob">Muammoli <span class="n"></span></button>
         <button class="chip" data-f="online">Ishlayapti <span class="n"></span></button>
         <button class="chip" data-f="stalled">To'xtagan <span class="n"></span></button>
         <button class="chip" data-f="offline">O'chgan <span class="n"></span></button>
@@ -86,6 +99,16 @@
       <button class="back" id="dback">← Kameralar</button>
       <div class="head"><h1 id="dname">—</h1><p id="dsub">Jadvaldan yoki devordan kamera tanlang</p></div>
       <div class="acts" id="dacts"></div>
+      <div class="live-wrap" id="dlive" style="display:none">
+        <video id="dvideo" muted playsinline></video>
+        <div class="live-msg" id="dlivemsg"></div>
+        <div class="live-bar">
+          <button class="chip sel" id="dlq" data-q="">Asosiy oqim</button>
+          <button class="chip" id="dlqsub" data-q="sub">Past sifat</button>
+          <div class="spacer"></div>
+          <button class="chip" id="dlstop">✕ Yopish</button>
+        </div>
+      </div>
       <div class="chain" id="chainwrap" style="display:none">
         <div class="chain-row" id="chain"></div>
         <div class="verdict" id="verdict"></div>
