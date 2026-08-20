@@ -379,8 +379,25 @@ const FAIL_MSG = "oqim ochilmadi";
    bekorga kutmaslik uchun yiqilish eslab qolinadi va keyingi ochilishlar
    to'g'ridan HLS'dan boshlanadi. Har 10 daqiqada bir qayta uriniladi —
    tarmoq ochilib qolsa tez yo'lga o'zi qaytadi. */
-let _rtcFailedAt = 0;
+let _rtcFailedAt = +localStorage.getItem("nigoh_rtc_fail") || 0;
 const RTC_RETRY_MS = 10 * 60 * 1000;
+function noteRtcFail() {
+  _rtcFailedAt = Date.now();
+  try { localStorage.setItem("nigoh_rtc_fail", _rtcFailedAt); } catch (e) {}
+}
+
+/* Oldindan isitish: diagnostika sahifasi ochilganda playlist bir marta
+   so'raladi — MediaMTX kameraga ulanib segment yig'a boshlaydi, keyframe
+   so'rovi birinchi segmentni tezlashtiradi. Play bosilganda oqim tayyor
+   turadi — ochilish 8-10 s dan 2-3 s ga tushadi. */
+function warmStream(c) {
+  if (!c || !c.ip || c.state === "offline" || c.state === "disabled") return;
+  api(`/api/v1/admin/cameras/${c.id}/keyframe`, {method: "POST"}).catch(() => {});
+  api(`/api/v1/cameras/${c.id}/stream?hevc=${HEVC_OK ? 1 : 0}`)
+    .then((u) => { if (u.stream_url) fetch(u.stream_url, {cache: "no-store"})
+      .catch(() => {}); })
+    .catch(() => {});
+}
 
 function createPlayer(video, msgEl) {
   const p = {video, msgEl, hls: null, pc: null, token: 0, mode: ""};
@@ -418,7 +435,7 @@ function createPlayer(video, msgEl) {
       const rtcWorth = Date.now() - _rtcFailedAt > RTC_RETRY_MS;
       if (urls.webrtc_url && rtcWorth) {
         playWebRtc(urls.webrtc_url, staleFn).catch(() => {
-          _rtcFailedAt = Date.now();
+          noteRtcFail();
           if (staleFn()) return;
           playHls(urls.stream_url, staleFn, onFail);
         });
@@ -687,6 +704,7 @@ function openDiag(id) {
   S.curId = id;
   go("diag");
   drawDiag();
+  warmStream(c);          // play bosilguncha oqim tayyor bo'lib tursin
 }
 
 /* ═════════ diag: jonli ko'rish (kerak paytda, bir bosishda) ═════════ */
