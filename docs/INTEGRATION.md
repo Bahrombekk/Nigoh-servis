@@ -39,7 +39,20 @@ curl -X POST http://SERVER:8010/api/v1/admin/cameras \
 
 `external_id` — sizning tizimingizdagi ID. Keyin hamma joyda `12`
 o'rniga `ext:cam-toshkent-014` deb murojaat qilasiz — mapping jadval
-kerak emas. Takror `external_id` → `409`.
+kerak emas. Takror `external_id` → `409`. Takror kamera (bir xil
+IP+port+RTSP yo'l) ham → `409` — bexosdan ikki nusxa yaratilmaydi.
+
+Yaratish javobida holat (`state`) darhol tekshirilgan bo'ladi
+("unknown" kutish yo'q); `model`/`firmware` fonda ONVIF/ISAPI'dan
+so'ralib bir necha soniyada bazaga yoziladi — keyingi so'rovda ko'rinadi.
+
+Yoqish/o'chirib qo'yish uchun to'liq PUT shart emas:
+
+```
+POST /api/v1/admin/cameras/{ref}/enabled   {"enabled": false}
+```
+
+O'chirilgan kameraga oqim ham, surat ham berilmaydi.
 
 Qurilmani qo'lda bilmasangiz — skaner topib beradi:
 
@@ -148,6 +161,24 @@ es.addEventListener("state", (e) => {
 (EventSource sarlavha qo'ya olmaydi — SSE'ni o'z backend'ingiz orqali
 proksilang yoki shu proksida X-API-Key qo'shing.)
 
+## Ish vaqti tarixi (uptime)
+
+Har kamera qachon uzilgan/qaytgani bazada yuritiladi (30 kun).
+Statistika tayyor hisoblangan holda keladi:
+
+```bash
+curl -H "X-API-Key: KALIT" \
+  "http://SERVER:8010/api/v1/admin/cameras/ext:cam-toshkent-014/uptime?hours=168"
+# -> {"hours": 168, "uptime_pct": 99.4, "offline_seconds": 3620,
+#     "outages": 3, "last_offline_at": "2026-08-19 22:14:03",
+#     "segments": [{"state": "online", "from": "...", "to": "...",
+#                   "seconds": 86400}, ...],
+#     "transitions": [{"ts": "...", "kind": "offline"}, ...]}
+```
+
+`hours` — davr (standart 168 = 7 kun, ko'pi 720). `segments` dan
+vaqt chizig'i chiziladi, `transitions` — xom o'tishlar ro'yxati.
+
 ## Surat (snapshot)
 
 ```
@@ -199,8 +230,10 @@ o'z monitoringingizga ulang: 80% — ogohlantirish, 95% — jiddiy.
 | GET | `/api/v1/devices/scan/{job}/events` | SSE — kanallar kelgan sari |
 | GET | `/api/v1/devices/scan/{job}/snapshot/{ch}` | topilgan kanal surati |
 | GET | `/api/v1/devices/info` | model, firmware, seriya |
-| POST | `/api/v1/admin/cameras` | saqlash → `id` |
+| POST | `/api/v1/admin/cameras` | saqlash → `id`; takror IP+yo'l → `409` |
 | PUT / DELETE | `/api/v1/admin/cameras/{ref}` | `ref` = id yoki `ext:...` |
+| POST | `/api/v1/admin/cameras/{ref}/enabled` | yoqish/o'chirib qo'yish |
+| GET | `/api/v1/admin/cameras/{ref}/uptime` | uptime %, uzilishlar, segmentlar |
 | GET | `/api/v1/cameras` | yengil ro'yxat |
 | GET | `/api/v1/cameras/status` | `?ids=` yoki `?all=1` |
 | GET | `/api/v1/cameras/{ref}/stream` | bitta oqim (chiptali) |
@@ -210,6 +243,30 @@ o'z monitoringingizga ulang: 80% — ogohlantirish, 95% — jiddiy.
 | GET | `/api/v1/admin/nodes` | MediaMTX tugunlari |
 | GET | `/health` | servis, MediaMTX, egress (kalitsiz) |
 | POST | `/api/v1/auth/stream` | MediaMTX chaqiradi, mijoz emas |
+
+## Pleyer qurishdagi saboqlar (o'zimiz bosgan tuzoqlar)
+
+O'z saytingizda pleyer yozsangiz, quyidagilar ko'p vaqt tejaydi —
+barchasi haqiqiy ishga tushirishda uchragan muammolar:
+
+1. **WebRTC → HLS zaxira tartibida `video.srcObject`ni tozalang.**
+   WebRTC yiqilib HLS'ga o'tganda o'lik `srcObject` elementda qolsa,
+   u `src`dan ustun bo'lgani uchun HLS hech qachon ko'rinmaydi —
+   xatosiz qora ekran. HLS'dan oldin: `video.srcObject = null`.
+2. **WebRTC yiqilishini eslab qoling** (masalan, localStorage'da,
+   10 daqiqa amal qilsin) — UDP yopiq muhitda har ochilishda 3-5 s
+   bekor kutilmaydi; port ochilsa tez yo'lga o'zi qaytadi.
+3. **hls.js'da `enableWorker: false`** — sahifangizda qattiq CSP
+   bo'lsa worker (blob/eval) bloklanib pleyer jim qotadi.
+4. **Oldindan isiting**: kamera sahifasi ochilganda playlist'ni bir
+   marta `fetch` qilib qo'ying — MediaMTX kameraga ulanib segment
+   yig'ishni boshlaydi, play bosilganda 2-3 s da ochiladi.
+5. **Barqarorlik uchun**: `liveSyncDurationCount: 2`, bufer ~12 s,
+   `maxLiveSyncPlaybackRate: 1.1` — titroq tarmoqda qotmaydi.
+6. Nigoh oldida qo'shimcha proxy bo'lsa: MediaMTX redirect'lari va
+   cookie yo'llari prefiksga qayta yozilishi shart — tayyor namuna
+   `deploy/negoh.das-uty.uz.conf` da (`proxy_redirect`,
+   `proxy_cookie_path`).
 
 ## Video sahifangizda HTTPS
 
