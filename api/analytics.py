@@ -35,6 +35,12 @@ MAX_HOURS = 24 * 30
 
 GROUP_KEYS = ("region", "nvr", "node")
 
+# Daqiqalik chiziq: sutka 15 daqiqalik uyalarga bo'linadi (96 ta).
+# Ekranda bitta qatorga sig'adi va bir qarashda uzilishning
+# shaklini ko'rsatadi.
+STRIP_MINUTES = 15
+STRIP_CELLS = 24 * 60 // STRIP_MINUTES
+
 
 def _parse_ts(ts: str) -> datetime:
     """SQLite `datetime('now')` — UTC, lekin zonasiz satr."""
@@ -329,6 +335,10 @@ def camera_history(ref: str,
                                            microsecond=0)
     today_start = local_midnight - shift
     since = today_start - timedelta(days=days - 1)
+    # Tanlangan kun — DB so'rovidan oldin kerak: harakatlar jurnali aynan
+    # shu kun bo'yicha o'qiladi.
+    sel_start = today_start - timedelta(days=day)
+    sel_end = min(now, sel_start + timedelta(days=1))
 
     with get_db() as db:
         row = resolve_ref(db, ref)
@@ -338,6 +348,19 @@ def camera_history(ref: str,
             "SELECT ts, kind FROM events WHERE slug = ? AND kind IN "
             "('online', 'offline') AND ts >= ? ORDER BY ts, id",
             (row["slug"], _sqlite_since(since)),
+        ).fetchall()
+        # Harakatlar jurnali: shu kundagi BARCHA hodisalar, jumladan
+        # oqim muzlashi (stalled/resumed) va MediaMTX qayta ishga
+        # tushishi. Sub va o'girilgan yo'llar ham shu kameraga tegishli,
+        # lekin LIKE ishlatilmaydi — slug'da "_" bor va u LIKE uchun
+        # joker belgi, ya'ni "kam_1" tasodifan "kam11" ni ham tutardi.
+        slug = row["slug"] or ""
+        actions = db.execute(
+            "SELECT ts, kind, detail, slug FROM events "
+            "WHERE slug IN (?, ?, ?) AND ts >= ? AND ts < ? "
+            "ORDER BY ts DESC, id DESC LIMIT 200",
+            (slug, slug + "_sub", slug + "_h264",
+             _sqlite_since(sel_start), _sqlite_since(sel_end)),
         ).fetchall()
 
     transitions = [(_parse_ts(r["ts"]), r["kind"]) for r in events]
@@ -363,8 +386,6 @@ def camera_history(ref: str,
     daily.reverse()                           # 0 = bugun
 
     # ---- tanlangan kun: soatlik profil va uzilishlar jurnali ----
-    sel_start = today_start - timedelta(days=day)
-    sel_end = min(now, sel_start + timedelta(days=1))
     hour_edges = [sel_start + timedelta(hours=h) for h in range(25)]
     hour_edges[-1] = max(hour_edges[-2], sel_end)
     hourly_seconds = [int(v) for v in _spread(intervals, hour_edges)]
@@ -382,6 +403,21 @@ def camera_history(ref: str,
         # "tiklandi" deb ko'rsatish yolg'on bo'lardi.
         "recovered": e < now - timedelta(seconds=1),
     } for s, e in day_intervals]
+
+    # ---- daqiqalik chiziq: sutka 96 ta 15 daqiqalik uyaga bo'linadi ----
+    # Soatlik ustunlar "qachon" ni aytadi, bu chiziq esa "qanday" ni:
+    # uzilish bir marta uzoq bo'lganmi yoki kun bo'yi uzuq-yuluqmi.
+    strip_start = sel_start
+    strip_edges = [strip_start + timedelta(minutes=STRIP_MINUTES * i)
+                   for i in range(STRIP_CELLS + 1)]
+    strip = [int(v) for v in _spread(intervals, strip_edges)]
+    # Kelajakdagi uyalar "sog'lom" bo'lib ko'rinmasligi kerak — bugun
+    # hali tugamagan.
+    # Yuqoriga yaxlitlash: hozir davom etayotgan katak ham "boshlangan"
+    # hisoblanadi, aks holda unga tushgan uzilish ekranda ko'rinmay
+    # qolardi (u "kelajak" bo'lib chiziladi).
+    _sec = (min(now, strip_start + timedelta(days=1)) - strip_start).total_seconds()
+    elapsed = -(-int(_sec) // (STRIP_MINUTES * 60))
 
     # ---- eng zich uch soatlik oyna (sutka aylanasidan o'tadi) ----
     best_h, best_v = 0, -1.0
@@ -437,4 +473,16 @@ def camera_history(ref: str,
                  "offline_seconds": int(max(0.0, best_v))},
         "daily": daily,
         "outages": outages,
+        "strip": strip,
+        "strip_minutes": STRIP_MINUTES,
+        "strip_elapsed": max(0, min(STRIP_CELLS, elapsed)),
+        "actions": [{
+            "ts": _parse_ts(a["ts"]).isoformat(timespec="seconds"),
+            "kind": a["kind"],
+            "detail": a["detail"] or "",
+            # Qaysi yo'l: asosiy, sub yoki o'girilgan.
+            "path": ("sub" if (a["slug"] or "").endswith("_sub")
+                     else "h264" if (a["slug"] or "").endswith("_h264")
+                     else "asosiy"),
+        } for a in actions],
     }

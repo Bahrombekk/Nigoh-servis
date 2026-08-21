@@ -425,3 +425,17 @@ tr.pick .cbx{background:var(--signal);border-color:var(--signal);color:#07130D}
 .cal-s{font-size:8.5px;color:var(--mute);margin-top:2px}
 
 table.tight th,table.tight td{padding:5px 9px}
+
+/* Daqiqalik chiziq: sutka 96 ta 15 daqiqalik katakda. Uzilishning
+   SHAKLI ko'rinadi — bir marta uzoqmi yoki kun bo'yi uzuq-yuluqmi. */
+.strip-h{margin-top:12px;font-size:8.5px;letter-spacing:.11em;
+  text-transform:uppercase;color:var(--faint)}
+.strip{display:grid;grid-template-columns:repeat(96,1fr);gap:2px;margin-top:6px}
+.sc{display:block;height:15px;border-radius:2px}
+.sc.ok{background:var(--ok)} .sc.warn{background:var(--warn)}
+.sc.bad{background:var(--fail)} .sc.future{background:var(--line-2)}
+.strip-x{display:flex;justify-content:space-between;margin-top:4px;
+  font-size:8.5px;color:var(--faint);font-family:"JetBrains Mono",monospace}
+
+.two-col{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media (max-width:1100px){.two-col{grid-template-columns:1fr}}

@@ -10,7 +10,7 @@
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><circle cx='8' cy='8' r='7' fill='%234DD8C0'/></svg>">
 <!-- ?v= — kesh buster: oldindagi proxy'lar statikani keshlab qolsa,
      har chiqarilishda raqamni oshiring, URL o'zgarib yangi fayl yuklanadi. -->
-<link rel="stylesheet" href="/static/style.css?v=10">
+<link rel="stylesheet" href="/static/style.css?v=11">
 </head>
 <body>
 
@@ -171,6 +171,10 @@
         <div class="hours" id="dhours"></div>
         <div class="hours-x" id="dhoursx"></div>
         <div class="prof-foot" id="dproffoot"></div>
+        <div class="strip-h">Daqiqalik chiziq · har katak 15 daqiqa</div>
+        <div class="strip" id="dstrip"></div>
+        <div class="strip-x"><span>00:00</span><span>06:00</span>
+          <span>12:00</span><span>18:00</span><span>24:00</span></div>
       </div>
 
       <div class="card dsec" id="dcalwrap" style="display:none">
@@ -179,12 +183,21 @@
         <div class="prof-foot" id="dcalfoot"></div>
       </div>
 
-      <div class="card dsec" id="dojwrap" style="display:none">
-        <h3>Uzilishlar jurnali <span class="h3-sub" id="dojday"></span></h3>
-        <table class="tight"><thead><tr>
-          <th>Boshlandi</th><th>Tugadi</th><th>Davomiylik</th><th>Holat</th>
-        </tr></thead><tbody id="doj"></tbody></table>
-        <div id="dojempty"></div>
+      <div class="dsec two-col" id="dojwrap" style="display:none">
+        <div class="card">
+          <h3>Uzilishlar jurnali <span class="h3-sub" id="dojday"></span></h3>
+          <table class="tight"><thead><tr>
+            <th>Boshlandi</th><th>Tugadi</th><th>Davomiylik</th><th>Holat</th>
+          </tr></thead><tbody id="doj"></tbody></table>
+          <div id="dojempty"></div>
+        </div>
+        <div class="card">
+          <h3>Harakatlar tahlili <span class="h3-sub" id="dactmeta"></span></h3>
+          <table class="tight"><thead><tr>
+            <th>Vaqt</th><th>Tur</th><th>Yo'l</th><th>Izoh</th>
+          </tr></thead><tbody id="dact"></tbody></table>
+          <div id="dactempty"></div>
+        </div>
       </div>
 
       <div class="d-grid" id="dcards"></div>
@@ -249,7 +262,7 @@
 </div></div>
 <div id="toasts"></div>
 
-<script src="/static/vendor/hls.min.js?v=10"></script>
-<script src="/static/app.js?v=10"></script>
+<script src="/static/vendor/hls.min.js?v=11"></script>
+<script src="/static/app.js?v=11"></script>
 </body>
 </html>

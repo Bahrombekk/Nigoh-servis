@@ -207,3 +207,46 @@ def test_zona_kun_chegarasini_suradi(client):
 def test_notanish_kamera_tarixi_404(client):
     assert client.get("/api/v1/admin/cameras/999999/history",
                       headers=KEY).status_code == 404
+
+
+def test_daqiqalik_chiziq_va_kelajak_uyalar(client):
+    d = client.get(f"/api/v1/admin/cameras/{_cam_id(client, 'Tahlil A')}/history"
+                   "?tz_offset_minutes=0", headers=KEY).json()
+    assert d["strip_minutes"] == 15
+    assert len(d["strip"]) == 96
+    # Bitta uya 15 daqiqadan oshmaydi.
+    assert max(d["strip"]) <= 15 * 60
+    # A ning uzilishi 1 soat — chiziqqa jami shuncha tushadi.
+    assert sum(d["strip"]) == pytest.approx(3600, abs=60)
+    # Bugun hali tugamagan: o'tgan uyalar 96 tadan kam bo'lishi kerak,
+    # aks holda kelajak "sog'lom" bo'lib ko'rinardi.
+    assert 0 < d["strip_elapsed"] <= 96
+
+
+def test_harakatlar_jurnali_sub_yolni_ham_oladi(client):
+    """Oqim muzlashi sub yo'lda qayd etiladi, lekin u ham shu kameraga
+    tegishli. LIKE ishlatilmaydi: slug'dagi "_" LIKE uchun joker."""
+    with get_db() as db:
+        db.execute("INSERT INTO events (ts, kind, slug, detail) "
+                   "VALUES (?, 'stalled', 'tah_a_sub', 'oqim muzladi')",
+                   (_stamp(1),))
+        # Boshqa kameraning yozuvi aralashib ketmasligi kerak.
+        db.execute("INSERT INTO events (ts, kind, slug, detail) "
+                   "VALUES (?, 'stalled', 'tah_c', 'begona')", (_stamp(1),))
+    d = client.get(f"/api/v1/admin/cameras/{_cam_id(client, 'Tahlil A')}/history"
+                   "?tz_offset_minutes=0", headers=KEY).json()
+    kinds = {a["kind"] for a in d["actions"]}
+    paths = {a["path"] for a in d["actions"]}
+    assert "stalled" in kinds
+    assert "sub" in paths
+    assert all(a["detail"] != "begona" for a in d["actions"])
+
+
+def test_davom_etayotgan_katak_kelajak_deb_hisoblanmaydi(client):
+    """Hozirgi 15 daqiqalik katakka tushgan uzilish ekranda ko'rinishi
+    kerak — u "kelajak" bo'lib chizilsa ma'lumot yo'qolardi."""
+    d = client.get(f"/api/v1/admin/cameras/{_cam_id(client, 'Tahlil C')}/history"
+                   "?tz_offset_minutes=0", headers=KEY).json()
+    last_filled = max((i for i, v in enumerate(d["strip"]) if v), default=-1)
+    assert last_filled < d["strip_elapsed"], \
+        "ma'lumoti bor katak o'tganlar ichida bo'lishi kerak"

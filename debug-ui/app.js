@@ -1232,6 +1232,18 @@ function drawDiagHistory() {
      · eng yomon kun <b>${esc(worst.date.slice(5))}</b> · ${durHM(worst.offline_seconds)}
      · mavjudlik (30k) <b style="color:${upColor(s.uptime_pct_period)}">${s.uptime_pct_period}%</b>`;
 
+  /* ── daqiqalik chiziq ──
+     Soatlik ustunlar "qachon" ni aytadi, bu chiziq "qanday" ni: uzilish
+     bir marta uzoq bo'lganmi yoki kun bo'yi uzuq-yuluqmi. */
+  const cellSec = (h.strip_minutes || 15) * 60;
+  $("#dstrip").innerHTML = h.strip.map((v, i) => {
+    if (i >= h.strip_elapsed) return `<i class="sc future"></i>`;   // hali kelmagan
+    const ratio = v / cellSec;
+    const cls = !v ? "ok" : ratio >= 0.5 ? "bad" : "warn";
+    return `<i class="sc ${cls}" title="${dd(Math.floor(i * (h.strip_minutes || 15) / 60))}:${
+      dd((i * (h.strip_minutes || 15)) % 60)} — ${v ? durHM(v) + " o'chiq" : "uzilishsiz"}"></i>`;
+  }).join("");
+
   /* ── uzilishlar jurnali ── */
   $("#dojday").textContent = `${h.selected_date} · ${h.outages.length} uzilish`;
   $("#doj").innerHTML = h.outages.map((o) => `<tr>
@@ -1243,6 +1255,23 @@ function drawDiagHistory() {
   </tr>`).join("");
   $("#dojempty").innerHTML = h.outages.length ? "" :
     `<div class="empty">Bu kunda uzilish yo'q.</div>`;
+
+  /* ── harakatlar tahlili ──
+     Uzilishlar jurnali "tarmoq nima qildi" ni aytadi, bu esa "tizim
+     nima qildi" ni: oqim muzladimi, MediaMTX qayta ko'tarildimi.
+     Ikkovini yonma-yon qo'yish sababni topishni tezlashtiradi. */
+  const acts = h.actions || [];
+  const KIND = {online: "good", offline: "bad", stalled: "mid",
+                resumed: "good", mediamtx: "mid"};
+  $("#dactmeta").textContent = `${h.selected_date} · ${acts.length} yozuv`;
+  $("#dact").innerHTML = acts.map((a) => `<tr>
+    <td class="meta">${localHM(a.ts)}</td>
+    <td><span class="tag ${KIND[a.kind] || ""}">${esc(a.kind)}</span></td>
+    <td class="meta">${a.path === "asosiy" ? "—" : esc(a.path)}</td>
+    <td class="meta">${esc(a.detail || "—")}</td>
+  </tr>`).join("");
+  $("#dactempty").innerHTML = acts.length ? "" :
+    `<div class="empty">Bu kunda yozuv yo'q.</div>`;
 }
 
 function drawDiagCards() {
