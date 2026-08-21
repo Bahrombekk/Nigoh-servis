@@ -41,7 +41,9 @@ async function api(path, options = {}) {
     options.body = JSON.stringify(options.body);
     options.headers = {"Content-Type": "application/json", ...options.headers};
   }
+  const t0 = performance.now();
   const res = await fetch(path, options);
+  noteApi(performance.now() - t0);
   if (res.status === 401) { showGate(); throw new Error("Kirish kerak"); }
   if (!res.ok) {
     let detail = res.status + "-xato";
@@ -50,6 +52,72 @@ async function api(path, options = {}) {
   }
   if (res.status === 204) return null;
   return res.json();
+}
+
+/* ═════════ yuqori global chiziq ═════════
+
+   Sahifadan qat'i nazar ko'rinadi. Hamma raqam haqiqiy manbadan:
+   kirish — /admin/runtime baytlari farqidan, uzilish/o'chiq/mavjudlik —
+   /admin/uptime dan, p95 esa shu brauzerning o'z so'rovlaridan. Soxta
+   ko'rsatkich yo'q: o'lchanmaydigan narsa umuman chiqmaydi.          */
+
+const API_LAT = [];                      // oxirgi so'rovlar kechikishi (ms)
+function noteApi(ms) {
+  API_LAT.push(ms);
+  if (API_LAT.length > 200) API_LAT.shift();
+}
+function apiP95() {
+  if (!API_LAT.length) return null;
+  const a = [...API_LAT].sort((x, y) => x - y);
+  return Math.round(a[Math.min(a.length - 1, Math.round((a.length - 1) * 0.95))]);
+}
+
+async function loadFleetStats() {
+  try {
+    // node kesimi eng kichik javob (bir necha qator), lekin park bo'yicha
+    // yig'indini beradi — shu yetadi.
+    const r = await api("/api/v1/admin/uptime?hours=24&group_by=node");
+    const g = r.groups || [];
+    S.fleet = {
+      outages: g.reduce((a, x) => a + x.outages, 0),
+      offline: g.reduce((a, x) => a + x.offline_seconds, 0),
+      cameras: g.reduce((a, x) => a + x.cameras, 0),
+    };
+    const span = Math.max(1, S.fleet.cameras * 86400);
+    S.fleet.uptime = Math.round(1000 * (span - S.fleet.offline) / span) / 10;
+  } catch (e) { S.fleet = null; }
+  drawTopbar();
+}
+
+function drawTopbar() {
+  const cams = S.cams || [];
+  if (!cams.length) return;
+  const cnt = (st) => cams.filter((c) => c.state === st).length;
+  const on = cnt("online"), prob = cams.filter((c) => PROB.has(c.state)).length;
+  const pctOn = cams.length ? Math.round(1000 * on / cams.length) / 10 : 0;
+
+  $("#tbdot").className = "dot s-" + (prob ? (cnt("offline") ? "offline" : "stalled")
+                                           : "online");
+  $("#tbtitle").textContent = prob
+    ? `${prob} kamera muammoli · ${pctOn}% flot onlayn`
+    : `Hammasi joyida · ${cams.length} kamera`;
+  $("#tbbreak").textContent =
+    `${on} online · ${cnt("stalled")} stalled · ${cnt("offline")} offline`
+    + (cams.filter((c) => !c.region).length
+        ? ` · ${cams.filter((c) => !c.region).length} hududsiz` : "");
+
+  const inMbps = cams.reduce((a, c) => a + camRt(c).inMbps, 0);
+  const f = S.fleet, p95 = apiP95();
+  const cell = (l, v) => `<div class="tb-s"><div class="l">${l}</div>
+    <div class="v">${v}</div></div>`;
+  $("#tbstats").innerHTML =
+    cell("Kirish", `${inMbps.toFixed(1)}<u> Mb/s</u>`) +
+    cell("Chiqish", S.health
+      ? `${Math.round(S.health.egress_mbps)}<u> Mb/s</u>` : "—") +
+    cell("Uzilish (24s)", f ? f.outages : "—") +
+    cell("O'chiq (24s)", f ? durHM(f.offline) : "—") +
+    cell("Mavjudlik", f ? `${f.uptime}<u>%</u>` : "—") +
+    cell("p95 API", p95 === null ? "—" : `${p95}<u> ms</u>`);
 }
 
 /* Brauzer H.265 ni o'zi o'qiy oladimi — olsa server o'girmaydi. */
@@ -75,6 +143,7 @@ const S = {
   gBy: "region", gHours: 24, groups: null,      // guruhlar sahifasi
   tHours: 24, stat: null, worst: null,          // tahlil sahifasi
   diagDay: 0, hist: null,                       // kamera tahlili
+  fleet: null,                                  // yuqori chiziq agregati
   curId: null, page: "home",
   nodes: [], health: null, status: null, recentEv: [],
 };
@@ -121,10 +190,12 @@ function enter() {
   entered = true;
   $("#gate").classList.add("hidden");
   $("#app").classList.add("on");
-  loadCams(); pollRuntime(); loadStatus(); startSSE();
+  loadCams(); pollRuntime(); loadStatus(); loadFleetStats(); startSSE();
   setInterval(loadCams, 15000);
   setInterval(pollRuntime, 3000);
   setInterval(loadStatus, 30000);
+  // Uzilishlar agregati sekin o'zgaradi — daqiqada bir marta yetadi.
+  setInterval(loadFleetStats, 60000);
   setInterval(() => { if (S.page === "sys") drawSys(); }, 3000);
 }
 (async function boot() {
@@ -155,7 +226,7 @@ async function loadCams() {
     } catch (e) {}
     S.cams = all;
     S.byId = new Map(all.map((c) => [c.id, c]));
-    drawCams(); drawNav();
+    drawCams(); drawNav(); drawTopbar();
     if (S.page === "home") drawHome();
     if (S.page === "wall") drawWall(false);
   } catch (e) { /* 401 gate'ni o'zi ochadi */ }
@@ -185,6 +256,7 @@ async function pollRuntime() {
     if (S.page === "home") drawHome();
     if (S.page === "wall") updateWallFoot();
     if (S.page === "diag" && S.curId != null) drawDiagCards();
+    drawTopbar();
   } catch (e) {}
 }
 
