@@ -55,6 +55,10 @@ def service_health():
         "streams": runtime["ready"] if runtime else 0,
         "readers": runtime["readers"] if runtime else 0,
         "warm": mediamtx_sync.warm_count(),
+        # Ayni damda MediaMTX'da ro'yxatda turgan yo'llar. Kameralar
+        # soniga emas, ko'rilayotganlar soniga bog'liq — 5000 kamerada
+        # ham bu son o'nlarcha bo'lib qolishi kerak.
+        "managed": mediamtx_sync.managed_count(),
         "sse_subscribers": bus.subscriber_count(),
         "snapshots": snapshots.cycle_stats(),
     }

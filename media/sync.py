@@ -53,6 +53,33 @@ RTSP_PORT = int(os.environ.get("MEDIAMTX_RTSP_PORT", "8554"))
 HLS_PORT = int(os.environ.get("HLS_PORT", "8888"))
 WEBRTC_PORT = int(os.environ.get("WEBRTC_PORT", "8889"))
 
+# WebRTC media portlari. UDP — asosiy (eng samarali). TCP esa MediaMTX'da
+# standart holda O'CHIQ, natijada UDP yopiq tarmoqda (korporativ firewall,
+# ba'zi mobil operatorlar) brauzer jimgina HLS'ga tushardi — ya'ni eng
+# sekin yo'lga. ICE ustuvorligi baribir avval UDP'ni sinaydi, TCP faqat
+# zaxira bo'lib qoladi. Firewall'da 8189 ni ikkala protokol uchun oching.
+# WEBRTC_TCP_PORT=0 — butunlay o'chirish.
+WEBRTC_UDP_PORT = int(os.environ.get("WEBRTC_UDP_PORT", "8189"))
+WEBRTC_TCP_PORT = int(os.environ.get("WEBRTC_TCP_PORT", "8189"))
+
+# Brauzerga yuboriladigan qo'shimcha manzillar. Konteyner yoki NAT ortida
+# interfeys IP'lari mijozdan yetib bo'lmaydigan bo'ladi va ulanish
+# qurilmaydi. Vergul bilan: "10.0.0.5,kamera.example.uz". Berilmasa
+# MEDIA_HOST ishlatiladi (odatda o'sha manzil to'g'ri keladi).
+WEBRTC_HOSTS = [h.strip() for h in os.environ.get(
+    "WEBRTC_HOSTS", os.environ.get("MEDIA_HOST", "")).split(",") if h.strip()]
+
+# Chiqish navbati. MediaMTX standarti — 512; bitta oqimni ko'p tomoshabin
+# ko'rganda u to'lib ketadi va server "reader is too slow" deb paketlarni
+# tashlaydi (tasvir uzuq-yuluq bo'ladi). Ikkining darajasi bo'lishi shart.
+WRITE_QUEUE_SIZE = int(os.environ.get("MEDIAMTX_WRITE_QUEUE", "1024"))
+
+# Bitta sinxronlash tsikliga ajratiladigan vaqt. Reconciler har 30
+# soniyada qaytadi, shuning uchun ulgurmagan amal yo'qolmaydi — keyingi
+# tsiklda davom etadi. Byudjetsiz eski o'rnatishdagi minglab ortiqcha
+# yo'lni tozalash tsiklni soatlab band qilardi.
+SYNC_BUDGET_S = float(os.environ.get("MEDIAMTX_SYNC_BUDGET", "10"))
+
 # MediaMTX har bir ulanishda backend'dan ruxsat so'raydi. MediaMTX boshqa
 # mashinada bo'lsa, STREAM_AUTH_URL orqali backend'ning to'liq manzilini
 # bering (u mashinadan yetib boradigan qilib).
@@ -173,6 +200,46 @@ def warm_count() -> int:
         return sum(1 for t in _warm.values() if t > now)
 
 
+# ---------- ishlatilayotgan yo'llar (managed set) ----------
+#
+# Yo'llar talab bo'yicha yaratiladi (`ensure_path`), shuning uchun
+# reconciler ularni "ortiqcha" deb o'chirib yubormasligi kerak. Har
+# yaratilgan yo'l shu ro'yxatga muddat bilan yoziladi va `desired_paths`
+# uni doimiy ro'yxatga qo'shadi. Muddati o'tgach yo'l o'z-o'zidan
+# tozalanadi — kimdir yana ko'rsa qayta yaratiladi (9 ms).
+#
+# Muddat sourceOnDemandCloseAfter (1 daqiqa) dan ancha uzun: odam
+# kamerani yopib qayta ochsa yo'l joyida turadi, ya'ni B2 dagi "issiq
+# tutish" foydasi tarmoqni yemasdan olinadi.
+
+MANAGED_TTL = 1800.0      # soniya — oxirgi ochilishdan keyin shuncha turadi
+MANAGED_LIMIT = 2048      # bir vaqtda MediaMTX'da turadigan yo'l chegarasi
+
+_managed: dict[str, float] = {}
+_managed_lock = threading.Lock()
+
+
+def note_managed(slug: str) -> None:
+    """Yo'l ishlatildi — reconciler uni o'chirmasin."""
+    now = time.monotonic()
+    with _managed_lock:
+        if len(_managed) >= MANAGED_LIMIT and slug not in _managed:
+            for key in [k for k, t in _managed.items() if t <= now]:
+                _managed.pop(key, None)
+        _managed[slug] = now + MANAGED_TTL
+
+
+def is_managed(slug: str) -> bool:
+    with _managed_lock:
+        return _managed.get(slug, 0.0) > time.monotonic()
+
+
+def managed_count() -> int:
+    now = time.monotonic()
+    with _managed_lock:
+        return sum(1 for t in _managed.values() if t > now)
+
+
 # ---------- yo'llar ----------
 
 TRANSCODE_SUFFIX = "_h264"
@@ -218,7 +285,13 @@ def source_path(cam: dict) -> dict:
         "sourceOnDemand": not (cam.get("always_on") or is_warm(cam["slug"])),
     }
     if conf["sourceOnDemand"]:
-        conf["sourceOnDemandStartTimeout"] = "20s"
+        # 20 soniya juda uzun edi: o'lik kamera shuncha vaqt "ulanmoqda…"
+        # bo'lib turadi va foydalanuvchi uchun bu ham qotish. Lekin juda
+        # qisqartirib ham bo'lmaydi — o'lchovda uzoq tarmoqdagi kamera
+        # (A1, RTT ~50 ms) 10,5 soniyada ochilgan, 8 s uni butunlay
+        # yo'qotardi. 12 s — o'shanaqa kamera sig'adi, o'liklari esa
+        # ikki barobar tez rad javobini beradi.
+        conf["sourceOnDemandStartTimeout"] = "12s"
         # MediaMTX davomiyliklarni normallashtirib saqlaydi ("60s" -> "1m0s").
         # Taqqoslash (ensure_path/push_to_api) aynan mos kelishi uchun
         # qiymatlar uning o'z shaklida yoziladi — aks holda har safar
@@ -259,8 +332,15 @@ def build_config(cameras: list[dict], auth_url: str | None = None,
     rtsp_port = int(node.get("rtsp_port") or RTSP_PORT)
     hls_port = int(node.get("hls_port") or HLS_PORT)
     webrtc_port = int(node.get("webrtc_port") or WEBRTC_PORT)
+    # Brauzer WebRTC uchun serverning yetib boradigan manzilini bilishi
+    # kerak: uzoq tugunda bu uning o'z public_host'i, markaziy tugunda —
+    # WEBRTC_HOSTS (yoki MEDIA_HOST).
+    extra_hosts = ([node["public_host"]] if node.get("public_host")
+                   else list(WEBRTC_HOSTS))
     config = {
         "logLevel": "info",
+        # Sekin tomoshabin butun oqimni buzmasin (yuqoridagi izoh).
+        "writeQueueSize": WRITE_QUEUE_SIZE,
         "api": True,
         "apiAddress": ":9997" if remote else "127.0.0.1:9997",
 
@@ -287,7 +367,11 @@ def build_config(cameras: list[dict], auth_url: str | None = None,
         "webrtc": True,
         "webrtcAddress": f":{webrtc_port}",
         "webrtcAllowOrigins": ["*"],
-        "webrtcLocalUDPAddress": ":8189",
+        "webrtcLocalUDPAddress": f":{WEBRTC_UDP_PORT}" if WEBRTC_UDP_PORT else "",
+        # ICE TCP zaxirasi — UDP yopiq tarmoqdagi tomoshabin HLS'ga
+        # tushmasin (yuqoridagi izoh).
+        "webrtcLocalTCPAddress": f":{WEBRTC_TCP_PORT}" if WEBRTC_TCP_PORT else "",
+        "webrtcAdditionalHosts": extra_hosts,
         # Nginx (127.0.0.1) orqali kelgan so'rovlarda haqiqiy tomoshabin
         # IP'si X-Forwarded-For sarlavhasidan olinadi — auth va HLS
         # sessiyalari to'g'ri IP bilan ishlaydi.
@@ -373,6 +457,9 @@ def ensure_path(cam: dict, api_base: str | None = None) -> bool:
     if not cam.get("ip"):
         return False
     slug, wanted = cam["slug"], source_path(cam)
+    # Yo'l endi "ishlatilayotgan" — reconciler navbatdagi tsiklda uni
+    # ortiqcha deb o'chirmaydi (desired_paths izohiga qarang).
+    note_managed(slug)
     try:
         current = _api("GET", f"/v3/config/paths/get/{slug}", api_base=api_base)
     except urllib.error.HTTPError as exc:
@@ -420,11 +507,26 @@ def ensure_transcode_path(cam: dict) -> bool:
 
 
 def desired_paths(cameras: list[dict], with_transcode: bool = True) -> dict:
-    """MediaMTX'da (API orqali) turishi kerak bo'lgan to'liq holat.
+    """MediaMTX'da DOIMIY turishi kerak bo'lgan yo'llar.
 
-    Uch qatlam: o'girish shabloni, har bir yoqilgan kameraning manba yo'li
-    va "doim tayyor" o'girish yo'llari. `push_to_api` MediaMTX'ni aynan shu
-    ro'yxatga keltiradi — ortiqchasi o'chadi, kamisi qo'shiladi.
+    Bu yerda hamma kamera YO'Q — va bu ataylab. MediaMTX har bir
+    `paths/add` so'roviga butun konfiguratsiyani qayta yuklaydi, ya'ni
+    bitta yo'l qo'shish narxi mavjud yo'llar soniga chiziqli o'sadi
+    (o'lchov: 0 yo'lda 9 ms, 2400 yo'lda 297 ms). 5000 kamera = 10000
+    yo'l bo'lsa, to'liq ro'yxatni yuborish soatlab davom etadi va
+    MediaMTX har qayta ishga tushganda hammasi boshidan boshlanadi.
+
+    Shuning uchun doimiy ro'yxat qisqa tutiladi:
+
+      * o'girish shabloni (bitta regex, kameralar soniga bog'liq emas);
+      * "doim tayyor" (always_on) kameralar — ular baribir ulangan turadi;
+      * hozir ishlatilayotgan yo'llar (`note_managed` — ensure_path yozadi)
+        va issiq sub yo'llar.
+
+    Qolgan kameralar talab bo'yicha, ko'rish so'ralgan payt `ensure_path`
+    bilan yaratiladi (9 ms) va bo'shab qolgach `push_to_api` tomonidan
+    olib tashlanadi. Bu README'dagi tamoyilning o'zi: resurs kameralar
+    soniga emas, ayni damda ko'rilayotganlar soniga qarab sarflanadi.
 
     `with_transcode=False` — uzoq tugunlar uchun: o'girish yo'llari
     `stream_launcher.py` ni chaqiradi, u esa faqat backend turgan
@@ -434,11 +536,13 @@ def desired_paths(cameras: list[dict], with_transcode: bool = True) -> dict:
     for cam in cameras:
         if not (cam.get("enabled") and cam.get("ip")):
             continue
-        wanted[cam["slug"]] = source_path(cam)
+        always = bool(cam.get("always_on"))
+        if always or is_managed(cam["slug"]):
+            wanted[cam["slug"]] = source_path(cam)
         sub = sub_variant(cam)
-        if sub:
+        if sub and (always or is_warm(sub["slug"]) or is_managed(sub["slug"])):
             wanted[sub["slug"]] = source_path(sub)
-        if with_transcode and cam.get("transcode") and cam.get("always_on"):
+        if with_transcode and cam.get("transcode") and always:
             name = cam["slug"] + TRANSCODE_SUFFIX
             wanted[name] = {"runOnInit": _launcher(name), "runOnInitRestart": True}
     return wanted
@@ -518,6 +622,16 @@ def push_to_api(cameras: list[dict], api_base: str | None = None,
                 "message": "MediaMTX ishlamayapti — fayl yangilandi, "
                            "MediaMTX'ni ishga tushiring"}
 
+    # Ayni damda tomosha qilinayotgan yo'l o'chirilmasin. `_managed` odatda
+    # buni qoplaydi, lekin backend qayta ishga tushsa u bo'sh bo'ladi —
+    # o'shanda tirik oqim uzilib qolardi. MediaMTX'ning o'z runtime
+    # ro'yxati yolg'on gapirmaydi: ready yoki o'quvchisi bor yo'l band.
+    busy: set[str] = set()
+    active = list_active_paths(api_base) or {}
+    for name, item in active.items():
+        if item.get("ready") or item.get("readers"):
+            busy.add(name)
+
     ops: list[tuple[str, str, dict | None]] = []
     for name, conf in wanted.items():
         current = existing.get(name)
@@ -526,22 +640,38 @@ def push_to_api(cameras: list[dict], api_base: str | None = None,
         elif any(current.get(k) != v for k, v in conf.items()):
             ops.append(("PATCH", f"/v3/config/paths/patch/{name}", conf))
     for name in existing:
-        if name not in wanted:
+        if name not in wanted and name not in busy:
             ops.append(("DELETE", f"/v3/config/paths/delete/{name}", None))
+
+    # Qo'shish/yangilash avval, o'chirish keyin: byudjet tugasa ham
+    # ko'rilayotgan kameralar ishlaydigan holatda qoladi.
+    ops.sort(key=lambda op: op[0] == "DELETE")
+
+    # Vaqt byudjeti. MediaMTX har amalga butun konfiguratsiyani qayta
+    # yuklaydi, ya'ni amal narxi mavjud yo'llar soniga qarab o'sadi —
+    # eski o'rnatishdan qolgan minglab yo'lni bir tsiklda tozalamoqchi
+    # bo'lsak tsikl soatlab osilib qolardi. Ulgurmagani keyingi tsiklda
+    # davom etadi (reconciler har 30 soniyada qaytadi).
+    deadline = time.monotonic() + SYNC_BUDGET_S
+    SKIPPED = "__skip__"
 
     def _run(op: tuple[str, str, dict | None]):
         method, path, payload = op
+        if time.monotonic() > deadline:
+            return method, SKIPPED
         try:
             _api(method, path, payload, api_base=api_base)
             return method, None
         except (urllib.error.URLError, OSError, ValueError) as exc:
             return method, f"{path.rsplit('/', 1)[-1]}: {exc}"
 
-    added = updated = removed = 0
+    added = updated = removed = pending = 0
     errors: list[str] = []
     with ThreadPoolExecutor(max_workers=16) as pool:
         for method, error in pool.map(_run, ops):
-            if error is not None:
+            if error is SKIPPED:
+                pending += 1
+            elif error is not None:
                 if method != "DELETE":     # o'chirishdagi xato jiddiy emas
                     errors.append(error)
             elif method == "POST":
@@ -551,8 +681,11 @@ def push_to_api(cameras: list[dict], api_base: str | None = None,
             else:
                 removed += 1
 
+    tail = f", {pending} ta keyingi tsiklga qoldi" if pending else ""
     if errors:
-        return {"ok": False, "added": added, "updated": updated, "removed": removed,
-                "message": "Ba'zi yo'llar yuborilmadi: " + "; ".join(errors[:2])}
+        return {"ok": False, "added": added, "updated": updated,
+                "removed": removed, "pending": pending,
+                "message": "Ba'zi yo'llar yuborilmadi: " + "; ".join(errors[:2]) + tail}
     return {"ok": True, "added": added, "updated": updated, "removed": removed,
-            "message": f"MediaMTX yangilandi (+{added} / ~{updated} / -{removed})"}
+            "pending": pending,
+            "message": f"MediaMTX yangilandi (+{added} / ~{updated} / -{removed}){tail}"}

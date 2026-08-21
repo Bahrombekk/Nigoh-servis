@@ -45,12 +45,27 @@ oching:
 | 8010 | tcp | foydalanuvchilar | API + test UI |
 | 8888 | tcp | foydalanuvchilar | HLS video |
 | 8889 | tcp | foydalanuvchilar | WebRTC signal (WHEP) |
-| 8189 | udp | foydalanuvchilar | WebRTC media |
+| 8189 | **udp va tcp** | foydalanuvchilar | WebRTC media (ICE) |
 | 8554 | tcp | ixtiyoriy | RTSP chiqish (VLC va h.k.) — kerak bo'lmasa yopiq tuting |
 | 9997, 9998 | tcp | hech kim | MediaMTX API/metrics — faqat 127.0.0.1, ochilmaydi |
 
+**8189 ikkala protokolda ochilsin.** WebRTC avval UDP'ni sinaydi (eng
+samarali), lekin korporativ firewall va ba'zi mobil operatorlarda UDP
+yopiq bo'ladi — o'shanda ICE TCP zaxirasi ishga tushadi. TCP yopiq
+qolsa brauzer jimgina HLS'ga tushadi, ya'ni eng sekin yo'lga:
+
+```bash
+sudo ufw allow 8189/udp
+sudo ufw allow 8189/tcp
+```
+
+TCP zaxirasi kerak bo'lmasa `.env` da `WEBRTC_TCP_PORT=0` bilan
+o'chiriladi.
+
 Server NAT yoki domen ortida bo'lsa `.env` da `MEDIA_HOST` ga tashqi
-IP/domenni yozing — oqim manzillari shu manzil bilan beriladi.
+IP/domenni yozing — oqim manzillari shu manzil bilan beriladi va o'sha
+manzil brauzerga WebRTC uchun ham yuboriladi (`webrtcAdditionalHosts`).
+Bir nechta manzil kerak bo'lsa — `WEBRTC_HOSTS=10.0.0.5,kamera.example.uz`.
 
 ## Ma'lumotlar va zaxira
 
@@ -111,8 +126,9 @@ server {
 }
 ```
 
-WebRTC'ning UDP qismi (8189) proksisiz to'g'ridan ishlayveradi —
-firewall'da ochiq tursin; ulanolmasa brauzer o'zi HLS'ga o'tadi. Uzoq
+WebRTC media (8189) proksisiz to'g'ridan ishlayveradi — firewall'da
+**udp va tcp** ochiq tursin; ikkalasi ham ulanolmasa brauzer o'zi
+HLS'ga o'tadi (sekinroq, lekin ishlaydi). Uzoq
 MediaMTX tugunlari `MEDIA_BASE` ga kirmaydi — ular o'z `public_host`
 manzilida qoladi.
 

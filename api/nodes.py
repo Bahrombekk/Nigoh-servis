@@ -41,6 +41,7 @@ def admin_nodes():
         node["online"] = runtime is not None
         node["stalled"] = stalled
         node["runtime"] = runtime
+        node["pending_paths"] = reconciler.pending_count(row["id"])
         node["status"] = ("offline" if runtime is None else
                           "degraded" if stalled else "online")
         nodes.append(node)

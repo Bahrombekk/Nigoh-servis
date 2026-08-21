@@ -731,6 +731,10 @@ def admin_status():
             "ready": runtime["ready"] if runtime else 0,
             "readers": runtime["readers"] if runtime else 0,
             "stalled": stalled,
+            # 0 bo'lishi kerak. Noldan katta bo'lsa MediaMTX'da eski
+            # versiyadan qolgan ortiqcha yo'llar bor va ular tozalanmoqda —
+            # shu davrda kameralar sekinroq ochiladi (jurnalda ko'rsatma).
+            "pending_paths": reconciler.pending_count(row["id"]),
         })
     from core import snapshots
     from core.db import DB_PATH

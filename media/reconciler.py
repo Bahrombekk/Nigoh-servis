@@ -46,6 +46,20 @@ _last_spawn = 0.0
 _prev_bytes: dict[tuple[int, str], int] = {}   # (tugun, yo'l) -> bytesReceived
 _stalled: dict[tuple[int, str], str] = {}      # (tugun, yo'l) -> ko'rsatma nomi
 
+# Ortiqcha yo'llar. MediaMTX har `paths/add`/`delete` so'roviga butun
+# konfiguratsiyani qayta yuklaydi, ya'ni bitta amal narxi mavjud yo'llar
+# soniga chiziqli o'sadi (o'lchov: 0 yo'lda 9 ms, 2400 yo'lda 297 ms).
+# Shu sababli tozalash vaqt byudjeti bilan chegaralangan va bir necha
+# tsiklga cho'ziladi — shu davrda kamera ochilishi ham sekin bo'ladi.
+#
+# Eng tez yechim — MediaMTX'ni qayta ishga tushirish: API orqali
+# qo'shilgan yo'llar faylga yozilmaydi (tekshirildi: 2051 -> 0), kerakli
+# yo'l esa ko'rish so'ralganda o'zi qaytadan yaratiladi. Buni avtomatik
+# qilmaymiz — tirik oqimlarni uzib yuborardi; operatorga aytamiz.
+BLOAT_WARN_EVERY = 300.0                       # soniya
+_pending: dict[int, int] = {}                  # tugun -> tozalanmagan yo'llar
+_bloat_warned: dict[int, float] = {}
+
 
 def stalled_paths() -> set[str]:
     """Ayni damda muzlagan (bayt kelmayotgan) faol yo'llar."""
@@ -57,6 +71,31 @@ def stalled_count(node_id: int) -> int:
     """Bitta tugundagi muzlagan oqimlar soni — tugun salomatligi uchun."""
     with _lock:
         return sum(1 for key in _stalled if key[0] == node_id)
+
+
+def pending_count(node_id: int) -> int:
+    """Tugunda hali tozalanmagan ortiqcha yo'llar — 0 bo'lishi kerak."""
+    with _lock:
+        return _pending.get(node_id, 0)
+
+
+def _note_pending(node: dict, pending: int) -> None:
+    """Tozalanmagan yo'llarni qayd etadi va operatorni ogohlantiradi."""
+    with _lock:
+        _pending[node["id"]] = pending
+    if not pending:
+        return
+    now = time.monotonic()
+    with _lock:
+        if now - _bloat_warned.get(node["id"], 0.0) < BLOAT_WARN_EVERY:
+            return
+        _bloat_warned[node["id"]] = now
+    log("reconciler", "paths_bloated", level="warning", node=node["name"],
+        pending=pending,
+        message="MediaMTX'da ortiqcha yo'llar ko'p — tozalanmoqda, shu "
+                "davrda kamera sekinroq ochiladi. Tezroq yo'l: MediaMTX'ni "
+                "qayta ishga tushiring (yo'llar faylga yozilmaydi, "
+                "kerakligi ko'rilganda o'zi tiklanadi).")
 
 
 def _nodes() -> list[dict]:
@@ -185,6 +224,7 @@ def _tick(load_cameras: Callable[[], list[dict]], announce: bool) -> bool:
         node_cams = [c for c in cameras
                      if (c.get("node_id") or 1) == node["id"]]
         result = sync.push_to_api(node_cams, api_base=api)
+        _note_pending(node, result.get("pending", 0))
         changed = result["added"] + result["updated"] + result["removed"]
         if announce or changed or not result["ok"]:
             log("reconciler", "sync",
