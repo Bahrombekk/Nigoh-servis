@@ -229,6 +229,42 @@ bo'yicha yaratiladi (sabab va o'lchovlar — `docs/BENCHMARK.md`). Bu son
 kamera soniga yaqinlashib qolsa, kimdir hamma kamerani `always_on`
 qilgan degani.
 
+## Uzilishlar tahlili
+
+5000 kamerani ko'z bilan kuzatib bo'lmaydi. Ikkita savolga javob bor,
+ikkalasi ham `events` jadvalidagi online/offline o'tishlaridan (30 kun).
+
+**Kim aybdor** — guruh reytingi, eng yomoni birinchi:
+
+```
+GET /api/v1/admin/uptime?hours=24&group_by=nvr
+-> {"groups": [{"key": "10.0.54.10", "cameras": 64, "online": 61,
+                "offline": 3, "outages": 240, "offline_seconds": 103680,
+                "uptime_pct": 95.5}, ...]}
+```
+
+`group_by`: `region` (hududsiz kameralar `belgilanmagan` guruhiga
+tushadi), `nvr` (registrator manzili — bitta IP ortida o'nlab kanal),
+`node` (MediaMTX tuguni). `group_by` bermasangiz kamera kesimida
+qaytadi (`limit`, standart 100, uzilishlar bo'yicha kamayish tartibida).
+
+**Qachon buzilyapti** — sutka bo'ylab taqsimot:
+
+```
+GET /api/v1/admin/outages/hourly?hours=24&tz_offset_minutes=300
+-> {"hourly": [12, 8, ...24 ta...], "total": 14844,
+    "peak": {"from_hour": 23, "to_hour": 2, "outages": 1916}}
+```
+
+`tz_offset_minutes` — mijozning zonasi
+(`-new Date().getTimezoneOffset()`): hodisalar bazada UTC'da yotadi,
+lekin "cho'qqi 08:00 da" degan xulosa faqat mahalliy vaqtda ma'noga
+ega. `peak` — eng zich uch soatlik oyna (sutka aylanasidan o'tadi:
+23:00–02:00 ham topiladi); texnik xizmatni shu oynadan tashqariga
+rejalashtiring. `ref` berilsa bitta kamera bo'yicha.
+
+O'lchovlar (5000 kamera): `docs/BENCHMARK.md`.
+
 ## Ochilish vaqtini o'lchash
 
 "Sekin ochilyapti" degan shikoyatga bitta raqam bilan javob bo'lmaydi —
@@ -282,6 +318,8 @@ ishga tushsa hisob noldan boshlanadi.
 | GET | `/api/v1/events` | SSE — holat o'zgarishlari |
 | POST | `/api/v1/metrics/open` | pleyer o'lchagan ochilish vaqti → `204` |
 | GET | `/api/v1/admin/nodes` | MediaMTX tugunlari |
+| GET | `/api/v1/admin/uptime` | uzilishlar reytingi (`group_by=region\|nvr\|node`) |
+| GET | `/api/v1/admin/outages/hourly` | sutkalik profil + cho'qqi oyna |
 | GET | `/health` | servis, MediaMTX, egress (kalitsiz) |
 | POST | `/api/v1/auth/stream` | MediaMTX chaqiradi, mijoz emas |
 

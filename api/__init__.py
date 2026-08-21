@@ -13,6 +13,7 @@ Qatlamlar:
     api/metrics.py   /api/v1/metrics/*   (pleyer o'lchagan ochilish vaqti)
     api/devices.py   /api/v1/devices/*   (skan: job + SSE, pasport)
     api/nodes.py     /api/v1/admin/nodes (MediaMTX tugunlari)
+    api/analytics.py /api/v1/admin/uptime, /admin/outages/hourly
     api/admin.py     /api/v1/admin/*     (kameralar CRUD, foydalanuvchilar)
 
 API ikki prefiksda tinglaydi:
@@ -38,6 +39,7 @@ from core import bus
 from core.db import BASE_DIR
 
 from .admin import router as admin_router
+from .analytics import router as analytics_router
 from .auth import router as auth_router
 from .auth import ui_router as auth_ui_router
 from .cameras import router as cameras_router
@@ -122,7 +124,8 @@ def create_app() -> FastAPI:
     # qaraydi; ichida sir yo'q.
     app.include_router(health_router)
     for router in (cameras_router, streams_router, events_router,
-                   devices_router, nodes_router, metrics_router, admin_router):
+                   devices_router, nodes_router, metrics_router, analytics_router,
+                   admin_router):
         app.include_router(router, prefix="/api/v1",
                            dependencies=[Depends(require_key)])
         app.include_router(router, prefix="/api", include_in_schema=False,

@@ -113,7 +113,7 @@ def admin_create(cam: CameraIn, request: Request):
             raise HTTPException(
                 409, f"Bu kamera allaqachon qo'shilgan: «{dup['name']}» "
                      "(o'sha IP, port va RTSP yo'l)")
-    codec, transcode, resolution = detect_codec(cam, cam.password or "")
+    codec, transcode, resolution, fps = detect_codec(cam, cam.password or "")
     sub_path, sub_codec = detect_sub_path(cam, cam.password or "")
     with get_db() as db:
         slug = unique_slug(db, f"{cam.region}_{cam.name}")
@@ -122,8 +122,8 @@ def admin_create(cam: CameraIn, request: Request):
                 "INSERT INTO cameras (name, region, lat, lng, stream_url, slug, ip, "
                 "port, username, password_enc, rtsp_path, sub_path, sub_codec, "
                 "vendor, enabled, "
-                "note, codec, resolution, transcode, always_on, node_id, external_id) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "note, codec, resolution, fps, transcode, always_on, node_id, external_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     cam.name.strip(), cam.region.strip(), cam.lat, cam.lng,
                     cam.stream_url.strip() if cam.source_type == "manual" else "",
@@ -133,7 +133,7 @@ def admin_create(cam: CameraIn, request: Request):
                     security.encrypt(cam.password) if cam.password else "",
                     cam.rtsp_path.strip(), sub_path, sub_codec, cam.vendor,
                     int(cam.enabled),
-                    cam.note.strip(), codec, resolution, int(transcode),
+                    cam.note.strip(), codec, resolution, fps, int(transcode),
                     int(cam.always_on), cam.node_id, cam.external_id,
                 ),
             )
@@ -170,11 +170,12 @@ def admin_update(ref: str, cam: CameraIn, request: Request):
 
         # Kodekni qayta aniqlaymiz — kamera sozlamasi o'zgargan bo'lishi mumkin.
         password = cam.password or security.decrypt(password_enc)
-        codec, transcode, resolution = detect_codec(cam, password)
+        codec, transcode, resolution, fps = detect_codec(cam, password)
         responded = bool(codec)
         if not responded:                   # kamera javob bermadi — eskisi qoladi
             codec, transcode = old["codec"] or "", bool(old["transcode"])
             resolution = old["resolution"] or ""
+            fps = float(old["fps"] or 0.0) if "fps" in old.keys() else 0.0
 
         sub_path, sub_codec = detect_sub_path(cam, password)
         if not sub_path and not responded:  # kamera javob bermadi — eskisi qoladi
@@ -186,7 +187,7 @@ def admin_update(ref: str, cam: CameraIn, request: Request):
                 "UPDATE cameras SET name=?, region=?, lat=?, lng=?, stream_url=?, "
                 "slug=?, ip=?, port=?, username=?, password_enc=?, rtsp_path=?, "
                 "sub_path=?, sub_codec=?, vendor=?, enabled=?, note=?, codec=?, "
-                "resolution=?, "
+                "resolution=?, fps=?, "
                 "transcode=?, always_on=?, node_id=?, external_id=? WHERE id=?",
                 (
                     cam.name.strip(), cam.region.strip(), cam.lat, cam.lng,
@@ -196,7 +197,7 @@ def admin_update(ref: str, cam: CameraIn, request: Request):
                     cam.port, cam.username.strip(), password_enc,
                     cam.rtsp_path.strip(), sub_path, sub_codec, cam.vendor,
                     int(cam.enabled),
-                    cam.note.strip(), codec, resolution, int(transcode),
+                    cam.note.strip(), codec, resolution, fps, int(transcode),
                     int(cam.always_on), cam.node_id, cam.external_id, camera_id,
                 ),
             )

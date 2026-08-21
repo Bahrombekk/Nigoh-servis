@@ -35,6 +35,10 @@ CAMERA_EXTRA_COLUMNS = {
     "note": "TEXT",
     "codec": "TEXT",                              # kameradan kelayotgan kodek
     "resolution": "TEXT",                         # SDP'dan: "1920x1080" yoki bo'sh
+    # SDP'dan kadr tezligi. Probe uni allaqachon o'qirdi, lekin saqlanmasdi —
+    # holbuki "25 fps deb sozlangan kamera 8 fps beryapti" degan xulosa
+    # aynan shu ustunsiz chiqmaydi. 0 — kamera bermagan.
+    "fps": "REAL NOT NULL DEFAULT 0",
     "transcode": "INTEGER NOT NULL DEFAULT 0",    # H.264 ga o'girish kerakmi
     "always_on": "INTEGER NOT NULL DEFAULT 0",    # doim tayyor tursinmi
     "last_seen": "TEXT",                          # oxirgi marta onlayn bo'lgan vaqt (UTC)
@@ -59,6 +63,8 @@ INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_cameras_bbox ON cameras(lat, lng)",
     "CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at)",
     "CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts)",
+    # Uptime hisobi kamera kesimida o'qiydi: slug bo'yicha, vaqt tartibida.
+    "CREATE INDEX IF NOT EXISTS idx_events_slug_ts ON events(slug, ts)",
     "CREATE INDEX IF NOT EXISTS idx_cameras_node ON cameras(node_id)",
     # Bo'sh/NULL qiymatlar cheklovga tushmaydi — external_id ixtiyoriy.
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_cameras_external "

@@ -68,6 +68,22 @@ ko'rish so'ralgan payt yaratiladi:
 `/health` dagi `managed` — ayni damda ro'yxatda turgan yo'llar. U kamera
 soniga emas, tomoshabinlar soniga qarab o'sishi kerak.
 
+### Uzilishlar tahlili (5000 kamera, 30 000 hodisa, 24 soat)
+
+| Endpoint | Vaqt | Javob |
+|---|---|---|
+| `/admin/uptime` (top 100) | 59 ms | 18 KB |
+| `/admin/uptime?limit=5000` | 93 ms | 892 KB |
+| `/admin/uptime?group_by=region` | 55 ms | 2 KB |
+| `/admin/uptime?group_by=nvr` | 54 ms | 11 KB |
+| `/admin/outages/hourly` (park) | 20 ms | — |
+| `/admin/outages/hourly?hours=720` | 20 ms | — |
+
+O'tishlar bitta so'rov bilan o'qiladi (`idx_events_slug_ts`), kamera
+kesimida emas — aks holda 5000 ta alohida so'rov bo'lardi. Guruh
+ko'rinishi javobi 2-11 KB: kundalik ish uchun aynan shuni so'rang,
+`limit=5000` faqat eksport uchun.
+
 ### Eski o'rnatishdan yangilash
 
 Oldingi versiya MediaMTX'ga minglab yo'l yozib qo'ygan bo'lsa, ular

@@ -204,6 +204,10 @@ def admin_camera(row, request: Request) -> dict:
         "firmware": (row["firmware"] or "") if "firmware" in row.keys() else "",
         "last_seen": (row["last_seen"] or "") if "last_seen" in row.keys() else "",
         "codec": row["codec"] or "",
+        # SDP'dagi kadr tezligi (0 — kamera bermagan). "25 fps deb
+        # sozlangan kamera 8 fps beryapti" degan xulosa shu maydonsiz
+        # chiqmaydi.
+        "fps": (float(row["fps"] or 0.0) if "fps" in row.keys() else 0.0),
         "transcode": bool(row["transcode"]),
         "always_on": bool(row["always_on"]),
     })
@@ -328,16 +332,20 @@ def detect_sub_path(cam: CameraIn, password: str) -> tuple[str, str]:
     return candidate, result.get("codec", "")
 
 
-def detect_codec(cam: CameraIn, password: str) -> tuple[str, bool, str]:
-    """Saqlashdan oldin kamera kodegi va o'lchamini aniqlaydi.
+def detect_codec(cam: CameraIn, password: str) -> tuple[str, bool, str, float]:
+    """Saqlashdan oldin kamera kodegi, o'lchami va kadr tezligini aniqlaydi.
+
+    Qaytaradi: (codec, needs_transcode, resolution, fps).
 
     Kamera javob bermasa bo'sh qaytaradi — bu saqlashga to'sqinlik qilmaydi.
+    `fps` 0 bo'lishi ham normal: ba'zi kameralar SDP'da kadr tezligini
+    umuman bermaydi.
     """
     if cam.source_type != "rtsp" or not cam.ip.strip():
-        return "", False, ""
+        return "", False, "", 0.0
     result = probe(cam.ip.strip(), cam.port, cam.rtsp_path.strip(),
                    cam.username.strip(), password)
     if not result.get("ok"):
-        return "", False, ""
+        return "", False, "", 0.0
     return (result.get("codec", ""), bool(result.get("needs_transcode")),
-            result.get("resolution", ""))
+            result.get("resolution", ""), float(result.get("fps") or 0.0))
