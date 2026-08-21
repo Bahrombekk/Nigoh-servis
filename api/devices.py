@@ -88,10 +88,29 @@ def _run_scan(job: dict, job_id: str, max_channels: int) -> None:
         }
 
     try:
-        # 1) Shablonni aniqlash — har ishlab chiqaruvchining 1-kanali.
-        candidates = {v: channel_path(v, 1, "main") for v in CHANNEL_VENDORS}
-        candidates["boshqa"] = "/stream1"
-        first = _probe_all(ip, port, candidates, user, pw)
+        # 1) Shablonni aniqlash. Avval BITTA shablon sinaladi (hikvision —
+        #    eng ko'p uchraydigani), qolganlari faqat u ishlamasa.
+        #
+        #    Sabab tezlik emas, xavfsizlik: parol xato bo'lsa qurilmaga
+        #    atigi bitta muvaffaqiyatsiz urinish boradi. Hikvision NVR'lari
+        #    5 ta xato urinishdan keyin manba IP'ni bloklaydi ("illegal
+        #    login lock", odatda 30 daqiqa) — o'shanda o'sha registratordagi
+        #    HAMMA kamera offline bo'lib qoladi. Ilgari bu yerda 7 ta
+        #    shablon parallel sinalardi, ya'ni bitta xato parol butun
+        #    registratorni yopib qo'yardi.
+        lead_vendor = CHANNEL_VENDORS[0]
+        lead = probe(ip, port, channel_path(lead_vendor, 1, "main"), user, pw)
+        if lead.get("stage") == "parol":
+            _emit(job, "error", {"message": lead["message"]})
+            return
+        if lead.get("ok"):
+            first = {lead_vendor: lead}
+        else:
+            rest = {v: channel_path(v, 1, "main")
+                    for v in CHANNEL_VENDORS if v != lead_vendor}
+            rest["boshqa"] = "/stream1"
+            first = _probe_all(ip, port, rest, user, pw)
+            first[lead_vendor] = lead
 
         if not any(r["ok"] for r in first.values()):
             # Eng ma'noli sababni tanlaymiz (parol > oqim > rtsp > tarmoq).

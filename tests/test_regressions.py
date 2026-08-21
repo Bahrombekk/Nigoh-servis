@@ -111,3 +111,51 @@ def test_nvr_import_sub_kodegini_saqlaydi(client, monkeypatch):
         assert cam["codec"] == "H265"            # asosiy oqim
         assert cam["sub_path"].endswith("02")
         assert cam["sub_codec"] == "H264"        # ilgari bo'sh qolardi
+
+
+# ---------- xato parol registratorni bloklab qo'ymasin ----------
+
+def test_skan_xato_parolda_bitta_urinish_bilan_toxtaydi(client, monkeypatch):
+    """Hikvision NVR'lari 5 ta xato urinishdan keyin manba IP'ni
+    bloklaydi ("illegal login lock", ~30 daqiqa) va o'shanda o'sha
+    registratordagi HAMMA kamera offline bo'lib qoladi. Shuning uchun
+    parol xato ekani birinchi urinishdayoq aniqlanib, skan to'xtashi
+    kerak — ilgari bu yerda 7 ta shablon parallel sinalardi."""
+    from api import devices
+
+    tries = []
+
+    def fake_probe(ip, port, path, username, password):
+        tries.append(path)
+        return {"ok": False, "stage": "parol", "message": "Login yoki parol noto'g'ri",
+                "codec": "", "needs_transcode": False,
+                "resolution": "", "fps": 0.0, "audio": False}
+
+    monkeypatch.setattr(devices, "probe", fake_probe)
+    job = {"created": 0.0, "events": [], "done": False, "ip": "10.9.9.9",
+           "port": 554, "username": "admin", "password": "xato", "vendor": ""}
+    devices._run_scan(job, "test-job", 64)
+
+    assert len(tries) == 1, f"qurilmaga {len(tries)} urinish ketdi, 1 bo'lishi kerak"
+    kinds = [e[0] for e in job["events"]]
+    assert kinds == ["error"]
+    assert "parol" in job["events"][0][1]["message"].lower()
+
+
+def test_nvr_import_xato_parolda_kanallarni_tekshirmaydi(client, monkeypatch):
+    """Xuddi shu himoya ommaviy importda ham: 64 kanal × 2 oqim = 128
+    xato urinish registratorni albatta bloklardi."""
+    tries = []
+
+    def fake_probe(ip, port, path, username, password):
+        tries.append(path)
+        return {"ok": False, "stage": "parol", "message": "Login yoki parol noto'g'ri",
+                "codec": "", "needs_transcode": False,
+                "resolution": "", "fps": 0.0, "audio": False}
+
+    monkeypatch.setattr("api.admin.probe", fake_probe)
+    r = client.post("/api/v1/admin/nvr/import", headers=KEY, json={
+        "ip": "10.9.9.9", "username": "admin", "password": "xato",
+        "vendor": "hikvision", "channels": "1-64", "region": "Blok"})
+    assert r.status_code == 401
+    assert len(tries) == 1, f"qurilmaga {len(tries)} urinish ketdi, 1 bo'lishi kerak"

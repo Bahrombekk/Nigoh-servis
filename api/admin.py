@@ -382,6 +382,17 @@ def admin_nvr_import(body: NvrIn):
     channels = parse_channels(body.channels)
     prefix = body.name_prefix.strip() or body.region.strip()
 
+    # Parol berilmasa saqlangan kameranikini olamiz (ProbeIn/ScanIn bilan
+    # bir xil). Aks holda tekshiruv 401 bilan yiqilib, hamma kanal
+    # "javob bermadi" bo'lib chiqardi.
+    password = body.password
+    if not password and body.camera_id:
+        with get_db() as db:
+            row = db.execute("SELECT password_enc FROM cameras WHERE id = ?",
+                             (body.camera_id,)).fetchone()
+        if row:
+            password = security.decrypt(row["password_enc"])
+
     planned = []
     for index, channel in enumerate(channels):
         lat, lng = spread_point(body.lat, body.lng, index, body.spread_m)
@@ -401,13 +412,26 @@ def admin_nvr_import(body: NvrIn):
     # sub oqimlar bitta hovuzda birga tekshiriladi.
     results: dict[tuple[int, str], dict] = {}
     if body.probe:
-        jobs = [(item["channel"], "main", item["rtsp_path"]) for item in planned]
+        # Birinchi kanalni YOLG'IZ tekshiramiz. Parol xato bo'lsa qolgan
+        # 63 kanalga umuman tegilmaydi: Hikvision registratorlari 5 ta
+        # xato urinishdan keyin IP'ni bloklaydi va o'shanda butun
+        # qurilma bir yarim soatga yo'qoladi.
+        lead = probe(body.ip, body.port, planned[0]["rtsp_path"],
+                     body.username, password)
+        if lead.get("stage") == "parol":
+            raise HTTPException(
+                401, f"{lead['message']} — qolgan kanallar tekshirilmadi "
+                     f"(registrator xato urinishlardan keyin IP'ni bloklaydi)")
+        results[(planned[0]["channel"], "main")] = lead
+
+        jobs = [(item["channel"], "main", item["rtsp_path"])
+                for item in planned[1:]]
         jobs += [(item["channel"], "sub", item["sub_path"])
                  for item in planned if item["sub_path"]]
         with ThreadPoolExecutor(max_workers=16) as pool:
             futures = {
                 pool.submit(probe, body.ip, body.port, path,
-                            body.username, body.password): (channel, kind)
+                            body.username, password): (channel, kind)
                 for channel, kind, path in jobs
             }
             for future in as_completed(futures):
@@ -437,7 +461,7 @@ def admin_nvr_import(body: NvrIn):
 
     # Javob bermagan kanallar saqlanmaydi — NVR'da bo'sh slotlar ko'p bo'ladi.
     keep = [p for p in planned if p["ok"] or not body.probe]
-    password_enc = security.encrypt(body.password) if body.password else ""
+    password_enc = security.encrypt(password) if password else ""
     created = 0
     created_ids: list[int] = []
     with get_db() as db:
@@ -471,7 +495,7 @@ def admin_nvr_import(body: NvrIn):
     # NVR manzili bitta — holat bir tekshiruvda, pasport fonda to'ladi.
     if created_ids:
         _enrich_new_camera(created_ids, body.ip.strip(), body.port,
-                           body.username.strip(), body.password)
+                           body.username.strip(), password)
 
     return {"planned": planned, "created": created,
             "skipped": len(planned) - created,

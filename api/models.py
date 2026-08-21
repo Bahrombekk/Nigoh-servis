@@ -93,6 +93,10 @@ class NvrIn(BaseModel):
     enabled: bool = True
     probe: bool = True                                 # kodekni tekshirib olsinmi
     dry_run: bool = False                              # avval ko'rsatib bersin
+    # Parol berilmasa shu kameraning saqlangan paroli ishlatiladi —
+    # ProbeIn va ScanIn dagi bilan bir xil qulaylik. Bitta registratorga
+    # yana kanal qo'shayotganda parolni qayta terish shart emas.
+    camera_id: int | None = None
 
 
 class UserIn(BaseModel):
