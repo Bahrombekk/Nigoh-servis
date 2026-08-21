@@ -368,3 +368,24 @@ tr.pick .cbx{background:var(--signal);border-color:var(--signal);color:#07130D}
   main{padding:16px 14px 50px}
   .search{width:100%}
 }
+
+/* ── guruhlar va tahlil ── */
+/* Jadvaldagi holat chizig'i .bar dan foydalanadi, faqat balandroq:
+   guruh qatorida u asosiy ko'rsatkich, izoh emas. */
+#gtb .bar{height:7px;margin:0}
+#gtb tr,#ttb tr{cursor:pointer}
+
+.tools-lbl{font-size:9.5px;letter-spacing:.09em;text-transform:uppercase;
+  color:var(--faint);align-self:center;margin-right:2px}
+
+/* Sutkalik gistogramma: 24 ustun, balandlik uzilishlar soniga mos.
+   Cho'qqi oyna qizil bilan — texnik xizmatni undan tashqariga
+   rejalashtirish kerak. */
+.hours{display:grid;grid-template-columns:repeat(24,1fr);gap:3px;
+  align-items:flex-end;height:104px;padding-top:4px}
+.hbar{display:block;width:100%;border-radius:2px 2px 0 0;min-height:2px;
+  transition:opacity .12s}
+.hbar:hover{opacity:.72}
+.hours-x{display:grid;grid-template-columns:repeat(24,1fr);gap:3px;margin-top:5px}
+.hours-x span{font-size:8.5px;color:var(--faint);text-align:center;
+  font-family:"JetBrains Mono",monospace}

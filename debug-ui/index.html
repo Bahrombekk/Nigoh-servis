@@ -10,7 +10,7 @@
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><circle cx='8' cy='8' r='7' fill='%234DD8C0'/></svg>">
 <!-- ?v= — kesh buster: oldindagi proxy'lar statikani keshlab qolsa,
      har chiqarilishda raqamni oshiring, URL o'zgarib yangi fayl yuklanadi. -->
-<link rel="stylesheet" href="/static/style.css?v=8">
+<link rel="stylesheet" href="/static/style.css?v=9">
 </head>
 <body>
 
@@ -34,6 +34,8 @@
     <div class="nav-search" id="palopen">Izlash… <span class="kbd" style="margin-left:auto">Ctrl K</span></div>
     <button class="nav-item sel" data-p="home">Holat <span class="ct" id="nh">—</span></button>
     <button class="nav-item" data-p="cams">Kameralar <span class="ct" id="nc">—</span></button>
+    <button class="nav-item" data-p="groups">Guruhlar <span class="ct" id="ng">—</span></button>
+    <button class="nav-item" data-p="stat">Tahlil <span class="ct" id="nt">—</span></button>
     <button class="nav-item" data-p="wall">Devor <span class="ct" id="nw">—</span></button>
     <button class="nav-item" data-p="diag">Diagnostika</button>
     <button class="nav-item" data-p="sys">Tizim</button>
@@ -78,6 +80,51 @@
       </tr></thead><tbody id="ctb"></tbody></table>
       <div id="cempty"></div>
       <div id="cbulk"></div>
+    </section>
+
+    <!-- guruhlar: qaysi hudud/registrator/tugun eng ko'p uzilish beryapti -->
+    <section class="page" id="p-groups">
+      <div class="head"><h1>Guruhlar</h1><p id="gsum">yuklanmoqda…</p></div>
+      <div class="tools" id="gby">
+        <button class="chip sel" data-g="region">Hudud</button>
+        <button class="chip" data-g="nvr">Registrator</button>
+        <button class="chip" data-g="node">Tugun</button>
+        <div class="spacer"></div>
+        <span class="tools-lbl">Davr</span>
+        <div class="tools" id="ghours" style="margin:0">
+          <button class="chip sel" data-h="24">24 soat</button>
+          <button class="chip" data-h="168">7 kun</button>
+          <button class="chip" data-h="720">30 kun</button>
+        </div>
+      </div>
+      <table><thead><tr>
+        <th>Guruh</th><th>Kamera</th><th style="width:180px">Holat</th>
+        <th>Uptime</th><th>Uzilish</th><th>O'chiq turgan</th>
+      </tr></thead><tbody id="gtb"></tbody></table>
+      <div id="gempty"></div>
+    </section>
+
+    <!-- tahlil: uzilishlar sutka bo'ylab qanday taqsimlangan -->
+    <section class="page" id="p-stat">
+      <div class="head"><h1>Tahlil</h1><p id="tsum">yuklanmoqda…</p></div>
+      <div class="tools" id="thours">
+        <button class="chip sel" data-h="24">24 soat</button>
+        <button class="chip" data-h="168">7 kun</button>
+        <button class="chip" data-h="720">30 kun</button>
+      </div>
+      <div class="card" style="margin-bottom:12px">
+        <h3>Uzilishlar sutka bo'ylab <span id="tpeak" class="tag"></span></h3>
+        <div class="hours" id="thist"></div>
+        <div class="hours-x" id="thistx"></div>
+      </div>
+      <div class="card">
+        <h3>Eng ko'p uzilgan kameralar</h3>
+        <table><thead><tr>
+          <th>Kamera</th><th>Hudud</th><th>Holat</th>
+          <th>Uptime</th><th>Uzilish</th><th>O'chiq turgan</th><th>Oxirgi uzilish</th>
+        </tr></thead><tbody id="ttb"></tbody></table>
+        <div id="tempty"></div>
+      </div>
     </section>
 
     <!-- devor -->
@@ -178,7 +225,7 @@
 </div></div>
 <div id="toasts"></div>
 
-<script src="/static/vendor/hls.min.js?v=8"></script>
-<script src="/static/app.js?v=8"></script>
+<script src="/static/vendor/hls.min.js?v=9"></script>
+<script src="/static/app.js?v=9"></script>
 </body>
 </html>

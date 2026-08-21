@@ -72,6 +72,8 @@ const S = {
   filt: "all", sortK: "state", sortD: 1, picked: new Set(),
   wallN: 9, wallMode: "all",
   evlog: [], evFilt: "all", evPause: false, evN: 0,
+  gBy: "region", gHours: 24, groups: null,      // guruhlar sahifasi
+  tHours: 24, stat: null, worst: null,          // tahlil sahifasi
   curId: null, page: "home",
   nodes: [], health: null, status: null, recentEv: [],
 };
@@ -213,6 +215,8 @@ function go(p) {
   if (p === "home") drawHome();
   if (p === "sys") { drawSys(); loadStatus(); }
   if (p === "ev") renderFeed();
+  if (p === "groups") { drawGroups(); loadGroups(); }
+  if (p === "stat") { drawStat(); loadStat(); }
 }
 $$(".nav-item").forEach((b) => (b.onclick = () => go(b.dataset.p)));
 $("#dback").onclick = () => go("cams");
@@ -752,6 +756,153 @@ function createPlayer(video, msgEl) {
   return p;
 }
 
+
+/* ═════════ guruhlar va tahlil (uzilishlar agregati) ═════════
+
+   Ikkalasi ham /admin/uptime va /admin/outages/hourly dan oziqlanadi —
+   hisob serverda, events jadvalidan. 5000 kamerani brauzerga tortib
+   guruhlashning ma'nosi yo'q: guruh javobi 2-11 KB, kamera kesimidagi
+   to'liq ro'yxat esa ~900 KB.                                        */
+
+const HOURS_LBL = {24: "24 soat", 168: "7 kun", 720: "30 kun"};
+
+/* Sekundlarni odam o'qiydigan davomiylikka: 0 bo'lsa chiziqcha. */
+const durHM = (sec) => {
+  if (!sec) return "—";
+  const h = Math.floor(sec / 3600), m = Math.round((sec % 3600) / 60);
+  return h ? `${h}s ${m}d` : `${m}d`;
+};
+
+/* Uptime foizining rangi: 99% dan yuqori — normal, 95% gacha — e'tibor. */
+const upColor = (p) => p >= 99 ? "var(--ok)" : p >= 95 ? "var(--warn)" : "var(--fail)";
+
+async function loadGroups() {
+  try {
+    const r = await api(`/api/v1/admin/uptime?hours=${S.gHours}&group_by=${S.gBy}`);
+    S.groups = r.groups || [];
+  } catch (e) { S.groups = []; toast("Guruhlar olinmadi", e.message, "bad"); }
+  drawGroups();
+}
+
+function drawGroups() {
+  if (S.page !== "groups") return;
+  const gs = S.groups;
+  if (gs === null) { $("#gsum").textContent = "yuklanmoqda…"; return; }
+  const outages = gs.reduce((a, g) => a + g.outages, 0);
+  $("#gsum").textContent =
+    `${gs.length} ta guruh · ${outages} uzilish · ${HOURS_LBL[S.gHours]}`;
+  $("#ng").textContent = outages || "✓";
+  $("#ng").className = "ct" + (outages ? " alert" : "");
+
+  $("#gtb").innerHTML = gs.map((g) => {
+    const n = Math.max(1, g.cameras);
+    const w = (v) => (100 * v / n).toFixed(2) + "%";
+    // Hududsiz kameralar alohida guruh — ular xaritada ham, hisobotda
+    // ham yo'qoladi, shuning uchun qizil bilan belgilanadi.
+    const orphan = g.key === "belgilanmagan";
+    return `<tr data-k="${esc(g.key)}">
+      <td class="name" style="color:${orphan ? "var(--fail)" : "var(--text)"}">${esc(g.key)}</td>
+      <td class="meta">${g.cameras}</td>
+      <td><div class="bar">
+        <i style="width:${w(g.online)};background:var(--ok)"></i>
+        <i style="width:${w(g.offline)};background:var(--fail)"></i>
+        <i style="width:${w(g.unknown + g.disabled)};background:var(--idle)"></i>
+      </div></td>
+      <td class="meta" style="color:${upColor(g.uptime_pct)}">${g.uptime_pct}%</td>
+      <td class="meta" style="color:${g.outages ? "var(--warn)" : "var(--faint)"}">${g.outages || "—"}</td>
+      <td class="meta">${durHM(g.offline_seconds)}</td>
+    </tr>`;
+  }).join("");
+
+  // Guruhga bosilsa kameralar ro'yxati o'sha guruh bo'yicha filtrlanadi —
+  // "aybdorni topdim, endi qaysi kamera" degan keyingi qadam.
+  $$("#gtb tr").forEach((tr) => {
+    tr.onclick = () => {
+      const key = tr.dataset.k;
+      $("#csearch").value = key === "belgilanmagan" ? "" : key;
+      S.filt = "prob";
+      $$("#cfilt .chip").forEach((b) => b.classList.toggle("sel", b.dataset.f === "prob"));
+      go("cams");
+      drawCams();
+    };
+  });
+  $("#gempty").innerHTML = gs.length ? "" :
+    `<div class="empty">Bu davrda ma'lumot yo'q.<br>Hodisalar 30 kun saqlanadi.</div>`;
+}
+
+async function loadStat() {
+  // Zona mijozdan boradi: hodisalar bazada UTC'da, "cho'qqi 08:00 da"
+  // degan xulosa esa faqat mahalliy vaqtda ma'noga ega.
+  const tz = -new Date().getTimezoneOffset();
+  try {
+    const [hist, worst] = await Promise.all([
+      api(`/api/v1/admin/outages/hourly?hours=${S.tHours}&tz_offset_minutes=${tz}`),
+      api(`/api/v1/admin/uptime?hours=${S.tHours}&limit=25`),
+    ]);
+    S.stat = hist;
+    S.worst = worst.cameras || [];
+  } catch (e) { S.stat = null; toast("Tahlil olinmadi", e.message, "bad"); }
+  drawStat();
+}
+
+function drawStat() {
+  if (S.page !== "stat") return;
+  const st = S.stat;
+  if (!st) { $("#tsum").textContent = "ma'lumot yo'q"; return; }
+  $("#tsum").textContent = `${st.total} uzilish · ${HOURS_LBL[S.tHours]}`;
+  $("#nt").textContent = st.total || "✓";
+  $("#nt").className = "ct" + (st.total ? " alert" : "");
+
+  const max = Math.max(1, ...st.hourly);
+  const peak = st.peak || {from_hour: 0, to_hour: 0, outages: 0};
+  // Cho'qqi oyna sutka aylanasidan o'tishi mumkin (23:00–02:00).
+  const inPeak = (h) => {
+    const span = (peak.to_hour - peak.from_hour + 24) % 24 || 3;
+    return (h - peak.from_hour + 24) % 24 < span;
+  };
+  $("#thist").innerHTML = st.hourly.map((v, h) => `<i class="hbar"
+    style="height:${Math.max(2, Math.round(v / max * 100))}%;
+           background:${inPeak(h) ? "var(--fail)" : v > max * 0.6 ? "var(--warn)" : "var(--signal)"}"
+    title="${pad2(h)}:00 — ${v} uzilish"></i>`).join("");
+  $("#thistx").innerHTML = st.hourly.map((_, h) =>
+    `<span>${h % 3 === 0 ? pad2(h) : ""}</span>`).join("");
+  $("#tpeak").textContent = peak.outages
+    ? `cho'qqi ${pad2(peak.from_hour)}:00–${pad2(peak.to_hour)}:00 · ${peak.outages} uzilish`
+    : "cho'qqi yo'q";
+
+  const rows = S.worst || [];
+  $("#ttb").innerHTML = rows.map((c) => `<tr data-id="${c.id}">
+    <td class="name">${esc(c.name)}</td>
+    <td class="meta">${esc(c.region || "—")}</td>
+    <td><span class="st"><i class="dot s-${c.state}"></i>${LBL[c.state] || c.state}</span></td>
+    <td class="meta" style="color:${upColor(c.uptime_pct)}">${c.uptime_pct}%</td>
+    <td class="meta" style="color:${c.outages ? "var(--warn)" : "var(--faint)"}">${c.outages || "—"}</td>
+    <td class="meta">${durHM(c.offline_seconds)}</td>
+    <td class="meta">${esc((c.last_offline_at || "").slice(5, 16).replace("T", " ") || "—")}</td>
+  </tr>`).join("");
+  $$("#ttb tr").forEach((tr) => (tr.onclick = () => openDiag(+tr.dataset.id)));
+  $("#tempty").innerHTML = rows.length ? "" :
+    `<div class="empty">Bu davrda uzilish qayd etilmagan.</div>`;
+}
+
+const pad2 = (n) => (n < 10 ? "0" : "") + n;
+
+$$("#gby .chip").forEach((b) => (b.onclick = () => {
+  S.gBy = b.dataset.g;
+  $$("#gby .chip").forEach((x) => x.classList.toggle("sel", x === b));
+  S.groups = null; drawGroups(); loadGroups();
+}));
+$$("#ghours .chip").forEach((b) => (b.onclick = () => {
+  S.gHours = +b.dataset.h;
+  $$("#ghours .chip").forEach((x) => x.classList.toggle("sel", x === b));
+  S.groups = null; drawGroups(); loadGroups();
+}));
+$$("#thours .chip").forEach((b) => (b.onclick = () => {
+  S.tHours = +b.dataset.h;
+  $$("#thours .chip").forEach((x) => x.classList.toggle("sel", x === b));
+  loadStat();
+}));
+
 /* ═════════ devor ═════════ */
 let wallPlayers = [];
 $$("[data-w]").forEach((b) => (b.onclick = () => {
@@ -1245,7 +1396,8 @@ function startSSE() {
 }
 
 /* ═════════ buyruq paneli ═════════ */
-const PAGES = [["home", "Holat"], ["cams", "Kameralar"], ["wall", "Devor"],
+const PAGES = [["home", "Holat"], ["cams", "Kameralar"],
+  ["groups", "Guruhlar"], ["stat", "Tahlil"], ["wall", "Devor"],
   ["sys", "Tizim"], ["ev", "Hodisalar"], ["scan", "Qurilma qo'shish"]];
 let palI = 0, palR = [];
 function openPal() { $("#pal").classList.add("on"); $("#palq").value = ""; $("#palq").focus(); palFill(); }
