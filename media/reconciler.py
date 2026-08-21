@@ -30,7 +30,11 @@ from core.log import log
 
 from . import sync
 
-CHECK_INTERVAL = 30.0      # soniya
+CHECK_INTERVAL = 30.0      # soniya — to'liq sinxronlash (yo'llar kelishtiriladi)
+# Muzlash tekshiruvi ancha tez-tez: oqim qotganini 60 soniyada bilish
+# kuzatuv tizimi uchun juda kech. Faol yo'llar ro'yxati kichik (yo'llar
+# talab bo'yicha yaratiladi), shuning uchun bu arzon.
+STALL_INTERVAL = 5.0       # soniya
 SPAWN_COOLDOWN = 30.0      # qayta urinishlar orasidagi eng kam vaqt
 STARTUP_WAIT = 8.0         # ishga tushirgandan keyin API'ni shuncha kutamiz
 
@@ -59,6 +63,10 @@ _stalled: dict[tuple[int, str], str] = {}      # (tugun, yo'l) -> ko'rsatma nomi
 BLOAT_WARN_EVERY = 300.0                       # soniya
 _pending: dict[int, int] = {}                  # tugun -> tozalanmagan yo'llar
 _bloat_warned: dict[int, float] = {}
+
+# Oxirgi to'liq sinxronda API'si javob bergan tugunlar. Tez tsikl faqat
+# shularni tekshiradi — o'lik tugunning timeout'i tsiklni cho'zmasin.
+_reachable: set[int] = set()
 
 
 def stalled_paths() -> set[str]:
@@ -220,7 +228,11 @@ def _tick(load_cameras: Callable[[], list[dict]], announce: bool) -> bool:
         local = sync.is_local_api(api)
         if not sync.api_available(api):
             if not (local and _autostart_allowed() and _spawn()):
+                with _lock:
+                    _reachable.discard(node["id"])
                 continue
+        with _lock:
+            _reachable.add(node["id"])
         node_cams = [c for c in cameras
                      if (c.get("node_id") or 1) == node["id"]]
         result = sync.push_to_api(node_cams, api_base=api)
@@ -232,9 +244,26 @@ def _tick(load_cameras: Callable[[], list[dict]], announce: bool) -> bool:
                 node=node["name"], added=result["added"],
                 updated=result["updated"], removed=result["removed"],
                 message=result["message"])
-        _check_stalls(node)
         synced = synced or result["ok"]
     return synced
+
+
+def _watch_active() -> None:
+    """Faqat muzlash tekshiruvi — to'liq sinxronsiz, tez tsikl uchun.
+
+    Faol yo'llar ro'yxati kichik (yo'llar talab bo'yicha yaratilgani
+    uchun MediaMTX'da faqat ko'rilayotganlari turadi), shuning uchun buni
+    5000 kamerada ham 5 soniyada bir chaqirish arzon.
+
+    Javob bermayotgan tugun o'tkazib yuboriladi: aks holda har tsikl
+    uning timeout'ini (4 s) kutib o'tirardi. Uni to'liq sinxron
+    (`_tick`) qayta sinaydi.
+    """
+    with _lock:
+        alive = set(_reachable)
+    for node in _nodes():
+        if node["id"] in alive:
+            _check_stalls(node)
 
 
 PRUNE_INTERVAL = 3600.0    # soniya — eski hodisalar soatiga bir tozalanadi
@@ -243,17 +272,25 @@ PRUNE_INTERVAL = 3600.0    # soniya — eski hodisalar soatiga bir tozalanadi
 def _loop(load_cameras: Callable[[], list[dict]]) -> None:
     announced = False              # birinchi muvaffaqiyatli sinxron logda ko'rinsin
     last_prune = 0.0
+    last_sync = 0.0
     while True:
         try:
-            if _tick(load_cameras, not announced):
-                announced = True
-            if time.monotonic() - last_prune > PRUNE_INTERVAL:
-                last_prune = time.monotonic()
-                with get_db() as db:
-                    events.prune(db)
+            now = time.monotonic()
+            if not last_sync or now - last_sync >= CHECK_INTERVAL:
+                last_sync = now
+                if _tick(load_cameras, not announced):
+                    announced = True
+                if now - last_prune > PRUNE_INTERVAL:
+                    last_prune = now
+                    with get_db() as db:
+                        events.prune(db)
+            # Muzlash tekshiruvi har tsiklda — to'liq sinxrondan ancha
+            # tez-tez. Tomoshabin bor oqim qotganini 60 soniyada emas,
+            # 5-10 soniyada bilamiz.
+            _watch_active()
         except Exception as exc:   # kuzatuv hech qachon yiqilmasin
             log("reconciler", "tick_failed", level="error", error=str(exc))
-        time.sleep(CHECK_INTERVAL)
+        time.sleep(STALL_INTERVAL)
 
 
 def start(load_cameras: Callable[[], list[dict]]) -> None:

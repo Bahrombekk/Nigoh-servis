@@ -10,6 +10,7 @@ Qatlamlar:
     api/cameras.py   /api/v1/cameras/*   (ro'yxat, holat, oqim, surat)
     api/streams.py   /api/v1/streams     (batch oqim chiptalari)
     api/events.py    /api/v1/events      (SSE — holat o'zgarishlari)
+    api/metrics.py   /api/v1/metrics/*   (pleyer o'lchagan ochilish vaqti)
     api/devices.py   /api/v1/devices/*   (skan: job + SSE, pasport)
     api/nodes.py     /api/v1/admin/nodes (MediaMTX tugunlari)
     api/admin.py     /api/v1/admin/*     (kameralar CRUD, foydalanuvchilar)
@@ -45,6 +46,7 @@ from .deps import require_key
 from .devices import router as devices_router
 from .events import router as events_router
 from .health import router as health_router
+from .metrics import router as metrics_router
 from .nodes import router as nodes_router
 from .streams import router as streams_router
 
@@ -120,7 +122,7 @@ def create_app() -> FastAPI:
     # qaraydi; ichida sir yo'q.
     app.include_router(health_router)
     for router in (cameras_router, streams_router, events_router,
-                   devices_router, nodes_router, admin_router):
+                   devices_router, nodes_router, metrics_router, admin_router):
         app.include_router(router, prefix="/api/v1",
                            dependencies=[Depends(require_key)])
         app.include_router(router, prefix="/api", include_in_schema=False,

@@ -14,7 +14,7 @@ import time
 
 from fastapi import APIRouter
 
-from core import bus, health, snapshots
+from core import bus, health, metrics, snapshots
 from media import sync as mediamtx_sync
 
 router = APIRouter(tags=["health"])
@@ -61,4 +61,9 @@ def service_health():
         "managed": mediamtx_sync.managed_count(),
         "sse_subscribers": bus.subscriber_count(),
         "snapshots": snapshots.cycle_stats(),
+        # Ochilish vaqti — pleyer o'lchaydi (POST /metrics/open), bu yerda
+        # transport kesimida p50/p95. Qaysi bosqich sekinligi ko'rinadi:
+        # stream_ms (backend/MediaMTX), signal_ms (tarmoq), frame_ms
+        # (kameradagi keyframe oralig'i).
+        "open_ms": metrics.summary(),
     }

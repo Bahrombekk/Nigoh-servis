@@ -480,10 +480,31 @@ function createPlayer(video, msgEl) {
     const my = ++p.token;
     const stale = () => p.token !== my;
     msgEl.textContent = "ulanmoqda…";
+
+    /* Ochilish vaqti bosqichlarga bo'lib o'lchanadi — "sekin" degan
+       shikoyatga javob berish uchun bitta raqam yetmaydi. t0 bosildi,
+       tStream manzil keldi, tSignal WHEP javobi keldi, birinchi kadr esa
+       "playing" hodisasida. Server p50/p95 ni /health da ko'rsatadi. */
+    const t0 = performance.now();
+    let tStream = 0, tSignal = 0, transport = "";
+
+    const report = () => {
+      if (!tStream) return;
+      const now = performance.now();
+      api("/api/v1/metrics/open", {method: "POST", body: {
+        camera_id: cam.id, mode: p.mode || "", transport: transport || "hls",
+        stream_ms: Math.round(tStream - t0),
+        signal_ms: tSignal ? Math.round(tSignal - tStream) : 0,
+        frame_ms: Math.round(now - (tSignal || tStream)),
+        total_ms: Math.round(now - t0),
+      }}).catch(() => {});
+    };
+
     api(`/api/v1/cameras/${cam.id}/stream?hevc=${HEVC_OK ? 1 : 0}` +
         (quality ? `&quality=${quality}` : ""))
       .then((urls) => {
         if (stale()) return;
+        tStream = performance.now();
         p.mode = urls.mode;
         const onFail = urls.mode === "sub"
           ? () => { if (!stale()) p.open(cam, ""); }        // sub yiqilsa asosiy
@@ -497,6 +518,7 @@ function createPlayer(video, msgEl) {
         if (staleFn()) return;
         msgEl.textContent = "";
         p.retries = 0;              // tasvir keldi — urinishlar hisobi tozalanadi
+        report();                   // birinchi kadr keldi — o'lchov to'liq
       }, {once: true});
       const rtcWorth = Date.now() - _rtcFailedAt > RTC_RETRY_MS;
       if (urls.webrtc_url && rtcWorth) {
@@ -512,6 +534,7 @@ function createPlayer(video, msgEl) {
     }
 
     async function playWebRtc(whepUrl, staleFn) {
+      transport = "webrtc";
       const pc = new RTCPeerConnection({iceServers: []});
       p.pc = pc;
       pc.addTransceiver("video", {direction: "recvonly"});
@@ -539,6 +562,7 @@ function createPlayer(video, msgEl) {
         headers: {"Content-Type": "application/sdp"}, body: pc.localDescription.sdp});
       if (!res.ok) { pc.close(); throw new Error("WHEP " + res.status); }
       const answer = await res.text();
+      tSignal = performance.now();          // signalizatsiya tugadi
       if (staleFn()) { pc.close(); return; }
       await pc.setRemoteDescription({type: "answer", sdp: answer});
       await new Promise((resolve, reject) => {
@@ -628,6 +652,12 @@ function createPlayer(video, msgEl) {
     }
 
     function playHls(url, staleFn, onFail) {
+      // HLS'ning signal bosqichi yo'q. WebRTC yiqilib bu yerga tushgan
+      // bo'lsak alohida belgilanadi — u holda kutishga WebRTC'ning
+      // muvaffaqiyatsiz urinishi ham qo'shilgan, va bu statistikada
+      // toza HLS bilan aralashib ketmasligi kerak.
+      transport = transport === "webrtc" ? "hls_fallback" : "hls";
+      tSignal = 0;
       if (!url) { msgEl.textContent = FAIL_MSG; return; }
       // WebRTC muvaffaqiyatsiz tugab HLS'ga tushganda uning o'lik oqimi
       // videoda qolib ketadi; srcObject har doim src'dan ustun bo'lgani

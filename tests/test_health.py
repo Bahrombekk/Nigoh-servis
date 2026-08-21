@@ -11,7 +11,8 @@ def test_health_kalitsiz_va_shakli():
         body = r.json()
         assert set(body) == {"ok", "mediamtx", "health", "egress_mbps",
                              "egress_capacity_mbps", "streams", "readers",
-                             "warm", "managed", "sse_subscribers", "snapshots"}
+                             "warm", "managed", "sse_subscribers", "snapshots",
+                             "open_ms"}
         # Muhitga bog'lanmaymiz: test mashinasida MediaMTX ishlayotgan
         # bo'lishi ham mumkin — shakl va turlargina tekshiriladi.
         assert isinstance(body["mediamtx"], bool)

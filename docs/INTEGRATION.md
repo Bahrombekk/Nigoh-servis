@@ -214,13 +214,53 @@ SSE'da.
 GET /health   (kalitsiz)
 -> {"ok": true, "mediamtx": true, "egress_mbps": 84.0,
     "egress_capacity_mbps": 1000, "streams": 18, "readers": 4,
-    "warm": 12, "sse_subscribers": 3, "health": {...}}
+    "warm": 12, "managed": 9, "sse_subscribers": 3,
+    "health": {...}, "open_ms": {...}}
 ```
 
 `egress_mbps` — serverdan chiqayotgan video trafigi. Ko'payish nuqtasi
 serverda (100 tomoshabin = 100 chiqish oqimi), shuning uchun bu raqamni
 o'z monitoringingizga ulang: 80% — ogohlantirish, 95% — jiddiy.
 `NIC_CAPACITY_MBPS` muhit o'zgaruvchisi bilan sozlanadi.
+
+`managed` — ayni damda MediaMTX'da ro'yxatda turgan yo'llar. **Kameralar
+soniga emas, tomoshabinlar soniga qarab o'sishi kerak**: yo'llar talab
+bo'yicha yaratiladi (sabab va o'lchovlar — `docs/BENCHMARK.md`). Bu son
+kamera soniga yaqinlashib qolsa, kimdir hamma kamerani `always_on`
+qilgan degani.
+
+## Ochilish vaqtini o'lchash
+
+"Sekin ochilyapti" degan shikoyatga bitta raqam bilan javob bo'lmaydi —
+ochilish uch bo'lakdan iborat va har biri boshqa joyni ko'rsatadi.
+Pleyeringiz ularni o'lchab yuborsa, `/health` ularni p50/p95 qilib
+qaytaradi:
+
+```
+POST /api/v1/metrics/open        -> 204
+{"camera_id": 12, "transport": "webrtc", "mode": "direct",
+ "stream_ms": 24, "signal_ms": 180, "frame_ms": 640, "total_ms": 844}
+```
+
+| Maydon | Qayerdan qayergacha | Sekin bo'lsa nima qilish |
+|---|---|---|
+| `stream_ms` | bosildi → `/stream` javobi | MediaMTX'da ortiqcha yo'llar (`pending_paths`) yoki uzoq tugun API'si |
+| `signal_ms` | `/stream` javobi → WHEP javobi | tarmoq/proksi. HLS'da bu bosqich yo'q (0) |
+| `frame_ms` | WHEP javobi → birinchi kadr | kameradagi `I Frame Interval` — registratorda sozlanadi |
+| `total_ms` | foydalanuvchi ko'rgan to'liq vaqt | |
+
+`transport`: `webrtc`, `hls` yoki `hls_fallback` (WebRTC urinib
+ko'rilib, yiqilgandan keyingi HLS — uning kutishiga muvaffaqiyatsiz
+urinish ham qo'shilgan, shuning uchun toza HLS bilan aralashtirilmaydi).
+
+```
+GET /health -> "open_ms": {
+    "webrtc": {"n": 128, "total_ms": {"p50": 840, "p95": 2100},
+               "frame_ms": {"p50": 610, "p95": 1900}, ...}}
+```
+
+Namunalar xotirada (oxirgi 512 ta har transport uchun) — server qayta
+ishga tushsa hisob noldan boshlanadi.
 
 ## Yakuniy API yuzasi
 
@@ -240,6 +280,7 @@ o'z monitoringingizga ulang: 80% — ogohlantirish, 95% — jiddiy.
 | GET | `/api/v1/cameras/{ref}/snapshot` | JPEG, ETag |
 | **POST** | **`/api/v1/streams`** | **batch chipta, 128 tagacha** |
 | GET | `/api/v1/events` | SSE — holat o'zgarishlari |
+| POST | `/api/v1/metrics/open` | pleyer o'lchagan ochilish vaqti → `204` |
 | GET | `/api/v1/admin/nodes` | MediaMTX tugunlari |
 | GET | `/health` | servis, MediaMTX, egress (kalitsiz) |
 | POST | `/api/v1/auth/stream` | MediaMTX chaqiradi, mijoz emas |
