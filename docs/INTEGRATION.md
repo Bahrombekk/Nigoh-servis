@@ -60,6 +60,17 @@ RTSP yo'lini ham, kanal raqamlarini ham bilish shart emas: **IP va
 login/parol yetadi**. Skaner ishlab chiqaruvchi shablonini o'zi topadi,
 kanallarni 8 talik bloklarda tekshiradi va bo'sh blok kelganda to'xtaydi.
 
+> **Parolni to'g'ri bering.** Registratorlarning ko'pi (jumladan
+> Hikvision) bir necha xato urinishdan keyin manba IP'ni bloklaydi —
+> "illegal login lock", standart holda 5 urinish va ~30 daqiqa. Bloklangan
+> registratordagi **hamma kamera** o'sha vaqtga offline bo'lib qoladi:
+> TCP porti ochiq turadi, lekin RTSP jim bo'ladi.
+>
+> Nigoh buni hisobga oladi: skan ham, ommaviy import ham avval **bitta**
+> urinish qiladi va javob "parol" bosqichida to'xtasa darhol tugaydi
+> (`event: error`, import uchun `401`). Ya'ni xato parol qurilmani
+> qulflamaydi. Shunga qaramay xato parolni takror-takror yubormang.
+
 Diagnostika konsolidagi "Qurilma qo'shish" sahifasi aynan shu chaqiruvlardan
 iborat — yopiq yo'l yo'q, hammasini o'zingiz ham qura olasiz.
 
@@ -134,6 +145,21 @@ ham yozib qo'yiladi.
 
 Skan natijasidagi `rtsp_path` va `vendor` ni to'g'ridan `admin/cameras`
 tanasiga qo'ying — qayta tekshirish kerak emas.
+
+### Saqlangan parolni qayta ishlatish
+
+Bitta registratorga keyinroq yana kanal qo'shsangiz, parolni qayta
+terish shart emas: `camera_id` bering va `password` ni bo'sh qoldiring.
+Uchala endpoint ham qo'llaydi:
+
+```
+POST /api/v1/devices/scan     {"ip": "...", "camera_id": 10, "password": ""}
+POST /api/v1/admin/probe      {"ip": "...", "camera_id": 10}
+POST /api/v1/admin/nvr/import {"ip": "...", "camera_id": 10, "password": ""}
+```
+
+Parol bazada Fernet bilan shifrlangan holda yotadi va javobda hech
+qachon qaytmaydi — faqat qurilmaga ulanishda ochiladi.
 
 ## Oqim olish — bitta kamera
 
