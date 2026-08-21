@@ -54,25 +54,86 @@ POST /api/v1/admin/cameras/{ref}/enabled   {"enabled": false}
 
 O'chirilgan kameraga oqim ham, surat ham berilmaydi.
 
-Qurilmani qo'lda bilmasangiz — skaner topib beradi:
+## Qurilmani avtomatik aniqlash (skaner)
+
+RTSP yo'lini ham, kanal raqamlarini ham bilish shart emas: **IP va
+login/parol yetadi**. Skaner ishlab chiqaruvchi shablonini o'zi topadi,
+kanallarni 8 talik bloklarda tekshiradi va bo'sh blok kelganda to'xtaydi.
+
+Diagnostika konsolidagi "Qurilma qo'shish" sahifasi aynan shu chaqiruvlardan
+iborat — yopiq yo'l yo'q, hammasini o'zingiz ham qura olasiz.
+
+**1) Skanni boshlash** — darhol qaytadi, natijalar SSE'da:
 
 ```bash
-# 202 + job_id qaytadi, natijalar SSE bilan kanal sari keladi
 curl -X POST http://SERVER:8010/api/v1/devices/scan \
   -H "X-API-Key: KALIT" -H "Content-Type: application/json" \
-  -d '{"ip": "192.168.1.100", "username": "admin", "password": "..."}'
-# -> {"job_id": "a1b2c3", "events": "/api/v1/devices/scan/a1b2c3/events"}
-
-curl -N -H "X-API-Key: KALIT" \
-  http://SERVER:8010/api/v1/devices/scan/a1b2c3/events
-# event: meta     -> {"vendor": "hikvision", ...}
-# event: channel  -> {"channel": 1, "ok": true, "codec": "H265",
-#                     "snapshot_url": ".../snapshot/1", ...}
-# event: done     -> {"device": "nvr", "live_channels": 11, ...}
+  -d '{"ip": "192.168.170.160", "username": "admin", "password": "...",
+       "max_channels": 64}'
+# -> 202 {"job_id": "a1b2c3", "events": "/api/v1/devices/scan/a1b2c3/events"}
 ```
 
-Qurilma pasporti (model, firmware, seriya):
-`GET /api/v1/devices/info?ref=ext:cam-toshkent-014`
+**2) Natijalar kanal sari** — birinchi kanal bir-ikki soniyada keladi,
+oxirini kutish shart emas:
+
+```
+curl -N -H "X-API-Key: KALIT" \
+  http://SERVER:8010/api/v1/devices/scan/a1b2c3/events
+
+event: meta     {"vendor": "hikvision", "vendor_name": "Hikvision"}
+event: channel  {"channel": 1, "ok": true, "codec": "H265",
+                 "resolution": "1920x1080", "needs_transcode": true,
+                 "rtsp_path": "/Streaming/Channels/101",
+                 "snapshot_url": "/api/v1/devices/scan/a1b2c3/snapshot/1"}
+event: channel  {"channel": 10, "ok": false, ...}      # bo'sh slot
+event: done     {"device": "nvr", "live_channels": 9, "vendor": "hikvision"}
+```
+
+Qurilma javob bermasa `event: error` keladi va sababi yoziladi
+(`tarmoq` / `parol` / `oqim` / `rtsp` bosqichlaridan eng ma'nolisi):
+
+```
+event: error    {"message": "10.0.0.9:554 javob bermadi — kamera o'chiq
+                 yoki boshqa tarmoqda"}
+```
+
+Job xotirada 10 daqiqa yashaydi. Kech ulangan mijoz ham hammasini
+boshidan oladi — hodisalar job ichida saqlanadi.
+
+**3) Kanal surati** — hali saqlanmagan qurilmadan kadr. Foydalanuvchi
+"qaysi kanal kerak" degan savolga rasmga qarab javob beradi:
+
+```
+GET /api/v1/devices/scan/a1b2c3/snapshot/1     -> image/jpeg
+```
+
+> Bu manzilni faqat `ok: true` kanallar uchun so'rang. O'lik kanalda u
+> HTTP-snapshot manzillarini birma-bir sinab, keyin RTSP'dan kadr olishga
+> urinadi — javob 30 soniyagacha cho'zilishi mumkin. `channel` hodisasi
+> `snapshot_url` ni aynan shu sababdan faqat tirik kanalda to'ldiradi.
+
+**4) Qurilma pasporti** — model, firmware, seriya (ONVIF, zaxira ISAPI).
+Skan bilan **parallel** so'ralsa sahifa tezroq to'ladi:
+
+```
+GET /api/v1/devices/info?ip=192.168.170.160&username=admin&password=...
+-> {"manufacturer": "Hikvision", "model": "DS-7616NI-Q1",
+    "firmware": "V4.83.015", "serial": "DS-7616NI-Q1...", "mac": "..."}
+```
+
+Saqlangan kamera uchun `ip` o'rniga `ref` bering
+(`?ref=ext:cam-toshkent-014`) — u holda topilgan model/firmware bazaga
+ham yozib qo'yiladi.
+
+**5) Tanlanganlarni saqlash.** Ikki yo'l bor:
+
+| Yo'l | Qachon |
+|---|---|
+| `POST /api/v1/admin/cameras` har kanal uchun | foydalanuvchi kanallarni **tanlab** oladi (konsol shunday qiladi) |
+| `POST /api/v1/admin/nvr/import` | **hammasini** birdaniga; parallel tekshiradi va faqat javob berganlarini saqlaydi. Avval `"dry_run": true` bilan ko'ring |
+
+Skan natijasidagi `rtsp_path` va `vendor` ni to'g'ridan `admin/cameras`
+tanasiga qo'ying — qayta tekshirish kerak emas.
 
 ## Oqim olish — bitta kamera
 
