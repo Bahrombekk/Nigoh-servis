@@ -74,6 +74,7 @@ const S = {
   evlog: [], evFilt: "all", evPause: false, evN: 0,
   gBy: "region", gHours: 24, groups: null,      // guruhlar sahifasi
   tHours: 24, stat: null, worst: null,          // tahlil sahifasi
+  diagDay: 0, hist: null,                       // kamera tahlili
   curId: null, page: "home",
   nodes: [], health: null, status: null, recentEv: [],
 };
@@ -1053,9 +1054,11 @@ function openDiag(id) {
   const c = S.byId.get(id);
   if (!c) return;
   if (S.curId !== id) { probeResult = null; closeLive(); }
+  if (S.curId !== id) S.diagDay = 0;   // boshqa kamera — bugundan boshlaymiz
   S.curId = id;
   go("diag");
   drawDiag();
+  loadDiagHistory(c);
   warmStream(c);          // play bosilguncha oqim tayyor bo'lib tursin
 }
 
@@ -1117,40 +1120,131 @@ function drawDiag() {
     `<div class="verdict-i">${ic}</div><div><b>${esc(ttl)}</b><p>${txt}</p></div>`;
   drawDiagCards();
   loadHistory(c);
-  loadUptime(c);
 }
 
 /* Ish vaqti statistikasi — 3 soniyalik poll'da qayta so'ralmasin deb
    keshda turadi (60 s). */
-const uptimeCache = {};
 const fmtDur = (s) => s < 60 ? Math.round(s) + " s"
   : s < 3600 ? Math.round(s / 60) + " daqiqa"
   : s < 86400 ? (s / 3600).toFixed(1) + " soat" : (s / 86400).toFixed(1) + " kun";
-async function loadUptime(c) {
-  const hit = uptimeCache[c.id];
-  if (hit && performance.now() - hit.t < 60000) return;
+
+/* ═════════ kamera tahlili: uzilish tarixi ═════════
+
+   Bitta so'rov — /admin/cameras/{id}/history — sahifadagi hamma narsani
+   beradi: KPI, soatlik profil, 30 kunlik kalendar va uzilishlar jurnali.
+   Bo'lak-bo'lak so'ralsa ular bir-biriga mos kelmay qolardi, chunki har
+   oraliq "hozir" ga bog'langan: kalendar bir narsani, jurnal boshqa
+   narsani ko'rsatardi.                                                */
+
+const dd = (n) => (n < 10 ? "0" : "") + n;
+/* Server UTC beradi, operator mahalliy vaqtni ko'radi. */
+const localHM = (iso) => { const d = new Date(iso); return dd(d.getHours()) + ":" + dd(d.getMinutes()); };
+const localDM = (iso) => { const d = new Date(iso); return dd(d.getDate()) + "." + dd(d.getMonth() + 1); };
+
+async function loadDiagHistory(c) {
+  const tz = -new Date().getTimezoneOffset();
+  S.hist = null;
+  drawDiagHistory();
   try {
-    const d = await api(`/api/v1/admin/cameras/${c.id}/uptime?hours=168`);
-    uptimeCache[c.id] = {t: performance.now(), data: d};
-    if (S.page === "diag" && S.curId === c.id) drawDiagCards();
-  } catch (e) {}
+    S.hist = await api(`/api/v1/admin/cameras/${c.id}/history`
+      + `?days=30&day=${S.diagDay}&tz_offset_minutes=${tz}`);
+  } catch (e) { S.hist = null; }
+  if (S.page === "diag" && S.curId === c.id) drawDiagHistory();
 }
-function uptimeCard(c) {
-  const hit = uptimeCache[c.id];
-  if (!hit) return `<div class="card"><h3>Ish vaqti (7 kun)</h3>
-    <div style="color:var(--faint);font-size:13px">yuklanmoqda…</div></div>`;
-  const d = hit.data;
-  const tl = `<div class="tl" title="7 kunlik chiziq: yashil — ishlagan, qizil — o'chiq">${
-    d.segments.map((sg) =>
-      `<i class="${sg.state}" style="width:${
-        Math.max(0.4, sg.seconds / (d.hours * 36))}%"></i>`).join("")}</div>`;
-  return `<div class="card"><h3>Ish vaqti (7 kun)</h3><dl class="kv">
-    <dt>Uptime</dt><dd><b>${d.uptime_pct}%</b></dd>
-    <dt>Uzilishlar</dt><dd>${d.outages ? d.outages + " marta" : "yo'q"}</dd>
-    <dt>Jami o'chiq</dt><dd>${d.offline_seconds ? fmtDur(d.offline_seconds) : "—"}</dd>
-    <dt>Oxirgi uzilish</dt><dd>${d.last_offline_at
-      ? esc(d.last_offline_at.slice(5, 16)) : "—"}</dd></dl>${tl}</div>`;
+
+function drawDiagHistory() {
+  const h = S.hist;
+  const show = (id, on) => { const el = $(id); if (el) el.style.display = on ? "" : "none"; };
+  if (!h) {
+    $("#dkpi").innerHTML = "";
+    ["#dprofwrap", "#dcalwrap", "#dojwrap"].forEach((id) => show(id, false));
+    return;
+  }
+  ["#dprofwrap", "#dcalwrap", "#dojwrap"].forEach((id) => show(id, true));
+  const s = h.summary;
+
+  /* ── KPI ── */
+  const tile = (lbl, val, sub, color) => `<div class="k">
+    <div class="k-l">${lbl}</div>
+    <div class="k-v" ${color ? `style="color:${color}"` : ""}>${val}</div>
+    <div class="k-s">${sub}</div></div>`;
+  const peakLbl = s.outages_period
+    ? `${dd(h.peak.from_hour)}:00–${dd(h.peak.to_hour)}:00` : "—";
+  $("#dkpi").innerHTML =
+    tile("Mavjudlik · " + esc(h.selected_date.slice(5)), s.uptime_pct_day + "<u>%</u>",
+         `30 kun: ${s.uptime_pct_period}%`, upColor(s.uptime_pct_day)) +
+    tile("Uzilish (kun)", s.outages_day || "0", `30 kun: ${s.outages_period}`,
+         s.outages_day ? "var(--warn)" : null) +
+    tile("O'chiq vaqt", durHM(s.offline_seconds_day),
+         `30 kun: ${durHM(s.offline_seconds_period)}`,
+         s.offline_seconds_day ? "var(--fail)" : null) +
+    tile("Pik oyna", peakLbl,
+         h.peak.offline_seconds ? `shu oynada ${durHM(h.peak.offline_seconds)}` : "uzilish yo'q") +
+    tile("MTTR", durHM(s.mttr_seconds), "o'rtacha tiklanish") +
+    tile("MTBF", durHM(s.mtbf_seconds), "uzilishlar orasi") +
+    tile("Eng uzun uzilish", durHM(s.longest_outage_seconds),
+         s.longest_outage_at ? localDM(s.longest_outage_at) + " · "
+           + localHM(s.longest_outage_at) : "—") +
+    tile("Tomoshabin", camRt(S.byId.get(S.curId) || {}).readers || "0",
+         "ayni damda");
+
+  /* ── soatlik profil ── */
+  $("#dprofday").textContent = h.selected_date;
+  const hs = h.hourly_offline_seconds, max = Math.max(1, ...hs);
+  const span = (h.peak.to_hour - h.peak.from_hour + 24) % 24 || 3;
+  const inPeak = (i) => hs.some((v) => v > 0) &&
+    (i - h.peak.from_hour + 24) % 24 < span;
+  $("#dhours").innerHTML = hs.map((v, i) => `<i class="hbar"
+    style="height:${v ? Math.max(4, Math.round(v / max * 100)) : 2}%;
+      background:${!v ? "var(--line)" : inPeak(i) ? "var(--fail)"
+        : v > max * 0.6 ? "var(--warn)" : "var(--signal)"}"
+    title="${dd(i)}:00 — ${v ? durHM(v) + " o'chiq" : "uzilishsiz"}"></i>`).join("");
+  $("#dhoursx").innerHTML = hs.map((_, i) =>
+    `<span>${i % 3 === 0 ? dd(i) : ""}</span>`).join("");
+  const quiet = hs.indexOf(Math.min(...hs));
+  $("#dproffoot").innerHTML = h.outages.length
+    ? `eng ko'p uzilish <b style="color:var(--fail)">${peakLbl}</b>
+       · eng tinch <b>${dd(quiet)}:00</b>
+       · kunlik o'chiq <b>${durHM(s.offline_seconds_day)}</b>
+       · uzilishlar <b>${s.outages_day} ta</b>`
+    : `bu kunda uzilish qayd etilmagan`;
+  $("#dpeak").textContent = h.peak.offline_seconds
+    ? `pik ${peakLbl} · ${durHM(h.peak.offline_seconds)}` : "";
+
+  /* ── 30 kunlik kalendar ── */
+  $("#dcal").innerHTML = h.daily.map((d) => `<button class="cal-c${
+      d.days_back === h.day ? " sel" : ""}" data-d="${d.days_back}">
+    <div class="cal-d">${esc(d.date.slice(5).replace("-", "."))}</div>
+    <div class="cal-v" style="color:${d.offline_seconds ? upColor(d.uptime_pct) : "var(--faint)"}">${
+      d.offline_seconds ? durHM(d.offline_seconds) : "0"}</div>
+    <div class="cal-s">${d.outages ? d.outages + " uzilish" : "toza"}</div>
+  </button>`).join("");
+  $$("#dcal .cal-c").forEach((b) => (b.onclick = () => {
+    S.diagDay = +b.dataset.d;
+    const cam = S.byId.get(S.curId);
+    if (cam) loadDiagHistory(cam);
+  }));
+  const worst = h.daily.reduce((a, d) => d.offline_seconds > a.offline_seconds ? d : a,
+                               h.daily[0]);
+  $("#dcalfoot").innerHTML =
+    `30 kunlik o'chiq vaqt <b>${durHM(s.offline_seconds_period)}</b>
+     · uzilish <b>${s.outages_period} ta</b>
+     · eng yomon kun <b>${esc(worst.date.slice(5))}</b> · ${durHM(worst.offline_seconds)}
+     · mavjudlik (30k) <b style="color:${upColor(s.uptime_pct_period)}">${s.uptime_pct_period}%</b>`;
+
+  /* ── uzilishlar jurnali ── */
+  $("#dojday").textContent = `${h.selected_date} · ${h.outages.length} uzilish`;
+  $("#doj").innerHTML = h.outages.map((o) => `<tr>
+    <td class="meta">${localHM(o.from)}</td>
+    <td class="meta">${o.recovered ? localHM(o.to) : "—"}</td>
+    <td class="meta" style="color:var(--warn)">${durHM(o.seconds)}</td>
+    <td>${o.recovered ? `<span class="tag good">tiklandi</span>`
+      : `<span class="tag bad">davom etyapti</span>`}</td>
+  </tr>`).join("");
+  $("#dojempty").innerHTML = h.outages.length ? "" :
+    `<div class="empty">Bu kunda uzilish yo'q.</div>`;
 }
+
 function drawDiagCards() {
   const c = S.byId.get(S.curId);
   if (!c || S.page !== "diag") return;
@@ -1183,7 +1277,6 @@ function drawDiagCards() {
       ["Oxirgi", esc(c.snapshot_at || "—")]],
       showSnap ? `<img class="snap-img" id="dsnap" alt=""
         src="${snapUrl}?t=${Date.now()}" onerror="this.style.display='none'">` : "") +
-    uptimeCard(c) +
     `<div class="card" style="grid-column:1/-1"><h3>Holat tarixi (jurnal)</h3>
       <div id="dhist" style="font-size:12.5px;color:var(--faint)">yuklanmoqda…</div></div>`;
 }

@@ -389,3 +389,39 @@ tr.pick .cbx{background:var(--signal);border-color:var(--signal);color:#07130D}
 .hours-x{display:grid;grid-template-columns:repeat(24,1fr);gap:3px;margin-top:5px}
 .hours-x span{font-size:8.5px;color:var(--faint);text-align:center;
   font-family:"JetBrains Mono",monospace}
+
+/* ── kamera tahlili: KPI, kalendar, jurnal ── */
+/* Maketning eng qimmatli qismi — bir qarashda javob beradigan raqamlar
+   chizig'i. Ular sahifaning tepasida, chunki "nima bo'lyapti" degan
+   savol "qanday sozlangan" degandan oldin keladi. */
+.kpi{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
+  gap:1px;background:var(--line);border:1px solid var(--line);
+  border-radius:var(--r);overflow:hidden;margin-bottom:12px}
+.k{background:var(--panel);padding:11px 13px 12px}
+.k-l{font-size:8.5px;letter-spacing:.11em;text-transform:uppercase;
+  color:var(--faint);margin-bottom:6px;white-space:nowrap;overflow:hidden;
+  text-overflow:ellipsis}
+.k-v{font-family:"JetBrains Mono",monospace;font-size:20px;font-weight:500;
+  color:var(--bright);line-height:1.1}
+.k-v u{font-size:11px;color:var(--mute);text-decoration:none;margin-left:1px}
+.k-s{font-size:9px;color:var(--mute);margin-top:5px;white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis}
+
+.dsec{margin-bottom:12px}
+.h3-sub{font-weight:400;letter-spacing:0;text-transform:none;color:var(--mute);
+  font-size:9.5px;font-family:"JetBrains Mono",monospace}
+.prof-foot{margin-top:9px;padding-top:9px;border-top:1px solid var(--line-2);
+  font-size:9.5px;color:var(--mute);line-height:1.9}
+.prof-foot b{color:var(--text);font-family:"JetBrains Mono",monospace;font-weight:500}
+
+/* 30 kunlik kalendar — kun yacheykasi bosiladi, tanlangani yashil ramkada. */
+.cal{display:grid;grid-template-columns:repeat(10,1fr);gap:5px}
+.cal-c{background:var(--panel-2);border:1px solid var(--line-2);border-radius:5px;
+  padding:7px 6px 6px;text-align:left;transition:border-color .12s,background .12s}
+.cal-c:hover{border-color:var(--faint);background:var(--row)}
+.cal-c.sel{border-color:var(--signal);background:#0E241A}
+.cal-d{font-size:9px;color:var(--faint);font-family:"JetBrains Mono",monospace}
+.cal-v{font-size:11.5px;font-family:"JetBrains Mono",monospace;margin-top:3px}
+.cal-s{font-size:8.5px;color:var(--mute);margin-top:2px}
+
+table.tight th,table.tight td{padding:5px 9px}

@@ -145,3 +145,65 @@ def test_chuqqi_oyna_sutka_aylanasidan_otadi(client):
 def test_notanish_kamera_404(client):
     r = client.get("/api/v1/admin/outages/hourly?ref=999999", headers=KEY)
     assert r.status_code == 404
+
+
+# ---------- bitta kameraning tarixi ----------
+
+def _cam_id(client, name):
+    body = client.get("/api/v1/admin/uptime?hours=24&limit=5000", headers=KEY).json()
+    return _by_name(body["cameras"], name)["id"]
+
+
+def test_tarix_kunlik_va_soatlik_bolinadi(client):
+    """A: 3 soat oldin uzildi, 2 soat oldin qaytdi."""
+    r = client.get(f"/api/v1/admin/cameras/{_cam_id(client, 'Tahlil A')}/history"
+                   "?days=30&day=0&tz_offset_minutes=0", headers=KEY)
+    assert r.status_code == 200
+    d = r.json()
+    assert d["camera"]["name"] == "Tahlil A"
+    assert len(d["daily"]) == 30
+    assert len(d["hourly_offline_seconds"]) == 24
+    assert d["daily"][0]["days_back"] == 0          # birinchi element — bugun
+    # Uzilish tugagan, shuning uchun jurnalda "tiklandi".
+    assert d["outages"] and d["outages"][0]["recovered"] is True
+    assert d["outages"][0]["seconds"] == pytest.approx(3600, abs=30)
+    assert d["summary"]["mttr_seconds"] == pytest.approx(3600, abs=30)
+
+
+def test_tugamagan_uzilish_tiklandi_deb_belgilanmaydi(client):
+    """C: 1 soat oldin uzildi va hali qaytmagan — jurnalda yolg'on
+    "tiklandi" bo'lmasligi kerak."""
+    d = client.get(f"/api/v1/admin/cameras/{_cam_id(client, 'Tahlil C')}/history"
+                   "?tz_offset_minutes=0", headers=KEY).json()
+    assert d["outages"], "davom etayotgan uzilish jurnalga tushishi kerak"
+    assert d["outages"][-1]["recovered"] is False
+    # Tugamagan uzilish MTTR'ga kirmaydi — aks holda o'rtacha yolg'on bo'lardi.
+    assert d["summary"]["mttr_seconds"] == 0
+
+
+def test_soat_chegarasidan_otgan_uzilish_bolinadi(client):
+    """Uzilish soat chegarasini kesib o'tsa vaqti ikkala uyaga ulush
+    bo'yicha tushishi kerak — aks holda "soat 17 da 90 daqiqa" chiqadi."""
+    d = client.get(f"/api/v1/admin/cameras/{_cam_id(client, 'Tahlil A')}/history"
+                   "?tz_offset_minutes=0", headers=KEY).json()
+    hourly = d["hourly_offline_seconds"]
+    assert max(hourly) <= 3600, "bitta soat uyasi 3600 s dan oshmaydi"
+    # A ning uzilishi 1 soat — bugungi uyalarga jami shuncha tushadi.
+    assert sum(hourly) == pytest.approx(3600, abs=60)
+
+
+def test_zona_kun_chegarasini_suradi(client):
+    """Kun chegarasi mahalliy vaqtda hisoblanadi — aks holda kunlik
+    o'chiq vaqt boshqa sutkaga tushib ketadi."""
+    cam = _cam_id(client, "Tahlil A")
+    utc = client.get(f"/api/v1/admin/cameras/{cam}/history?tz_offset_minutes=0",
+                     headers=KEY).json()
+    plus5 = client.get(f"/api/v1/admin/cameras/{cam}/history?tz_offset_minutes=300",
+                       headers=KEY).json()
+    assert utc["selected_date"] != plus5["selected_date"] or \
+        utc["hourly_offline_seconds"] != plus5["hourly_offline_seconds"]
+
+
+def test_notanish_kamera_tarixi_404(client):
+    assert client.get("/api/v1/admin/cameras/999999/history",
+                      headers=KEY).status_code == 404

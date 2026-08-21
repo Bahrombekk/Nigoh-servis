@@ -10,7 +10,7 @@
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><circle cx='8' cy='8' r='7' fill='%234DD8C0'/></svg>">
 <!-- ?v= — kesh buster: oldindagi proxy'lar statikani keshlab qolsa,
      har chiqarilishda raqamni oshiring, URL o'zgarib yangi fayl yuklanadi. -->
-<link rel="stylesheet" href="/static/style.css?v=9">
+<link rel="stylesheet" href="/static/style.css?v=10">
 </head>
 <body>
 
@@ -159,10 +159,34 @@
           <button class="chip" id="dlstop">✕ Yopish</button>
         </div>
       </div>
+      <div class="kpi" id="dkpi"></div>
       <div class="chain" id="chainwrap" style="display:none">
         <div class="chain-row" id="chain"></div>
         <div class="verdict" id="verdict"></div>
       </div>
+
+      <div class="card dsec" id="dprofwrap" style="display:none">
+        <h3>Soatlik profil <span class="h3-sub" id="dprofday"></span>
+          <span class="spacer"></span><span class="tag" id="dpeak"></span></h3>
+        <div class="hours" id="dhours"></div>
+        <div class="hours-x" id="dhoursx"></div>
+        <div class="prof-foot" id="dproffoot"></div>
+      </div>
+
+      <div class="card dsec" id="dcalwrap" style="display:none">
+        <h3>30 kunlik kalendar <span class="h3-sub">kunni tanlash uchun bosing</span></h3>
+        <div class="cal" id="dcal"></div>
+        <div class="prof-foot" id="dcalfoot"></div>
+      </div>
+
+      <div class="card dsec" id="dojwrap" style="display:none">
+        <h3>Uzilishlar jurnali <span class="h3-sub" id="dojday"></span></h3>
+        <table class="tight"><thead><tr>
+          <th>Boshlandi</th><th>Tugadi</th><th>Davomiylik</th><th>Holat</th>
+        </tr></thead><tbody id="doj"></tbody></table>
+        <div id="dojempty"></div>
+      </div>
+
       <div class="d-grid" id="dcards"></div>
     </section>
 
@@ -225,7 +249,7 @@
 </div></div>
 <div id="toasts"></div>
 
-<script src="/static/vendor/hls.min.js?v=9"></script>
-<script src="/static/app.js?v=9"></script>
+<script src="/static/vendor/hls.min.js?v=10"></script>
+<script src="/static/app.js?v=10"></script>
 </body>
 </html>
