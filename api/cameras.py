@@ -30,29 +30,34 @@ def list_cameras(request: Request, bbox: str = "", limit: int = 20000):
 
     `bbox` berilsa (minLat,minLng,maxLat,maxLng) faqat shu to'rtburchak
     ichidagilar qaytariladi.
+
+    `total` — filtrga mos kameralar soni (bbox ham hisobga olinadi),
+    `shown` — shu javobda qaytganlari. Ikkovi teng bo'lmasa `limit`
+    ishga tushgan degani.
     """
-    sql = ("SELECT id, external_id, name, region, lat, lng, ip, port, slug, "
-           "enabled, last_seen, codec, sub_codec, resolution, transcode, "
-           "always_on FROM cameras WHERE enabled = 1")
+    columns = ("id, external_id, name, region, lat, lng, ip, port, slug, "
+               "enabled, last_seen, codec, sub_codec, resolution, transcode, "
+               "always_on")
+    where = "WHERE enabled = 1"
     params: list = []
-    count_sql, count_params = sql.replace(
-        "SELECT id, external_id, name, region, lat, lng, ip, port, slug, "
-        "enabled, last_seen, codec, sub_codec, resolution, transcode, "
-        "always_on ",
-        "SELECT COUNT(*) "), list(params)
     if bbox:
         try:
             min_lat, min_lng, max_lat, max_lng = (float(v) for v in bbox.split(","))
         except ValueError:
             raise HTTPException(400, "bbox formati: minLat,minLng,maxLat,maxLng")
-        sql += " AND lat BETWEEN ? AND ? AND lng BETWEEN ? AND ?"
+        where += " AND lat BETWEEN ? AND ? AND lng BETWEEN ? AND ?"
         params += [min_lat, max_lat, min_lng, max_lng]
-    sql += " ORDER BY region, name LIMIT ?"
-    params.append(max(1, min(limit, 50000)))
 
     with get_db() as db:
-        rows = db.execute(sql, params).fetchall()
-        total = db.execute(count_sql, count_params).fetchone()[0]
+        # Sanoq va tanlov AYNAN bitta shart bo'yicha — ilgari sanoq bbox
+        # qo'shilishidan oldin tuzilardi va xaritada `total` butun bazani
+        # ko'rsatib turardi (sahifalaydigan mijoz cheksiz aylanardi).
+        total = db.execute(f"SELECT COUNT(*) FROM cameras {where}",
+                           params).fetchone()[0]
+        rows = db.execute(
+            f"SELECT {columns} FROM cameras {where} ORDER BY region, name LIMIT ?",
+            params + [max(1, min(limit, 50000))],
+        ).fetchall()
     return {
         "total": total,
         "shown": len(rows),

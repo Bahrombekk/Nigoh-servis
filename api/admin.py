@@ -419,9 +419,15 @@ def admin_nvr_import(body: NvrIn):
         item["resolution"] = result.get("resolution", "") if result else ""
         item["transcode"] = bool(result.get("needs_transcode")) if result else False
         item["message"] = result["message"] if result else "tekshirilmadi"
+        # Sub oqim kodegi alohida saqlanadi: devor plitkasi sub'ni
+        # ko'rsatib turib "H265" yorlig'ini chizmasin (asosiy oqim H.265,
+        # sub esa deyarli doim H.264 bo'ladi).
+        item["sub_codec"] = ""
         if body.probe:
             sub = results.get((item["channel"], "sub"))
-            if not (sub and sub.get("ok")):
+            if sub and sub.get("ok"):
+                item["sub_codec"] = sub.get("codec", "")
+            else:
                 item["sub_path"] = ""
 
     if body.dry_run:
@@ -446,12 +452,14 @@ def admin_nvr_import(body: NvrIn):
             slug = unique_slug(db, f"{body.region}_{item['name']}")
             cur = db.execute(
                 "INSERT INTO cameras (name, region, lat, lng, stream_url, slug, ip, "
-                "port, username, password_enc, rtsp_path, sub_path, vendor, enabled, "
+                "port, username, password_enc, rtsp_path, sub_path, sub_codec, "
+                "vendor, enabled, "
                 "note, codec, resolution, transcode, always_on, node_id) "
-                "VALUES (?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)",
+                "VALUES (?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)",
                 (item["name"], body.region.strip(), item["lat"], item["lng"], slug,
                  body.ip.strip(), body.port, body.username.strip(), password_enc,
-                 item["rtsp_path"], item["sub_path"], body.vendor, int(body.enabled),
+                 item["rtsp_path"], item["sub_path"], item["sub_codec"],
+                 body.vendor, int(body.enabled),
                  f"{body.ip} · {item['channel']}-kanal",
                  item["codec"], item["resolution"], int(item["transcode"]),
                  body.node_id),

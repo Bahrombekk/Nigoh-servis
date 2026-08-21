@@ -178,13 +178,24 @@ def check_now(ip: str | None, port: int | None) -> bool | None:
         _statuses[pair] = ok
     with get_db() as db:
         # O'tish shu yerda yuz berdi — sweep endi ko'rmaydi, tarixga o'zimiz
-        # yozamiz.
+        # yozamiz VA SSE'ga e'lon qilamiz. E'lon qilinmasa yangi qo'shilgan
+        # yoki tahrirlangan kameraning birinchi holati abonentlarga
+        # yetmasdi (_enrich_new_camera aynan shu yo'ldan yuradi), ya'ni
+        # asosiy tizim keyingi sweep'gacha (60 s) eski holatni ko'rardi.
         if old is not None and old != ok:
+            state = "online" if ok else "offline"
+            at = datetime.now(timezone.utc).isoformat(timespec="seconds")
             for row in db.execute(
-                "SELECT slug FROM cameras WHERE ip = ? AND port = ?", pair
+                "SELECT id, external_id, slug FROM cameras "
+                "WHERE ip = ? AND port = ?", pair
             ).fetchall():
-                events.add(db, "online" if ok else "offline",
-                           ip=pair[0], port=pair[1], slug=row["slug"])
+                events.add(db, state, ip=pair[0], port=pair[1], slug=row["slug"])
+                bus.publish("state", {
+                    "id": row["id"],
+                    "external_id": row["external_id"] or "",
+                    "state": state,
+                    "at": at,
+                })
         if ok:
             db.execute(
                 "UPDATE cameras SET last_seen = ? WHERE ip = ? AND port = ?",
