@@ -375,15 +375,47 @@ document.addEventListener("keydown", (e) => {
 /* ═════════ video pleyer (devor uchun) ═════════ */
 const FAIL_MSG = "oqim ochilmadi";
 
-/* WebRTC bu muhitda ishlamasa (UDP yopiq), har ochilishda 3-6 soniya
+/* Watchdog: oqim "ulangan" bo'lib turib qotib qolishi eng ko'p uchraydigan
+   nosozlik, va uni na connectionState, na hls.js xatosi ko'rsatadi. Shuning
+   uchun harakat o'lchanadi — WebRTC'da dekodlangan kadrlar, HLS'da
+   currentTime. Uch tsikl (6 s) qimirlamasa oqim o'lik deb hisoblanadi. */
+const WATCH_MS = 2000;
+const WATCH_DEAD = 3;
+const MAX_RETRY = 3;          // ketma-ket shuncha urinishdan keyin taslim
+const RETRY_WINDOW = 60000;   // shuncha tinch turgandan keyin hisob yangilanadi
+const JITTER_MS = 200;        // WebRTC jitter buferi nishoni (0 EMAS — izohga qarang)
+
+/* WebRTC bu muhitda umuman ishlamasa (UDP yopiq), har ochilishda 3,5 soniya
    bekorga kutmaslik uchun yiqilish eslab qolinadi va keyingi ochilishlar
-   to'g'ridan HLS'dan boshlanadi. Har 10 daqiqada bir qayta uriniladi —
-   tarmoq ochilib qolsa tez yo'lga o'zi qaytadi. */
-let _rtcFailedAt = +localStorage.getItem("nigoh_rtc_fail") || 0;
-const RTC_RETRY_MS = 10 * 60 * 1000;
-function noteRtcFail() {
+   to'g'ridan HLS'dan boshlanadi.
+
+   Muhimi: BITTA kamera yiqilishi (kodek mos emas, kanal band) butun
+   panelni HLS'ga tushirmasligi kerak — shuning uchun bayroq faqat ikki
+   XIL kamera yiqilganda qo'yiladi va birinchi muvaffaqiyatda darhol
+   tozalanadi. sessionStorage: xotira yorliq bilan ketadi, kunlab
+   osilib qolmaydi. */
+const RTC_RETRY_MS = 5 * 60 * 1000;
+const RTC_FAIL_STREAK = 2;
+const _store = {
+  get(k) { try { return sessionStorage.getItem(k); } catch (e) { return null; } },
+  set(k, v) { try { sessionStorage.setItem(k, v); } catch (e) {} },
+  del(k) { try { sessionStorage.removeItem(k); } catch (e) {} },
+};
+let _rtcFailedAt = +_store.get("nigoh_rtc_fail") || 0;
+const _rtcFailIds = new Set();
+
+function noteRtcFail(camId) {
+  _rtcFailIds.add(camId);
+  if (_rtcFailIds.size < RTC_FAIL_STREAK) return;   // hali bitta kamera — muhit aybdor emas
   _rtcFailedAt = Date.now();
-  try { localStorage.setItem("nigoh_rtc_fail", _rtcFailedAt); } catch (e) {}
+  _store.set("nigoh_rtc_fail", _rtcFailedAt);
+}
+
+function noteRtcOk() {
+  _rtcFailIds.clear();
+  if (!_rtcFailedAt) return;
+  _rtcFailedAt = 0;
+  _store.del("nigoh_rtc_fail");
 }
 
 /* Oldindan isitish: diagnostika sahifasi ochilganda playlist bir marta
@@ -400,10 +432,14 @@ function warmStream(c) {
 }
 
 function createPlayer(video, msgEl) {
-  const p = {video, msgEl, hls: null, pc: null, token: 0, mode: ""};
+  const p = {video, msgEl, hls: null, pc: null, token: 0, mode: "",
+             cam: null, quality: "", watch: null, retries: 0, lastRetry: 0};
+
+  p.stopWatch = () => { if (p.watch) { clearInterval(p.watch); p.watch = null; } };
 
   p.stop = () => {
     p.token++;
+    p.stopWatch();
     if (p.hls) { p.hls.destroy(); p.hls = null; }
     if (p.pc) { p.pc.close(); p.pc = null; }
     video.pause();
@@ -412,8 +448,35 @@ function createPlayer(video, msgEl) {
     video.load();
   };
 
+  /* Watchdog yoki uzilish aniqlagan qayta ulanish. p.open() token'ni
+     oshiradi, shuning uchun eski oqimning kech kelgan javoblari o'z-o'zidan
+     e'tiborsiz qoladi. Kamera haqiqatan o'lik bo'lsa cheksiz aylanmaslik
+     uchun urinishlar sanaladi — muvaffaqiyatli "playing" hisobni nolga
+     qaytaradi. */
+  p.retry = (why) => {
+    if (!p.cam) return;
+    const now = Date.now();
+    // Bir daqiqa tinch ishlagandan keyingi uzilish — yangi voqea, eski
+    // hisob bilan bog'lanmasin (aks holda bir marta taslim bo'lgan
+    // pleyer soatlab qayta urinmay qoladi).
+    if (now - p.lastRetry > RETRY_WINDOW) p.retries = 0;
+    p.lastRetry = now;
+    if (p.retries >= MAX_RETRY) {
+      p.stop();
+      msgEl.textContent = FAIL_MSG;
+      console.log(`[pleyer] ${why} — ${MAX_RETRY} urinish natija bermadi, to'xtatildi`);
+      return;
+    }
+    p.retries++;
+    console.log(`[pleyer] ${why} — qayta ulanmoqda (${p.retries}/${MAX_RETRY})`);
+    p.open(p.cam, p.quality);
+    msgEl.textContent = "qayta ulanmoqda…";
+  };
+
   p.open = (cam, quality) => {
     p.stop();
+    p.cam = cam;
+    p.quality = quality || "";
     const my = ++p.token;
     const stale = () => p.token !== my;
     msgEl.textContent = "ulanmoqda…";
@@ -430,12 +493,15 @@ function createPlayer(video, msgEl) {
       .catch((e) => { if (!stale()) msgEl.textContent = e.message; });
 
     function attach(urls, staleFn, onFail) {
-      video.addEventListener("playing", () => { if (!staleFn()) msgEl.textContent = ""; },
-        {once: true});
+      video.addEventListener("playing", () => {
+        if (staleFn()) return;
+        msgEl.textContent = "";
+        p.retries = 0;              // tasvir keldi — urinishlar hisobi tozalanadi
+      }, {once: true});
       const rtcWorth = Date.now() - _rtcFailedAt > RTC_RETRY_MS;
       if (urls.webrtc_url && rtcWorth) {
         playWebRtc(urls.webrtc_url, staleFn).catch(() => {
-          noteRtcFail();
+          noteRtcFail(cam.id);
           if (staleFn()) return;
           playHls(urls.stream_url, staleFn, onFail);
         });
@@ -451,6 +517,12 @@ function createPlayer(video, msgEl) {
       pc.addTransceiver("video", {direction: "recvonly"});
       pc.ontrack = (e) => {
         if (staleFn()) return;
+        // Jitter buferi. Nolga majburlash (playoutDelayHint = 0) intuitiv,
+        // lekin xato: bufer doim nolda tursa uzoq tarmoqda kadr yetishmay
+        // tasvir uzuq-yuluq bo'ladi. Kichik, lekin nolmas nishon — RTP
+        // qayta yuborishga vaqt qoladi, kechikish esa sezilmaydi.
+        // Faqat Chromium'da bor; qolganida jimgina e'tiborsiz qoladi.
+        try { e.receiver.jitterBufferTarget = JITTER_MS; } catch (err) {}
         video.srcObject = e.streams[0];
         video.play().catch(() => {});
       };
@@ -486,6 +558,73 @@ function createPlayer(video, msgEl) {
             reject(new Error("WebRTC uzildi")); }
         });
       });
+
+      // Ulandi. Yuqoridagi Promise ALLAQACHON hal bo'lgan — undagi
+      // tinglovchining reject'i endi hech narsa qilmaydi, ya'ni bundan
+      // keyingi uzilishlar ishlov ko'rmay qolardi. Doimiy tinglovchi
+      // aynan shu bo'shliqni yopadi.
+      noteRtcOk();
+      let dropped = null;
+      pc.addEventListener("connectionstatechange", () => {
+        if (staleFn() || pc !== p.pc) return;
+        const state = pc.connectionState;
+        if (state === "connected") {
+          clearTimeout(dropped); dropped = null;
+          msgEl.textContent = "";
+          return;
+        }
+        if (state === "failed" || state === "closed") {
+          clearTimeout(dropped);
+          p.retry(`WebRTC ${state}`);
+          return;
+        }
+        if (state === "disconnected" && !dropped) {
+          // "disconnected" ko'pincha o'zi tiklanadi (ICE qayta tekshiruvi)
+          // va 10-15 soniya osilib turadi — shuncha kutmaymiz, 3 soniya.
+          msgEl.textContent = "aloqa uzildi…";
+          dropped = setTimeout(() => {
+            if (!staleFn() && pc === p.pc) p.retry("WebRTC disconnected");
+          }, 3000);
+        }
+      });
+      armWebRtcWatch(pc, staleFn);
+    }
+
+    /* Kadr hisoblagichi. MediaMTX sessiyani yopganda ham brauzer buni bir
+       necha soniya sezmaydi (bluenviron/mediamtx#4525, #2758), kamera
+       muzlaganda esa umuman sezmaydi — connectionState "connected" bo'lib
+       qolaveradi. framesDecoded yolg'on gapirmaydi. */
+    function armWebRtcWatch(pc, staleFn) {
+      let prev = -1, still = 0;
+      p.stopWatch();
+      p.watch = setInterval(() => {
+        if (staleFn() || pc !== p.pc) { p.stopWatch(); return; }
+        pc.getStats().then((stats) => {
+          let frames = null;
+          stats.forEach((s) => {
+            if (s.type === "inbound-rtp" && s.kind === "video" &&
+                typeof s.framesDecoded === "number") frames = s.framesDecoded;
+          });
+          if (frames === null) return;              // statistika hali yo'q
+          if (frames === prev) still++; else { still = 0; prev = frames; }
+          if (still >= WATCH_DEAD) { p.stopWatch(); p.retry("kadrlar to'xtadi"); }
+        }).catch(() => {});
+      }, WATCH_MS);
+    }
+
+    /* HLS uchun xuddi shu vazifa: o'ynayotgan videoda currentTime o'smasa
+       oqim qotgan. Boshlanish paytida (paused / readyState past) hisob
+       yuritilmaydi — aks holda har ochilish soxta uzilish bo'lardi. */
+    function armHlsWatch(staleFn) {
+      let prev = -1, still = 0;
+      p.stopWatch();
+      p.watch = setInterval(() => {
+        if (staleFn()) { p.stopWatch(); return; }
+        if (video.paused || video.readyState < 2) return;
+        const now = video.currentTime;
+        if (Math.abs(now - prev) < 0.05) still++; else { still = 0; prev = now; }
+        if (still >= WATCH_DEAD) { p.stopWatch(); p.retry("HLS qotdi"); }
+      }, WATCH_MS);
     }
 
     function playHls(url, staleFn, onFail) {
@@ -502,7 +641,11 @@ function createPlayer(video, msgEl) {
         // liveSync 2 segment (~4 s) — jonli chetiga 1 segment yaqin
         // turishdan barqarorroq: tarmoq titrasa ham qotmaydi. Bufer 12 s —
         // qisqa uzilishlarni yutib yuboradi.
-        const hls = new Hls({lowLatencyMode: true, maxBufferLength: 12,
+        // lowLatencyMode O'CHIQ: server oddiy fMP4 beradi (mediamtx.yml da
+        // hlsVariant: fmp4, LL-HLS emas), part'lar umuman yo'q — rejimni
+        // yoqish faqat keraksiz kutish va noto'g'ri jonli chekka hisobiga
+        // olib keladi.
+        const hls = new Hls({lowLatencyMode: false, maxBufferLength: 12,
           backBufferLength: 8, liveSyncDurationCount: 2,
           maxLiveSyncPlaybackRate: 1.1,
           manifestLoadingTimeOut: 25000,
@@ -532,19 +675,47 @@ function createPlayer(video, msgEl) {
         hls.loadSource(url);
         hls.attachMedia(video);
         video.play().catch((e) => console.log("[hls] play rad etildi:", e.name));
+        // Fatal xato — darhol taslim bo'lish EMAS. hls.js xatolarning
+        // ko'pini o'zi tiklay oladi; avval destroy() qilinsa bufer bir
+        // marta to'xtaganda ham oqim butunlay o'lardi. Faqat tiklash ikki
+        // marta natija bermagandan keyin boshqa yo'l (sub -> asosiy yoki
+        // xato xabari) qidiriladi.
+        let netFails = 0, mediaFails = 0;
         hls.on(Hls.Events.ERROR, (_, d) => {
-          if (staleFn() || !d.fatal) return;
+          if (staleFn()) return;
+          // Bufer to'xtashi fatal deb belgilanmaydi, lekin ekranni aynan
+          // shu qotiradi — yuklashni turtib qo'yamiz.
+          if (d.details === Hls.ErrorDetails.BUFFER_STALLED_ERROR) {
+            hls.startLoad();
+            return;
+          }
+          if (!d.fatal) return;
+          if (d.type === Hls.ErrorTypes.NETWORK_ERROR && ++netFails <= 2) {
+            console.log(`[hls] tarmoq xatosi ${netFails}/2 — qayta yuklanmoqda`);
+            hls.startLoad();
+            return;
+          }
+          if (d.type === Hls.ErrorTypes.MEDIA_ERROR && ++mediaFails <= 2) {
+            console.log(`[hls] media xatosi ${mediaFails}/2 — tiklanmoqda`);
+            if (mediaFails === 2) hls.swapAudioCodec();
+            hls.recoverMediaError();
+            return;
+          }
           hls.destroy(); p.hls = null;
+          p.stopWatch();
           if (onFail) onFail(); else msgEl.textContent = FAIL_MSG;
         });
+        armHlsWatch(staleFn);
       } else if (isHls && video.canPlayType("application/vnd.apple.mpegurl")) {
         video.src = url;
         video.onerror = () => { if (!staleFn()) msgEl.textContent = FAIL_MSG; };
         video.play().catch(() => {});
+        armHlsWatch(staleFn);        // Safari/native: qotishni o'zi aytmaydi
       } else {
         video.src = url;
         video.onerror = () => { if (!staleFn()) msgEl.textContent = FAIL_MSG; };
         video.play().catch(() => {});
+        armHlsWatch(staleFn);        // Safari/native: qotishni o'zi aytmaydi
       }
     }
   };
