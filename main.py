@@ -1,21 +1,28 @@
-"""Nigoh — kamera xaritasi va super-admin paneli.
+"""Nigoh — kamera servisi (IP kameralarni boshqarish va tarqatish).
 
 Ishga tushirish:
     pip install -r requirements.txt
+    set NIGOH_API_KEY=...        # MAJBURIY, usiz servis ko'tarilmaydi
     python main.py
-Keyin brauzerda:  http://localhost:8010
-(Portni o'zgartirish:  set PORT=8020  &&  python main.py)
+
+`.env` faylni bu skript O'QIMAYDI — uni faqat `docker compose` yuklaydi
+(python-dotenv bog'liqlik sifatida qo'shilmagan). Qo'lda ishga
+tushirganda muhit o'zgaruvchilarini o'zingiz bering.
+
+    set PORT=8020        boshqa port
+    set ENABLE_UI=1      diagnostika konsolini yoqish (standart: o'chiq)
 
 Admin parolini almashtirish:
     python main.py --admin-parol YangiParol123
 
 Kod tuzilishi:
     main.py            shu fayl — faqat kirish nuqtasi
-    api/               BACKEND: config, modellar, endpointlar
-    media/             MEDIAMTX QATLAMI: sync (konfiguratsiya/API), launcher
-    core/              UMUMIY: db, security, health, rtsp_probe, fast_start,
-                       snapshots, device_info, bus
-    debug-ui/          diagnostika sahifasi (ENABLE_UI=1 bo'lganda)
+    api/               BACKEND: config, modellar, endpointlar, analytics
+    media/             MEDIAMTX QATLAMI: sync, reconciler, launcher
+    core/              UMUMIY: db, security, health, snapshots, rtsp_probe,
+                       device_info, fast_start, bus, events, metrics, log
+    debug-ui/          diagnostika konsoli (ENABLE_UI=1 bo'lganda)
+    tests/             pytest (pytest.ini: testpaths=tests)
     scripts/           yordamchi skriptlar (qabul_test, import_mediamtx)
     stream_launcher.py MediaMTX chaqiradigan yupqa qobiq (ildizda turishi shart)
 """

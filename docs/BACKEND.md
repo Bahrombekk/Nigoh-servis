@@ -1,10 +1,8 @@
 # Nigoh — backendchi uchun qo'llanma
 
-> **Eslatma (2026-08-19):** loyiha mikroservisga o'tdi — bu hujjatning
-> ba'zi qismlari eskirgan: `PUBLIC_VIEW`, `operator` roli, `stats`,
-> Telegram olib tashlandi; kirish faqat `X-API-Key`; `app/` endi `api/`,
-> UI `ENABLE_UI=1` bilan ochiladi. Dolzarb integratsiya qo'llanmasi:
-> [INTEGRATION.md](INTEGRATION.md).
+> Bu hujjat **modelni** tushuntiradi: kim nimani yuritadi, video qanday
+> yetib boradi, nimani kuzatish kerak. Endpointlarning to'liq ro'yxati va
+> so'rov namunalari — [INTEGRATION.md](INTEGRATION.md) da.
 
 Bu hujjat kameralar bilan **hech qachon ishlamagan** backendchi uchun.
 Nigoh — tayyor kamera mikroservisi: siz uni o'z tizimingizga oddiy REST
@@ -39,12 +37,18 @@ Hammasi `/api/v1` ostida, resource-based:
 
 | Prefiks | Kirish | Nima bor |
 |---|---|---|
-| `/api/v1/cameras` | ochiq* | ro'yxat (bbox filtri), oqim manzili, surat |
-| `/api/v1/stats` | ochiq* | dashboard tarixi |
-| `/api/v1/auth` | — | login/logout/me; `/auth/stream` ni MediaMTX chaqiradi |
-| `/api/v1/admin` | faqat `admin` roli | kameralar CRUD, NVR import, skaner, foydalanuvchilar, tugunlar, holat, hodisalar |
+| `/api/v1/cameras` | X-API-Key | ro'yxat (bbox filtri), holat, oqim manzili, surat |
+| `/api/v1/streams` | X-API-Key | batch oqim chiptalari (128 tagacha) |
+| `/api/v1/events` | X-API-Key | SSE — holat o'zgarishlari jonli |
+| `/api/v1/devices` | X-API-Key | qurilma skani (SSE), pasport |
+| `/api/v1/admin` | X-API-Key | kameralar CRUD, NVR import, tugunlar, holat, hodisalar |
+| `/api/v1/admin/uptime`, `/admin/outages/hourly`, `/admin/cameras/{ref}/history` | X-API-Key | uzilishlar tahlili |
+| `/api/v1/metrics/open` | X-API-Key | pleyer o'lchagan ochilish vaqti |
+| `/api/v1/auth` | — | `/auth/stream` ni MediaMTX chaqiradi; login — faqat konsol uchun |
+| `/health` | ochiq | Docker HEALTHCHECK va monitoring |
 
-\* `PUBLIC_VIEW=0` bo'lsa ochiq bo'lim ham sessiya talab qiladi.
+**Rollar yo'q.** Kirish yagona: `X-API-Key`. Kim nimani ko'rishi
+kerakligini o'z tizimingiz hal qiladi.
 
 Eski `/api/...` manzillari ham ishlaydi (ichki test UI uchun), lekin yangi
 integratsiyada faqat `/api/v1` ni ishlating.
@@ -67,8 +71,8 @@ Foydalanuvchi ─▶ Sizning frontend ─▶ Sizning backend (o'z rollaringiz)
 Sozlash (Nigoh tomonda, `.env`):
 
 ```
-PUBLIC_VIEW=0            # Nigoh'ga to'g'ridan kirgan anonim hech narsa ko'rmaydi
-NIGOH_API_KEY=<uzun tasodifiy kalit>
+NIGOH_API_KEY=<uzun tasodifiy kalit>   # majburiy, usiz servis ko'tarilmaydi
+ENABLE_UI=0                            # ishlab chiqarishda konsol yopiq
 ```
 
 Sizning backend har so'rovga `X-API-Key: <kalit>` qo'shadi va **to'liq**
@@ -99,8 +103,11 @@ bazangizda** yuritishingiz mumkin — o'z jadvalingizda `nigoh_camera_id`
 ustuni bilan bog'lang. Nigoh'dagi `name/region/lat/lng` maydonlarini
 xohlasangiz ishlatasiz (u yerda ham bor), xohlamasangiz e'tiborsiz
 qoldirasiz — Nigoh uchun majburiysi ulanish ma'lumotlari (IP, parol,
-yo'l) xolos. Nigoh'ning ichki `operator` roli ham sizga kerak emas —
-rollarni o'zingizda yuritasiz.
+yo'l) xolos.
+
+Nigoh'ga o'z ID'ingiz bilan murojaat qilishingiz ham mumkin: kamera
+yaratishda `external_id` bering va keyin hamma joyda `12` o'rniga
+`ext:cam-toshkent-014` deb yozing — mapping jadval kerak emas.
 
 Namuna (sizning backend'ingizda):
 
@@ -125,20 +132,20 @@ urls = requests.get(f"{NIGOH}/cameras/{cam['id']}/stream", headers=H).json()
 
 ## Autentifikatsiya modeli
 
-- Sessiya **httponly cookie** (`nigoh_session`), 12 soat. Login:
-  `POST /api/v1/auth/login {"username", "password"}`.
-- Ikki rol: `admin` (hammasi) va `operator` (faqat biriktirilgan
-  hududlardagi kameralar — ro'yxat, oqim, surat avtomatik filtrlanadi).
-- Operatorlar `POST /api/v1/admin/users` bilan yaratiladi:
-  ```json
-  {"username": "op1", "password": "...", "role": "operator",
-   "regions": ["Toshkent", "Buxoro"]}
-  ```
-- Server-to-server chaqiriqlar uchun **API kalit** ishlating
-  (`NIGOH_API_KEY` + `X-API-Key` sarlavhasi, yuqoridagi bo'lim) — cookie
-  bilan o'ynashish shart emas. Nigoh'ning ichki `operator` roli — o'z rol
-  tizimi yo'q, Nigoh'ni to'g'ridan ishlatadigan holatlar uchun; alohida
-  backend qurayotgan bo'lsangiz unga ehtiyoj yo'q.
+Bitta mexanizm: har so'rovda `X-API-Key: <NIGOH_API_KEY>`. Kalit
+bo'lmasa yoki noto'g'ri bo'lsa — `401`. Kalit `.env` da turadi va
+**servis usiz umuman ishga tushmaydi** (fail fast: himoyasiz qolgandan
+ko'ra ko'tarilmagani yaxshi).
+
+Ikkita istisno:
+
+- `GET /health` — ochiq, ichida sir yo'q (Docker HEALTHCHECK uchun).
+- `POST /api/v1/auth/stream` — uni **MediaMTX** chaqiradi, mijoz emas:
+  har bir tomosha so'roviga chipta tekshiriladi.
+
+`/api/v1/auth/login` va foydalanuvchilar (`/admin/users`) faqat
+**diagnostika konsoli** uchun (`ENABLE_UI=1`). Ishlab chiqarishda konsol
+o'chiq bo'ladi va bu endpointlar umuman ro'yxatga olinmaydi.
 
 **Oqim xavfsizligi haqida bilib qo'ying:** video portlari (8888/8889) ham
 himoyalangan — MediaMTX har bir tomosha so'rovini Nigoh'dan tekshirtiradi.
@@ -172,9 +179,14 @@ beryaptimi, parol to'g'rimi, kodek/o'lcham/FPS qanday.
 | `GET /api/v1/admin/events` | media hodisalari: oqim muzladi/tiklandi, MediaMTX qayta ko'tarildi |
 | har kamerada `state` | `online / offline / stalled / unknown / disabled` |
 
-Webhook hozircha yo'q — hodisalarni `/admin/events` dan so'rab turing
-(polling) yoki Telegram ogohlantirishlarini yoqing (`.env` da
-`TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID`).
+Holat o'zgarishlarini **poll qilish shart emas**: `GET /api/v1/events`
+SSE ulanishi ularni o'zi yetkazadi (`online` / `offline` / `stalled`).
+Boshlang'ich holatni ulanishdan oldin `/cameras/status` dan oling.
+Webhook hozircha yo'q.
+
+Uzilishlar tarixini tahlil qilish uchun alohida bo'lim bor:
+`/admin/uptime?group_by=nvr` qaysi registrator aybdorligini,
+`/admin/outages/hourly` esa qaysi soatda buzilayotganini aytadi.
 
 Loglar: `/data/nigoh.log` — JSON satrlar
 (`{"ts", "level", "service", "event", ...}`), Loki/OpenSearch'ga
@@ -204,22 +216,32 @@ Nigoh'ni gateway ortiga oddiy upstream sifatida qo'ying:
 import requests
 
 s = requests.Session()
-s.post("http://nigoh:8010/api/v1/auth/login",
-       json={"username": "texnik", "password": "..."})
+s.headers["X-API-Key"] = "<kalit>"          # login/cookie kerak emas
+BASE = "http://nigoh:8010/api/v1"
 
 # kameralar ro'yxati
-cams = s.get("http://nigoh:8010/api/v1/cameras").json()["cameras"]
+cams = s.get(f"{BASE}/cameras").json()["cameras"]
 
 # salomatlik — o'z monitoringingizga qo'shing
-status = s.get("http://nigoh:8010/api/v1/admin/status").json()
+status = s.get(f"{BASE}/admin/status").json()
 assert status["mediamtx"], "video dvijok yiqilgan!"
+assert all(n["pending_paths"] == 0 for n in status["nodes"]),     "MediaMTX'da ortiqcha yo'llar qolgan — uni qayta ishga tushiring"
 ```
 
 ## Muhit o'zgaruvchilari
 
 To'liq ro'yxat izohlari bilan: **`.env.example`**. Eng muhimlari:
-`ADMIN_PAROL` (birinchi ishga tushishda), `PUBLIC_VIEW` (anonim ko'rish),
-`MEDIA_HOST` (server NAT/domen ortida bo'lsa).
+
+| O'zgaruvchi | Nima uchun |
+|---|---|
+| `NIGOH_API_KEY` | **majburiy** — usiz servis ko'tarilmaydi |
+| `ENABLE_UI` | diagnostika konsoli (standart: `0`, o'chiq) |
+| `MEDIA_HOST` / `MEDIA_BASE` | server NAT, domen yoki HTTPS proksi ortida bo'lsa |
+| `WEBRTC_HOSTS` | brauzerga yuboriladigan qo'shimcha manzillar (NAT/konteyner) |
+| `ADMIN_PAROL` | konsol admini (birinchi ishga tushishda) |
+
+`.env` faylni **Python o'qimaydi** — uni `docker compose` yuklaydi.
+Konteynersiz ishga tushirsangiz o'zgaruvchilarni o'zingiz bering.
 
 ## Nimalarga tegmaslik kerak
 

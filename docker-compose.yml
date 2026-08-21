@@ -1,7 +1,7 @@
 # Nigoh — kamera mikroservisi.
 #
 # Ishga tushirish (Linux server):
-#     cp .env.example .env      # ADMIN_PAROL ni to'ldiring
+#     cp .env.example .env      # NIGOH_API_KEY majburiy (usiz ko'tarilmaydi)
 #     docker compose up -d --build
 #
 # WebRTC (jonli video) UDP orqali ishlaydi — shu sababli host tarmog'i

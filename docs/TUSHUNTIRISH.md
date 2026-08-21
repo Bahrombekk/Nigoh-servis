@@ -1,11 +1,5 @@
 # Nigoh — tizimni 0 dan tushunish
 
-> **Eslatma (2026-08-19):** loyiha mikroservisga o'tdi — bu hujjatning
-> ba'zi qismlari eskirgan: `PUBLIC_VIEW`, `operator` roli, `stats`,
-> Telegram olib tashlandi; kirish faqat `X-API-Key`; `app/` endi `api/`,
-> UI `ENABLE_UI=1` bilan ochiladi. Dolzarb integratsiya qo'llanmasi:
-> [INTEGRATION.md](INTEGRATION.md).
-
 Bu hujjat loyiha egasi uchun: hech qanday tayyorgarliksiz o'qib, tizim
 nima, qanday ishlaydi va nega aynan shunday qurilganini to'liq tushunish
 uchun. Boshqa hujjatlar rol bo'yicha: [DEPLOY.md](DEPLOY.md) (serverga
@@ -15,8 +9,12 @@ qo'yish), [BACKEND.md](BACKEND.md), [FRONTEND.md](FRONTEND.md).
 
 ## 1. Nigoh nima?
 
-**Bir jumlada:** IP kameralarni bitta joyga yig'ib, xaritada ko'rsatib,
-jonli tasvirini brauzerda ochib beradigan servis.
+**Bir jumlada:** IP kameralarni bitta joyga yig'ib, ularning jonli
+tasvirini va salomatligini oddiy HTTP API orqali beradigan servis.
+
+Xarita, rollar va foydalanuvchi boshqaruvi **asosiy tizimda** — Nigoh
+ularni yuritmaydi. U media qatlami: "kamera ID sini ber — oqim manzili,
+holati va suratini qaytaraman".
 
 **Qanday muammoni hal qiladi:** IP kamera tasvirni **RTSP** degan eski
 protokolda beradi — brauzer uni tushunmaydi. Kameralar minglab bo'lishi,
@@ -104,7 +102,7 @@ Uchta muhim qoida:
 
 ## 4. Bitta bosishda nima bo'ladi (qadam-baqadam)
 
-Foydalanuvchi xaritada kamerani bosdi. Ichkarida shu ketma-ketlik yuradi:
+Foydalanuvchi kamerani bosdi. Ichkarida shu ketma-ketlik yuradi:
 
 ```
 1. Brauzer:  GET /api/v1/cameras/5/snapshot
@@ -112,8 +110,9 @@ Foydalanuvchi xaritada kamerani bosdi. Ichkarida shu ketma-ketlik yuradi:
 
 2. Brauzer:  GET /api/v1/cameras/5/stream
    Backend shu payt:
-   a) ruxsatni tekshiradi (operator bo'lsa — hududi to'g'rimi)
-   b) MediaMTX'da bu kamera yo'li borligiga ishonch hosil qiladi
+   a) X-API-Key ni tekshiradi (ruxsatlar asosiy tizimda hal qilingan)
+   b) MediaMTX'da bu kamera yo'lini yaratadi (~8 ms) — yo'llar
+      oldindan emas, aynan shu payt paydo bo'ladi
    c) kameraga "hozir keyframe yubor" buyrug'ini yuboradi (tezlik uchun)
    d) 1 soatlik imzoli CHIPTA yasab, manzillarga qo'shadi
    → javob: {"webrtc_url": "...?token=...", "stream_url": "...?token=..."}
@@ -137,15 +136,22 @@ har biri himoyalangan jarayon.
 nigoh-servis/
 ├── main.py              kirish nuqtasi: bootstrap + uvicorn (54 qator xolos)
 │
-├── app/                 BOSHQARUV QATLAMI (web)
+├── api/                 BOSHQARUV QATLAMI (web)
 │   ├── config.py        sozlamalar — hammasi muhit o'zgaruvchisidan
 │   ├── models.py        so'rov shakllari (Pydantic tekshiradi)
-│   ├── helpers.py       "tarjima": baza qatori → brauzer/MediaMTX ko'rinishi
+│   ├── deps.py          yagona kirish tekshiruvi (X-API-Key)
+│   ├── helpers.py       "tarjima": baza qatori → mijoz/MediaMTX ko'rinishi
 │   ├── bootstrap.py     birinchi ishga tushirish: baza, admin, fon xizmatlar
-│   ├── routes_auth.py   /auth — kirish/chiqish + MediaMTX chipta tekshiruvi
-│   ├── routes_public.py /cameras — xarita, oqim, surat (ochiq)
-│   ├── routes_stats.py  /stats — dashboard tarixi
-│   └── routes_admin.py  /admin — CRUD, NVR, skaner, foydalanuvchi, tugunlar
+│   ├── auth.py          /auth — MediaMTX chipta tekshiruvi + konsol login
+│   ├── cameras.py       /cameras — ro'yxat, holat, oqim, surat
+│   ├── streams.py       /streams — batch chiptalar (128 tagacha)
+│   ├── events.py        /events — SSE holat o'zgarishlari
+│   ├── devices.py       /devices — qurilma skani, pasport
+│   ├── nodes.py         /admin/nodes — MediaMTX tugunlari
+│   ├── analytics.py     /admin/uptime, outages/hourly, cameras/{}/history
+│   ├── metrics.py       /metrics/open — pleyer o'lchagan ochilish vaqti
+│   ├── health.py        /health — salomatlik + egress
+│   └── admin.py         /admin — CRUD, NVR, skaner, foydalanuvchilar
 │
 ├── media/               MEDIA QATLAMI (MediaMTX bilan aloqa)
 │   ├── sync.py          mediamtx.yml yaratish + jonli API (yo'l qo'shish/o'chirish)
@@ -158,12 +164,16 @@ nigoh-servis/
 │   ├── health.py        har 60 s: kameralar tirikmi (arzon TCP tekshiruv)
 │   ├── rtsp_probe.py    kamerani chuqur tekshirish (tarmoq→parol→kodek→o'lcham)
 │   ├── fast_start.py    surat (poster) + keyframe so'rash
-│   ├── stats.py         dashboard tarixi (30 kun saqlanadi)
-│   ├── events.py        hodisalar jurnali (muzladi/tiklandi/restart)
-│   ├── alerts.py        Telegram ogohlantirishlari (ixtiyoriy)
+│   ├── snapshots.py     suratlarni diskda pog'onali yangilash
+│   ├── device_info.py   qurilma pasporti (ONVIF / ISAPI)
+│   ├── bus.py           jarayon ichidagi pub/sub (SSE uchun)
+│   ├── events.py        hodisalar jurnali (uzildi/qaytdi/muzladi/restart)
+│   ├── metrics.py       ochilish vaqti namunalari (p50/p95)
 │   └── log.py           strukturali JSON log (nigoh.log)
 │
-├── static/              test UI — xarita, video devor, boshqaruv (namuna)
+├── debug-ui/            diagnostika konsoli (ENABLE_UI=1) + vendor/
+├── tests/               pytest — `pytest` (pytest.ini: testpaths=tests)
+├── deploy/              nginx konfiguratsiyasi va yangilash skripti
 ├── scripts/             yordamchi skriptlar
 ├── stream_launcher.py   MediaMTX chaqiradigan yupqa qobiq (ildizda turishi shart)
 │
@@ -174,7 +184,7 @@ nigoh-servis/
 └── data/                O'ZGARUVCHAN MA'LUMOT (volume) — pastda batafsil
 ```
 
-Qatlamlar ataylab ajratilgan: `app/` MediaMTX bilan faqat
+Qatlamlar ataylab ajratilgan: `api/` MediaMTX bilan faqat
 `from media import sync` orqali gaplashadi. Ertaga MediaMTX o'rniga boshqa
 dvijok qo'yilsa, faqat `media/` o'zgaradi.
 
@@ -182,7 +192,7 @@ dvijok qo'yilsa, faqat `media/` o'zgaradi.
 
 | Fayl | Nima | Yo'qolsa nima bo'ladi |
 |---|---|---|
-| `cameras.db` | SQLite: kameralar, foydalanuvchilar, hodisalar, statistika | hamma sozlama ketadi |
+| `cameras.db` | SQLite: kameralar, foydalanuvchilar, hodisalar | hamma sozlama ketadi |
 | `secret.key` | kamera parollarini ochadigan kalit | **parollar tiklanmaydi** — kameralarni qayta kiritish kerak |
 | `mediamtx.yml` | avto-yaratiladi, tegilmaydi | o'zi qayta yoziladi (zarari yo'q) |
 | `nigoh.log` | JSON hodisalar jurnali | tarix ketadi (zarari kam) |
@@ -197,12 +207,16 @@ dvijok qo'yilsa, faqat `media/` o'zgaradi.
 | Jadval | Nima saqlaydi |
 |---|---|
 | `cameras` | kameralar: nom, hudud, koordinata, IP, shifrlangan parol, kodek, o'lcham, qaysi tugun |
-| `admins` | foydalanuvchilar: login, parol hash'i, rol (`admin`/`operator`) |
-| `user_regions` | operator qaysi hududlarni ko'radi |
-| `sessions` | kirish sessiyalari (12 soat) |
+| `admins` | diagnostika konsoli foydalanuvchilari (hammasi `admin`) |
+| `sessions` | konsol sessiyalari (12 soat) |
 | `nodes` | MediaMTX tugunlari (bir nechta server bo'lsa) |
-| `events` | media hodisalari: oqim muzladi/tiklandi, restart (30 kun) |
-| `stats_region`, `stats_event` | dashboard tarixi: onlayn grafigi, uzilishlar (30 kun) |
+| `events` | hodisalar (30 kun): kamera uzildi/qaytdi, oqim muzladi/tiklandi, MediaMTX restart |
+| `schema_version` | bajarilgan migratsiyalar |
+
+`events` — bitta jadval, lekin uzilishlar tahlilining butun asosi:
+uptime, MTTR/MTBF, soatlik profil va 30 kunlik kalendar aynan shu
+yozuvlardan hisoblanadi (`api/analytics.py`). Alohida statistika
+jadvali yo'q — u ortiqcha edi.
 
 Sxema o'zi migratsiya bo'ladi: yangi versiya eski bazani ochsa,
 yetishmagan ustunlarni o'zi qo'shadi. "Bazani qo'lda yangilash" degan
@@ -216,10 +230,12 @@ tushuncha yo'q.
 `secret.key`). Ochiq holda faqat MediaMTX'ga RTSP manzil yasashda
 ishlatiladi; brauzerga **hech qachon** qaytmaydi (admin panelda ham `•••`).
 
-**2-qavat. Kirish.** Admin paroli qaytarilmas scrypt hash. Sessiya —
-12 soatlik httponly cookie. Rollar: `admin` hammasini boshqaradi,
-`operator` faqat biriktirilgan hududlarni ko'radi. `PUBLIC_VIEW=0`
-qilinsa anonim odam umuman hech narsa ko'rmaydi.
+**2-qavat. Kirish.** Bitta mexanizm: `X-API-Key`. Kalit bo'lmasa servis
+umuman ishga tushmaydi — himoyasiz qolgandan ko'ra ko'tarilmagani
+yaxshi. Rollar Nigoh'da yo'q: kim nimani ko'rishini asosiy tizim hal
+qiladi. Diagnostika konsoli (`ENABLE_UI=1`) uchun alohida login bor —
+parol qaytarilmas scrypt hash, sessiya 12 soatlik httponly cookie, va
+ketma-ket xato urinishlarda javob eksponensial sekinlashadi.
 
 **3-qavat. Oqim chiptalari.** Video portlari (8888/8889) ochiq bo'lsa ham
 himoyalangan: MediaMTX **har bir** tomosha so'rovini backend'dan
@@ -240,7 +256,7 @@ hech narsa qilinmaydi:
 
 **health (har 60 s).** Har kamera IP:portiga arzon TCP tekshiruv
 (millisekundlar, trafik nol). Natija: xaritada yashil/qizil nuqta,
-`last_seen`, Telegram xabari. Takror manzillar birlashtiriladi: 2000
+`last_seen` va SSE hodisasi. Takror manzillar birlashtiriladi: 2000
 kamera 40 NVR'da bo'lsa — 40 ta tekshiruv xolos.
 
 **reconciler (har 30 s).** Uch ish: (1) bazadagi kerakli holatni
@@ -291,18 +307,18 @@ Foydalanuvchi ─▶ Ularning frontend ─▶ Ularning backend (o'z rollari)
                      MediaMTX ──▶ video to'g'ridan brauzerga (chipta bilan)
 ```
 
-- Ularning backend'i `.env` dagi `NIGOH_API_KEY` bilan to'liq kiradi;
-  `PUBLIC_VIEW=0` qo'yiladi — Nigoh'ga to'g'ridan kirgan begona hech
-  narsa ko'rmaydi.
+- Ularning backend'i `.env` dagi `NIGOH_API_KEY` bilan to'liq kiradi.
+  Kalitsiz har qanday so'rov — `401`, ya'ni Nigoh'ga to'g'ridan kirgan
+  begona hech narsa ko'rmaydi.
 - Ruxsatni ular o'z rollarida tekshiradi, keyin Nigoh'dan **chiptali oqim
   manzilini** olib frontend'iga uzatadi. Video baribir MediaMTX'dan
   to'g'ridan boradi, lekin chiptasiz ochilmaydi — himoya Nigoh'da qoladi.
 - Kamera nomi/kategoriyasi/joyi kabi metadata'ni ular o'z bazasida
   yuritishi mumkin (`nigoh_camera_id` bog'lash bilan); Nigoh uchun
   majburiysi — ulanish ma'lumotlari (IP, parol, yo'l).
-- Nigoh'ning ichki `operator` roli va test UI bu rejimda ishlatilmaydi —
-  ular Nigoh'ni mustaqil ishlatish va birinchi kunlarda kamera kiritish
-  uchun turibdi.
+- Diagnostika konsoli bu rejimda o'chiq turadi (`ENABLE_UI=0`) — u
+  "backend'da xatomi yoki kamerada?" degan savol tug'ilganda yoqiladi.
+  Yoqilganda ham u alohida login talab qiladi.
 
 Batafsil, kod namunasi bilan: [BACKEND.md](BACKEND.md).
 

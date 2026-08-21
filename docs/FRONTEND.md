@@ -1,10 +1,8 @@
 # Nigoh — frontendchi uchun qo'llanma
 
-> **Eslatma (2026-08-19):** loyiha mikroservisga o'tdi — bu hujjatning
-> ba'zi qismlari eskirgan: `PUBLIC_VIEW`, `operator` roli, `stats`,
-> Telegram olib tashlandi; kirish faqat `X-API-Key`; `app/` endi `api/`,
-> UI `ENABLE_UI=1` bilan ochiladi. Dolzarb integratsiya qo'llanmasi:
-> [INTEGRATION.md](INTEGRATION.md).
+> Bu hujjat **video ko'rsatish** haqida: ro'yxatni chizish va oqimni
+> `<video>` elementiga ulash. Kamera qo'shish, holat kuzatish va
+> uzilishlar tahlili — [INTEGRATION.md](INTEGRATION.md) da.
 
 Bu hujjat kameralar bilan **hech qachon ishlamagan** frontendchi uchun
 yozilgan. Yaxshi yangilik: kamera protokollarini (RTSP va h.k.) umuman
@@ -12,8 +10,10 @@ bilishingiz shart emas — servis hammasini oddiy HTTP API ga aylantirib
 beradi. Sizning ishingiz: ro'yxatni chizish, video elementga ulash.
 
 Interaktiv API hujjati serverning o'zida: **`http://SERVER:8010/docs`**.
-Ishlayotgan namuna ham bor: `static/app.js` — xarita, player, video devor
-shu API bilan qurilgan, undan nusxa ko'chirish mumkin.
+Ishlayotgan namuna ham bor: `debug-ui/app.js` — pleyer, video devor va
+diagnostika shu API bilan qurilgan, undan nusxa ko'chirish mumkin
+(`createPlayer` funksiyasiga qarang: watchdog, HLS tiklash va qayta
+ulanish tayyor holda).
 
 ## Lug'at (2 daqiqa)
 
@@ -157,38 +157,40 @@ async function openCamera(video, cameraId) {
 (`pc.close()` / `hls.destroy()`) — aks holda ko'rinmas video tarmoq va
 protsessorni yeyveradi.
 
-## Kirish (login) va rollar
+## Kirish
 
-Sessiya **cookie'da** — hech qanday token saqlash kerak emas, faqat har
-`fetch`ga `credentials: "include"` qo'shing (bir domen bo'lsa u ham shart
-emas).
+Nigoh'da **rollar yo'q** — ular sizning tizimingizda. Servis bitta
+savolga javob beradi: so'rov ishonchli manbadanmi.
 
-```
-POST /api/v1/auth/login    {"username": "...", "password": "..."}
-  → {"username": "operator1", "role": "operator"}
-
-GET  /api/v1/auth/me
-  → {"authenticated": true, "username": "...", "role": "operator",
-     "regions": ["Toshkent"]}
-
-POST /api/v1/auth/logout
-```
-
-Rollar UI uchun nimani anglatadi:
-
-- **anonim** — sozlamaga bog'liq: ochiq rejimda hammasini ko'radi, yopiq
-  rejimda (`PUBLIC_VIEW=0`) ro'yxat bo'sh keladi → login sahifasiga yo'nalting.
-- **operator** — API o'zi faqat ruxsatli kameralarni beradi, siz hech
-  narsa filtrlashingiz shart emas. Begona kamera so'ralsa 403 keladi.
-- **admin** — hammasi + `/api/v1/admin/*` bo'limi (boshqaruv paneli).
-
-## Dashboard
+Shuning uchun brauzer Nigoh'ga **to'g'ridan murojaat qilmasligi kerak**:
+`NIGOH_API_KEY` server kaliti, uni frontend kodiga qo'ysangiz uni
+har kim ko'radi. To'g'ri sxema:
 
 ```
-GET /api/v1/stats/dashboard
+brauzer  →  sizning backend  →  Nigoh (X-API-Key)
+           (rollarni shu yerda tekshirasiz)
 ```
-24 soatlik onlayn grafigi, hudud kesimlari, so'nggi uzilishlar — bitta
-so'rovda. 15 soniyada bir yangilash yetarli.
+
+Sizning backend'ingiz `/api/v1/cameras/{id}/stream` ni chaqiradi va
+javobdagi manzilni brauzerga uzatadi. Manzildagi chipta 1 soat yashaydi
+va faqat o'sha bitta yo'lga tegishli.
+
+`/api/v1/auth/login` va `/auth/me` ham bor, lekin ular faqat
+**diagnostika konsoli** uchun (`ENABLE_UI=1`) — sizning ilovangizga
+kerak emas.
+
+## Uzilishlar tahlili
+
+Kamera sahifasida "bu kamera qanchalik ishonchli" degan savolga javob:
+
+```
+GET /api/v1/admin/cameras/{ref}/history?days=30&tz_offset_minutes=300
+```
+
+Bitta so'rovda: mavjudlik foizi, uzilishlar soni, MTTR/MTBF, soatlik
+profil, 30 kunlik kalendar va uzilishlar jurnali. Park bo'yicha
+reyting — `/api/v1/admin/uptime?group_by=region`. To'liq tavsif:
+[INTEGRATION.md](INTEGRATION.md).
 
 ## Ko'p uchraydigan xatolar
 
@@ -196,6 +198,8 @@ so'rovda. 15 soniyada bir yangilash yetarli.
 |---|---|
 | Video qora, xato yo'q | `muted` va `playsinline` atributlari qo'yilmagan — brauzer avto-ijroni bloklaydi |
 | 401 oqim so'rovida | Chipta eskirgan — `/stream` ni qayta chaqiring (saqlab qo'ygansiz, mumkin emas edi) |
-| 403 oqim so'rovida | Operator o'z hududidan tashqaridagi kamerani so'radi |
-| WebRTC ulanmayapti | 8889 (tcp) yoki 8189 (udp) port yopiq — HLS zaxirasi baribir ishlashi kerak |
+| 401 hamma so'rovda | `X-API-Key` yuborilmagan yoki noto'g'ri |
+| 404 `/snapshot` da | Kamera offline — eski kadr jonli bo'lib ko'rinmasin deb berilmaydi (`?stale=1` bilan olinadi) |
+| WebRTC ulanmayapti | 8889 (tcp) yoki 8189 (**udp va tcp**) yopiq — HLS zaxirasi baribir ishlashi kerak |
 | Firefox'da H.265 kamera sekin ochiladi | Normal: server uni H.264 ga o'girib beradi, bu 1–2 s qo'shadi |
+| Video ochildi-yu keyin qotdi | `connectionState` buni ko'rsatmaydi — `getStats().framesDecoded` ni sanang (namuna: `debug-ui/app.js`) |

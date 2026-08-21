@@ -29,7 +29,7 @@ curl http://localhost:8010/health
 curl -H "X-API-Key: SIZNING_KALIT" http://localhost:8010/api/v1/cameras
 ```
 
-Barcha API `X-API-Key` bilan ishlaydi. Debug UI standart holda o'chiq —
+Barcha API `X-API-Key` bilan ishlaydi. Diagnostika konsoli standart holda o'chiq —
 diagnostika kerak bo'lsa `.env` ga `ENABLE_UI=1` qo'ying, shunda
 `http://SERVER_IP:8010` sahifasi ochiladi (login: `.env` dagi
 `ADMIN_PAROL`; berilmagan bo'lsa parol `docker logs nigoh` chiqishida
@@ -42,7 +42,7 @@ oching:
 
 | Port | Protokol | Kimga | Nima |
 |---|---|---|---|
-| 8010 | tcp | foydalanuvchilar | API + test UI |
+| 8010 | tcp | foydalanuvchilar | API (va ENABLE_UI=1 bo'lsa konsol) |
 | 8888 | tcp | foydalanuvchilar | HLS video |
 | 8889 | tcp | foydalanuvchilar | WebRTC signal (WHEP) |
 | 8189 | **udp va tcp** | foydalanuvchilar | WebRTC media (ICE) |
@@ -159,7 +159,10 @@ tugun kameralarini H.264 rejimida tuting.
 apt install python3.12-venv ffmpeg
 python3 -m venv venv && venv/bin/pip install -r requirements.txt
 # MediaMTX binarini mediamtx/ papkasiga yuklab qo'ying (linux_amd64)
-NIGOH_DATA=/var/lib/nigoh PORT=8010 venv/bin/python main.py
+# NIGOH_API_KEY majburiy: `.env` ni bu yo'lda hech kim o'qimaydi.
+export NIGOH_API_KEY=$(openssl rand -hex 32)
+export NIGOH_DATA=/var/lib/nigoh PORT=8010
+venv/bin/python main.py
 ```
 
 systemd unit namunasi:
@@ -172,6 +175,9 @@ After=network-online.target
 [Service]
 WorkingDirectory=/opt/nigoh
 Environment=NIGOH_DATA=/var/lib/nigoh
+# `.env` ni systemd ham, Python ham o'zi o'qimaydi — kalitni shu yerda
+# bering. EnvironmentFile ishlatsangiz fayl huquqi 600 bo'lsin.
+EnvironmentFile=/etc/nigoh.env
 ExecStart=/opt/nigoh/venv/bin/python main.py
 Restart=always
 User=nigoh
@@ -189,3 +195,6 @@ WantedBy=multi-user.target
 | Kamera qizil (offline) | serverdan kameraga tarmoq bormi: `POST /api/v1/admin/probe` sabab-bosqichini aytadi (tarmoq/parol/yo'l) |
 | Oqim "stalled" | kamera portga javob beradi, lekin tasvir bermayapti — registratorda kanalni tekshiring |
 | Hodisalar tarixi | `GET /api/v1/admin/events`, JSON log: `data/nigoh.log` |
+| Kamera sekin ochilmoqda | `GET /health` → `open_ms`: `stream_ms` katta bo'lsa MediaMTX/tugun, `frame_ms` katta bo'lsa registratordagi `I Frame Interval` |
+| Hamma kamera sekin ochilyapti | `GET /api/v1/admin/status` → `nodes[].pending_paths` noldan katta bo'lsa MediaMTX'da eski yo'llar qolgan: uni bir marta qayta ishga tushiring |
+| WebRTC o'rniga doim HLS | 8189 **tcp** ham ochiqmi (ICE zaxirasi); `MEDIA_HOST`/`WEBRTC_HOSTS` to'g'rimi |
