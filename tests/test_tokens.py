@@ -58,3 +58,36 @@ def test_yondosh_yolga_otmaydi():
     assert not security.stream_access_ok("2.2.2.1", "kamera_10", token)
     assert not security.stream_access_ok("2.2.2.2", "kamera_2", token)
     assert not security.stream_access_ok("2.2.2.3", "boshqa/kamera_1", token)
+
+
+def test_sessiya_ichki_resursni_ham_qoplaydi():
+    """401 sikli: sessiya to'liq yo'l bo'yicha saqlanardi.
+
+    Brauzer tokenni faqat birinchi so'rovga qo'shadi; segmentlar
+    tokensiz keladi va ular uchun (ip, yo'l) sessiyasi bor. Lekin kalit
+    TO'LIQ yo'l bo'yicha olinardi, ya'ni "kamera_1" uchun ochilgan
+    sessiya "kamera_1/video1_seg9.mp4" ni qoplamasdi. Ishlab
+    chiqarishda o'lchandi (negoh.das-uty.uz, auth endpointi):
+
+        yo'l "kamera_1"                    tokensiz -> 200
+        yo'l "kamera_1/video1_stream.m3u8" tokensiz -> 401
+        yo'l "kamera_1/video1_seg9.mp4"    tokensiz -> 401
+    """
+    token = security.stream_token("kamera_9")
+    assert security.stream_access_ok("3.3.3.1", "kamera_9", token)
+    # endi tokensiz ichki resurslar ham o'sha sessiya orqali o'tadi
+    assert security.stream_access_ok("3.3.3.1", "kamera_9/video1_stream.m3u8", "")
+    assert security.stream_access_ok("3.3.3.1", "kamera_9/video1_seg9.mp4", "")
+    # sessiya boshqa IP ga ham, boshqa oqimga ham tarqalmaydi
+    assert not security.stream_access_ok("3.3.3.2", "kamera_9/video1_seg9.mp4", "")
+    assert not security.stream_access_ok("3.3.3.1", "kamera_90/video1_seg9.mp4", "")
+
+
+def test_sessiya_ichki_resursdan_ochilsa_ham_ishlaydi():
+    """Birinchi ruxsatli so'rov variant playlisti bo'lishi ham mumkin —
+    o'shanda ham sessiya oqim yo'li bo'yicha ochilishi kerak."""
+    token = security.stream_token("kamera_8")
+    assert security.stream_access_ok("4.4.4.1", "kamera_8/video1_stream.m3u8", token)
+    assert security.stream_access_ok("4.4.4.1", "kamera_8/video1_seg1.mp4", "")
+    assert security.stream_access_ok("4.4.4.1", "kamera_8", "")
+

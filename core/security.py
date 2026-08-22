@@ -110,14 +110,38 @@ def stream_token(path: str) -> str:
     return f"{expires}.{_stream_sig(path, expires)}"
 
 
+def _session_key(ip: str, path: str) -> tuple[str, str]:
+    """Sessiya kaliti — HAR DOIM oqim yo'lining o'zi bo'yicha.
+
+    MediaMTX ichki resurslarni ham so'raydi ("kamera_1/video1_seg7.mp4").
+    Ilgari kalit to'liq yo'l bo'yicha olinardi va shu sababli sessiya
+    ishlamasdi: "kamera_1" uchun ochilgan sessiya "kamera_1/..." ni
+    qoplamaydi. Natijada tokensiz kelgan segment so'rovlari 401 olardi —
+    ishlab chiqarishda o'lchandi:
+
+        yo'l "kamera_1"                    tokensiz -> 200
+        yo'l "kamera_1/video1_stream.m3u8" tokensiz -> 401
+        yo'l "kamera_1/video1_seg9.mp4"    tokensiz -> 401
+
+    Imzo tekshiruvi (`_sig_matches`) allaqachon asosiy yo'lga
+    normallashtirilgan; sessiya ham xuddi shunday bo'lishi shart, aks
+    holda mexanizmning butun ma'nosi yo'qoladi (u aynan tokensiz
+    segmentlar uchun bor).
+    """
+    base = path.split("/", 1)[0]
+    # Bo'sh baza (masalan "/kamera_1") bo'lsa to'liq yo'l ishlatiladi —
+    # aks holda barcha oqim bitta ("", ip) kalitiga tushib qolardi.
+    return (ip, base or path)
+
+
 def stream_access_ok(ip: str, path: str, token: str) -> bool:
     """MediaMTX'dan kelgan o'qish so'rovini tekshiradi.
 
-    To'g'ri token — ruxsat + (ip, yo'l) sessiyasi. Tokensiz so'rov faqat
-    tirik sessiya bo'lsa o'tadi (HLS segmentlari, WHEP davomi).
+    To'g'ri token — ruxsat + (ip, oqim yo'li) sessiyasi. Tokensiz so'rov
+    faqat tirik sessiya bo'lsa o'tadi (HLS segmentlari, WHEP davomi).
     """
     now = time.time()
-    key = (ip, path)
+    key = _session_key(ip, path)
     if token:
         expires_s, _, sig = token.partition(".")
         try:
