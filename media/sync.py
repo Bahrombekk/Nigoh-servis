@@ -263,6 +263,10 @@ MANAGED_LIMIT = 2048      # bir vaqtda MediaMTX'da turadigan yo'l chegarasi
 _managed: dict[str, float] = {}
 _managed_lock = threading.Lock()
 
+# Yo'l -> oxirgi bytesSent. Ikki tsikl orasidagi o'sish "kimdir ko'ryapti"
+# degani. HLS tomoshabinini boshqa yo'l bilan aniqlab bo'lmaydi.
+_sent: dict[str, int] = {}
+
 
 def note_managed(slug: str) -> None:
     """Yo'l ishlatildi — reconciler uni o'chirmasin."""
@@ -669,13 +673,36 @@ def push_to_api(cameras: list[dict], api_base: str | None = None,
 
     # Ayni damda tomosha qilinayotgan yo'l o'chirilmasin. `_managed` odatda
     # buni qoplaydi, lekin backend qayta ishga tushsa u bo'sh bo'ladi —
-    # o'shanda tirik oqim uzilib qolardi. MediaMTX'ning o'z runtime
-    # ro'yxati yolg'on gapirmaydi: ready yoki o'quvchisi bor yo'l band.
+    # o'shanda tirik oqim uzilib qolardi.
+    #
+    # Ikki xil "band" bor va ularni chalkashtirmaslik kerak:
+    #
+    #   busy    — yo'l tirik (ready yoki o'quvchisi bor). Buni O'CHIRMAYMIZ.
+    #   serving — chiqish baytlari o'syapti, ya'ni AYNI DAMDA kimdir
+    #             ko'ryapti. Buni qayta SOZLAMAYMIZ.
+    #
+    # Nega ikkita: HLS tomoshabini MediaMTX'ning `readers` ro'yxatida
+    # KO'RINMAYDI (har segment alohida HTTP so'rov, doimiy ulanish emas) —
+    # o'lchov: readers=0, bytesSent=1,2 MB. Issiq yo'l esa doim ready
+    # bo'lgani uchun `ready` ham "ko'rilyapti" degani emas.
     busy: set[str] = set()
+    serving: set[str] = set()
     active = list_active_paths(api_base) or {}
     for name, item in active.items():
         if item.get("ready") or item.get("readers"):
             busy.add(name)
+        sent = int(item.get("bytesSent") or 0)
+        prev = _sent.get(name)
+        _sent[name] = sent
+        if item.get("readers") or (prev is not None and sent > prev):
+            serving.add(name)
+            # Ko'rilayotgan sub yo'l issiq bo'lib turaversin: aks holda
+            # 10 daqiqadan keyin issiqlik so'nadi, konfiguratsiya o'zgaradi
+            # va MediaMTX manbani qayta ochadi — tomosha uziladi.
+            if name.endswith(SUB_SUFFIX):
+                mark_warm(name)
+    for name in [n for n in _sent if n not in active]:
+        _sent.pop(name, None)                 # yopilgan yo'l hisobi kerak emas
 
     ops: list[tuple[str, str, dict | None]] = []
     for name, conf in wanted.items():
@@ -688,7 +715,7 @@ def push_to_api(cameras: list[dict], api_base: str | None = None,
             # tomoshabin uchun bu videoning uzilishi bo'lib ko'rinadi.
             # O'zgarish yo'qolmaydi: yo'l bo'shashi bilan keyingi tsiklda
             # qo'llanadi.
-            if name in busy:
+            if name in serving:
                 continue
             ops.append(("PATCH", f"/v3/config/paths/patch/{name}", conf))
     for name in existing:

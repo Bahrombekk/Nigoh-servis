@@ -173,12 +173,6 @@ def _check_stalls(node: dict) -> None:
     with _lock:
         for name, item in active.items():
             key = (node_id, name)
-            # Tomoshabini bor sub yo'l issiq bo'lib turaversin. Issiqlik
-            # 10 daqiqada so'nadi va o'shanda sourceOnDemand qayta
-            # yoqiladi — ya'ni ko'rib o'tirgan odamning oqimi uziladi.
-            # Ko'rish davom etayotganini aynan shu ro'yxat bilamiz.
-            if item.get("readers") and name.endswith(sync.SUB_SUFFIX):
-                sync.mark_warm(name)
             if not item.get("ready"):
                 continue                          # hali ulanmagan — muzlash emas
             got = int(item.get("bytesReceived") or 0)

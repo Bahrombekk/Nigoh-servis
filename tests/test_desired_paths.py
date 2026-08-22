@@ -151,3 +151,78 @@ def test_bosh_yol_qayta_sozlanaveradi(monkeypatch):
     monkeypatch.setattr(sync, "_api", fake_api)
     sync.push_to_api([cam])
     assert any(c[0] == "PATCH" and c[1].endswith("/k1") for c in calls),         "bo'sh yo'l yangilanishi kerak"
+
+
+def test_hls_tomoshabini_baytlar_bilan_aniqlanadi(monkeypatch):
+    """HLS tomoshabini MediaMTX'ning `readers` ro'yxatida KO'RINMAYDI —
+    har segment alohida HTTP so'rov, doimiy ulanish emas. Ishlab
+    chiqarishda o'lchandi: readers=0, bytesSent=1,2 MB.
+
+    Shu sababli "kimdir ko'ryapti" chiqish baytlarining o'sishidan
+    aniqlanadi. Aks holda tomosha o'rtasida yo'l qayta sozilib, video
+    uzilardi.
+    """
+    from media import sync
+    sync._sent.clear()
+    cam = _cam(always_on=True)
+    sent = {"v": 1000}
+    calls = []
+
+    def fake_api(method, path, payload=None, api_base=None):
+        if path.startswith("/v3/config/paths/list"):
+            return {"pageCount": 1, "items": [
+                {"name": "k1", "sourceOnDemand": True},
+                {"name": f"~^[a-z0-9_]+{TRANSCODE_SUFFIX}$"}]}
+        if path.startswith("/v3/paths/list"):
+            return {"pageCount": 1, "items": [
+                {"name": "k1", "ready": True, "readers": [],
+                 "bytesSent": sent["v"]}]}
+        calls.append((method, path))
+        return {}
+
+    monkeypatch.setattr(sync, "_api", fake_api)
+    try:
+        # 1-tsikl: taqqoslash uchun tarix yo'q -> hali "ko'rilyapti" emas
+        sync.push_to_api([cam])
+        calls.clear()
+        # 2-tsikl: baytlar o'sdi -> kimdir ko'ryapti -> tegilmaydi
+        sent["v"] = 250000
+        sync.push_to_api([cam])
+        assert not [c for c in calls if c[0] == "PATCH" and c[1].endswith("/k1")], \
+            "ko'rilayotgan yo'l qayta sozildi — video uzilardi"
+        # 3-tsikl: baytlar qimirlamadi -> hech kim ko'rmayapti -> yangilanadi
+        calls.clear()
+        sync.push_to_api([cam])
+        assert [c for c in calls if c[0] == "PATCH" and c[1].endswith("/k1")], \
+            "bo'sh yo'l yangilanishi kerak"
+    finally:
+        sync._sent.clear()
+
+
+def test_korilayotgan_sub_yol_issiq_bolib_qoladi(monkeypatch):
+    """Issiqlik 10 daqiqada so'nadi. Tomosha davom etayotgan bo'lsa u
+    yangilanishi kerak, aks holda sourceOnDemand qayta yoqilib manba
+    qayta ochiladi."""
+    from media import sync
+    sync._sent.clear(); sync._warm.clear()
+    cam = _cam(sub_path="/s2", always_on=True)
+    sent = {"v": 500}
+
+    def fake_api(method, path, payload=None, api_base=None):
+        if path.startswith("/v3/config/paths/list"):
+            return {"pageCount": 1, "items": []}
+        if path.startswith("/v3/paths/list"):
+            return {"pageCount": 1, "items": [
+                {"name": "k1" + SUB_SUFFIX, "ready": True, "readers": [],
+                 "bytesSent": sent["v"]}]}
+        return {}
+
+    monkeypatch.setattr(sync, "_api", fake_api)
+    try:
+        sync.push_to_api([cam])
+        assert not sync.is_warm("k1" + SUB_SUFFIX)
+        sent["v"] = 90000                      # tomosha davom etyapti
+        sync.push_to_api([cam])
+        assert sync.is_warm("k1" + SUB_SUFFIX), "ko'rilayotgan sub yo'l issiq qolishi kerak"
+    finally:
+        sync._sent.clear(); sync._warm.clear()
