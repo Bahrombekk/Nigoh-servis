@@ -32,6 +32,8 @@ ap = argparse.ArgumentParser()
 ap.add_argument("camera_id", type=int)
 ap.add_argument("--sekund", type=int, default=90)
 ap.add_argument("--sub", action="store_true", help="asosiy emas, sub oqim")
+ap.add_argument("--yol", default="", help="bazadagisi emas, shu RTSP yo'lni sinash "
+                                          "(masalan /LiveMedia/ch1/Media2)")
 a = ap.parse_args()
 
 with get_db() as db:
@@ -41,9 +43,9 @@ with get_db() as db:
 if row is None:
     sys.exit(f"Kamera {a.camera_id} topilmadi")
 
-path = (row["sub_path"] if a.sub else row["rtsp_path"]) or ""
+path = a.yol or (row["sub_path"] if a.sub else row["rtsp_path"]) or ""
 if not path:
-    sys.exit("Bu kamerada sub yo'l yo'q — --sub siz ishlating")
+    sys.exit("Bu kamerada sub yo'l yo'q — --sub o'rniga --yol bilan bering")
 
 url = build_rtsp_url(row["ip"], row["port"] or 554, path,
                      row["username"] or "", security.decrypt(row["password_enc"]))
@@ -76,6 +78,9 @@ if elapsed >= a.sekund - 3 and proc.returncode == 0:
     print("  XULOSA: kamera ulanishni uzmadi. Muammo kamerada EMAS —")
     print("          MediaMTX yoki sozlama tomonida qidirish kerak.")
 else:
-    print("  XULOSA: ulanish vaqtidan oldin uzildi. Aybdor kamera/registrator:")
-    print("          audio (G711) ni o'chirib, bir vaqtdagi RTSP ulanishlar")
-    print("          chegarasini oshirib, sub-oqimda qayta sinang.")
+    print("  XULOSA: ulanish vaqtidan oldin uzildi — aybdor kamera/registrator.")
+    print("          Sinab ko'ring: --yol bilan sub oqim (Media2), qurilmada")
+    print("          audio (G711) ni o'chirish, RTSP ulanishlar chegarasini")
+    print("          oshirish. Nigoh tomonda yumshatish: kamerani")
+    print("          \"doim tayyor\" qiling — MediaMTX uzilgan manbani")
+    print("          o'zi va darhol qayta ulaydi.")
