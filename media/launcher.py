@@ -18,7 +18,8 @@ import time
 from core import security
 from core.db import get_db
 
-from .sync import RTSP_PORT, ffmpeg_path, has_nvenc, transcode_args
+from .sync import (RTSP_PORT, SUB_SUFFIX, ffmpeg_path, has_nvenc,
+                   transcode_args)
 
 # Xom oqimni MediaMTX o'zi tortadi (FFmpeg kerak emas). Bu skript faqat
 # o'girish uchun chaqiriladi: `<kamera>_h264` so'ralganda.
@@ -62,9 +63,15 @@ def main() -> int:
         return 7
     lookup = slug[: -len(TRANSCODE_SUFFIX)]
 
-    row = load_camera(lookup)
+    # `<kamera>_sub_h264` — sub-oqimni o'girish. Bazada bunday slug yo'q
+    # (sub asosiy kameraning ikkinchi oqimi), shuning uchun kamera asosiy
+    # slug bo'yicha qidiriladi. Manba yo'li o'zgarmaydi: MediaMTX'da
+    # `<kamera>_sub` yo'li allaqachon ro'yxatdan o'tgan.
+    db_slug = lookup[: -len(SUB_SUFFIX)] if lookup.endswith(SUB_SUFFIX) else lookup
+
+    row = load_camera(db_slug)
     if row is None:
-        print(f"Kamera topilmadi: {lookup}", file=sys.stderr)
+        print(f"Kamera topilmadi: {db_slug}", file=sys.stderr)
         return 3
     if not row["enabled"]:
         print(f"Kamera o'chirilgan: {slug}", file=sys.stderr)

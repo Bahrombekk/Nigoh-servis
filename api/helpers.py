@@ -113,7 +113,15 @@ def stream_urls(row, request: Request, hevc_ok: bool = False,
     slug = row["slug"]
     if quality == "sub" and row["sub_path"]:
         slug += mediamtx_sync.SUB_SUFFIX
-        mode = "sub"                      # sub odatda H.264 — o'girish kerak emas
+        mode = "sub"
+        # Sub-oqim odatda H.264 bo'ladi — lekin har doim emas: H.265
+        # kameraning ikkinchi oqimi ham H.265 chiqishi mumkin (o'lchovda
+        # shunday kameralar uchradi). Xom H.265 brauzerga berilsa tasvir
+        # chiqmaydi yoki birinchi kadrda qotib qoladi, shuning uchun sub
+        # ham asosiy oqim bilan bir xil qoidada o'giriladi. `mode` "sub"
+        # bo'lib qolaveradi: ishlamasa pleyer avvalgidek asosiyga o'tadi.
+        if row["transcode"] and not hevc_ok:
+            slug += mediamtx_sync.TRANSCODE_SUFFIX
     elif row["transcode"] and (not hevc_ok or row["always_on"]):
         slug += mediamtx_sync.TRANSCODE_SUFFIX
         mode = "transcode"
