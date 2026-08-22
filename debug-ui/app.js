@@ -462,7 +462,17 @@ const MAX_RETRY = 3;          // ketma-ket shuncha urinishdan keyin taslim
 const RETRY_WINDOW = 60000;   // shuncha tinch turgandan keyin hisob yangilanadi
 const JITTER_MS = 200;        // WebRTC jitter buferi nishoni (0 EMAS — izohga qarang)
 const RENEW_MARGIN = 5 * 60000;   // chipta muddatidan shuncha oldin yangilanadi
-const MAX_REOPEN = 3;             // manzil yangilash urinishlari chegarasi
+/* Manzil eskirganda (401/404) qayta ochish. Chegara YO'Q — kutish
+   oralig'i o'sadi. Sabab: ba'zi kameralar RTSP ulanishini muntazam
+   uzadi (o'lchov: bitta qurilma 22-50 soniyada), MediaMTX manbani
+   qayta ulaguncha esa HLS 401/404 qaytaradi. Uch marta urinib taslim
+   bo'lgan pleyer o'sha kamerani BUTUNLAY yo'qotardi — tomoshabin qora
+   katak ko'rardi va sahifani qayta yuklashi kerak edi.
+
+   Endi pleyer kutadi va qaytadi: 1s, 2s, 4s, 8s, 16s, keyin har 30s.
+   Eng yomon holatda daqiqasiga ikki so'rov — bu hech narsa emas. */
+const REOPEN_BACKOFF = [1000, 2000, 4000, 8000, 16000];
+const REOPEN_MAX_WAIT = 30000;
 
 /* WebRTC bu muhitda umuman ishlamasa (UDP yopiq), har ochilishda 3,5 soniya
    bekorga kutmaslik uchun yiqilish eslab qolinadi va keyingi ochilishlar
@@ -513,7 +523,7 @@ function warmStream(c) {
 function createPlayer(video, msgEl) {
   const p = {video, msgEl, hls: null, pc: null, token: 0, mode: "",
              cam: null, quality: "", watch: null, retries: 0, lastRetry: 0,
-             renew: null, reopens: 0};
+             renew: null, reopens: 0, reopenTimer: null};
 
   p.stopWatch = () => { if (p.watch) { clearInterval(p.watch); p.watch = null; } };
   p.stopRenew = () => { if (p.renew) { clearTimeout(p.renew); p.renew = null; } };
@@ -523,18 +533,25 @@ function createPlayer(video, msgEl) {
      "taslim bo'lish" chegarasiga yaqinlashtirmaydi. */
   p.reopen = (why) => {
     if (!p.cam) return;
-    // Cheksiz aylanishdan himoya: /stream har safar yangi manzil bersa-yu
-    // u baribir yaroqsiz bo'lsa (masalan MediaMTX ko'tarilmayapti), pleyer
-    // abadiy aylanib qolmasin. Tasvir kelishi bilan hisob nolga qaytadi.
-    if (p.reopens >= MAX_REOPEN) {
-      p.stop();
-      msgEl.textContent = FAIL_MSG;
-      console.log(`[pleyer] ${why} — ${MAX_REOPEN} marta qayta ochildi, to'xtatildi`);
-      return;
-    }
+    const wait = REOPEN_BACKOFF[Math.min(p.reopens, REOPEN_BACKOFF.length - 1)]
+                 || REOPEN_MAX_WAIT;
     p.reopens++;
-    console.log(`[pleyer] ${why} — oqim qayta ochilmoqda (${p.reopens}/${MAX_REOPEN})`);
-    p.open(p.cam, p.quality);
+    const sec = Math.round(wait / 1000);
+    console.log(`[pleyer] ${why} — ${sec} s dan keyin qayta ochiladi `
+                + `(urinish ${p.reopens})`);
+    msgEl.textContent = p.reopens <= 2 ? "qayta ulanmoqda…"
+                        : `qayta ulanmoqda… (${p.reopens})`;
+    // Eski oqim tozalanadi, lekin token oshirilmaydi — kutish davomida
+    // kelgan kech javoblar o'z-o'zidan e'tiborsiz qoladi.
+    if (p.hls) { p.hls.destroy(); p.hls = null; }
+    if (p.pc) { p.pc.close(); p.pc = null; }
+    p.stopWatch();
+    p.stopRenew();
+    if (p.reopenTimer) clearTimeout(p.reopenTimer);
+    p.reopenTimer = setTimeout(() => {
+      p.reopenTimer = null;
+      if (p.cam) p.open(p.cam, p.quality);
+    }, wait);
   };
 
   /* Chipta bir soat yashaydi, HLS esa playlistni cheksiz so'rayveradi.
@@ -554,6 +571,7 @@ function createPlayer(video, msgEl) {
     p.token++;
     p.stopWatch();
     p.stopRenew();
+    if (p.reopenTimer) { clearTimeout(p.reopenTimer); p.reopenTimer = null; }
     if (p.hls) { p.hls.destroy(); p.hls = null; }
     if (p.pc) { p.pc.close(); p.pc = null; }
     video.pause();
