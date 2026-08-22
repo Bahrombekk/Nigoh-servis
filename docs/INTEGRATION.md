@@ -173,6 +173,10 @@ curl -H "X-API-Key: KALIT" \
 
 - `quality=sub` — past sifatli oqim (video devor setkasi uchun; ~0,5
   Mbit/s). Fokus/katta oynada parametrisiz chaqiring — asosiy oqim.
+  Manzildagi yo'l nomi doim `_sub` bo'lmasligi mumkin: H.265 kameraning
+  ikkinchi oqimi ham H.265 chiqsa, u brauzer uchun H.264 ga o'giriladi
+  va yo'l `_sub_h264` bo'ladi. `mode` esa o'sha-o'sha `"sub"` qoladi —
+  manzilni ochiq matn deb emas, tayyor holda ishlating.
 - `hevc=1` — brauzeringiz H.265 ni o'zi o'qiy olsa (Safari, ba'zi
   Chrome'lar) o'girish o'tkazib yuboriladi.
 - Manzillardagi `token` — 1 soatlik chipta, oqim shu chiptasiz

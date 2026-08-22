@@ -94,7 +94,9 @@ bu normal, manzillar tayyor holda beriladi, shunchaki ishlating.
 
 Ixtiyoriy parametrlar:
 - `?quality=sub` — past sifatli oqim (4×4 setka uchun; kamerada sub
-  bo'lmasa asosiysi qaytadi).
+  bo'lmasa asosiysi qaytadi). Manzildagi yo'l `_sub` yoki `_sub_h264`
+  bo'lishi mumkin (H.265 sub-oqim o'giriladi) — `mode` ikki holatda ham
+  `"sub"`. Manzilni tahlil qilmang, tayyor holda ishlating.
 - `?hevc=1` — brauzer H.265 ni o'qiy olsa qo'shing (pastda misol).
 
 ### 4. Videoni ulash: avval WebRTC, bo'lmasa HLS
