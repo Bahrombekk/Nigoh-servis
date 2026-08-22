@@ -17,6 +17,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
+from typing import Callable
 
 from . import bus, events
 from .db import get_db
@@ -24,6 +25,12 @@ from .log import log
 
 CHECK_INTERVAL = 60.0   # soniya — har qancha kamerada ham yetarli
 TIMEOUT = 1.5
+# Timeout — noaniq javob: kamera o'chgan ham, shunchaki band ham bo'lishi
+# mumkin (oqim ketayotganda qo'l berish sekinlashadi). Rad etilgan
+# ulanish esa aniq javob — u yerda qayta urinishning ma'nosi yo'q.
+# Shuning uchun faqat timeout'dan keyin bir marta, uzunroq muddat bilan
+# qayta uriniladi: bitta sekin javob kamerani "o'chgan" qilib qo'ymasin.
+RETRY_TIMEOUT = 4.0
 # Ishchilar soni manzillar soniga moslashadi: 5000 kamera minglab alohida
 # manzil bo'lsa ham sweep intervalga sig'adi (eng yomon holat — hammasi
 # o'chiq: 3000 manzil / 256 ishchi × 1,5 s ≈ 18 s).
@@ -35,13 +42,64 @@ _lock = threading.Lock()
 _started = False
 
 
-def _tcp_ok(pair: tuple[str, int]) -> bool:
+# Oqim olayotgan manzillarni beradigan funksiya — ilova qatlami
+# o'rnatadi (`set_streaming_probe`). core/ media/ ga bog'lanmasligi
+# uchun tashqaridan beriladi; reconciler'dagi `load_cameras` bilan bir
+# xil naqsh.
+_streaming_pairs: Callable[[], set[tuple[str, int]]] | None = None
+
+
+def set_streaming_probe(fn: Callable[[], set[tuple[str, int]]]) -> None:
+    global _streaming_pairs
+    _streaming_pairs = fn
+
+
+def _connect(pair: tuple[str, int], timeout: float) -> tuple[bool, str]:
+    """(muvaffaqiyat, sabab). Sabab: "" | "timeout" | "refused"."""
     try:
-        sock = socket.create_connection(pair, timeout=TIMEOUT)
-        sock.close()
-        return True
+        socket.create_connection(pair, timeout=timeout).close()
+        return True, ""
+    except TimeoutError:
+        return False, "timeout"
     except OSError:
-        return False
+        return False, "refused"
+
+
+def _tcp_ok(pair: tuple[str, int]) -> bool:
+    ok, why = _connect(pair, TIMEOUT)
+    if ok or why != "timeout":
+        return ok
+    return _connect(pair, RETRY_TIMEOUT)[0]
+
+
+def _rescue_streaming(fresh: dict[tuple[str, int], bool]) -> list:
+    """Oqim ketayotgan manzilni "o'chiq" deb belgilamaydi.
+
+    TCP tekshiruvi va MediaMTX ikki mustaqil dalil, va ular teng emas:
+    MediaMTX kameradan BAYT olayotgan bo'lsa, kamera tirikligi
+    isbotlangan. Tekshiruv esa qurilma band, sekin yoki yangi ulanishni
+    rad etayotgan paytda ham yiqiladi — shunda video ekranda ketaverib,
+    yorliq "o'chgan" bo'lib turardi.
+
+    Zaif dalil kuchlisini bekor qila olmasligi kerak.
+    """
+    failed = [pair for pair, ok in fresh.items() if not ok]
+    if not failed or _streaming_pairs is None:
+        return []
+    try:
+        live = _streaming_pairs()
+    except Exception as exc:                # noqa: BLE001
+        log("health", "streaming_probe_failed", level="warning", error=str(exc))
+        return []
+    rescued = [pair for pair in failed if pair in live]
+    for pair in rescued:
+        fresh[pair] = True
+    if rescued:
+        log("health", "tcp_failed_but_streaming", level="warning",
+            addresses=len(rescued),
+            detail="TCP tekshiruvi yiqildi, lekin MediaMTX shu manzildan "
+                   "oqim olyapti — kamera tirik deb hisoblandi")
+    return rescued
 
 
 def _sweep() -> None:
@@ -62,6 +120,7 @@ def _sweep() -> None:
         results = list(pool.map(_tcp_ok, pairs))
 
     fresh = dict(zip(pairs, results))
+    _rescue_streaming(fresh)
 
     # Holat o'zgarganlarni SSE abonentlariga e'lon qilamiz. Birinchi sweep
     # (eski qiymat yo'q) e'lon qilinmaydi — ulanish paytidagi boshlang'ich
@@ -88,7 +147,7 @@ def _sweep() -> None:
         _statuses.clear()               # o'chirilgan manzillar chiqib ketadi
         _statuses.update(fresh)
         _stats.update(
-            checked=len(pairs), online=sum(results),
+            checked=len(pairs), online=sum(1 for ok in fresh.values() if ok),
             duration_ms=int((time.monotonic() - started) * 1000),
             at=datetime.now(timezone.utc).isoformat(),
         )
@@ -173,6 +232,10 @@ def check_now(ip: str | None, port: int | None) -> bool | None:
         return None
     pair = (ip, port or 554)
     ok = _tcp_ok(pair)
+    if not ok:
+        probe = {pair: False}
+        if _rescue_streaming(probe):
+            ok = True
     with _lock:
         old = _statuses.get(pair)
         _statuses[pair] = ok

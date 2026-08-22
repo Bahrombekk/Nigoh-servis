@@ -16,11 +16,46 @@ def _load_cameras() -> list[dict]:
         return cameras_for_mediamtx(db)
 
 
+def _streaming_pairs() -> set[tuple[str, int]]:
+    """Ayni damda MediaMTX oqim olayotgan kameralarning (ip, port) to'plami.
+
+    Health tekshiruvi shu ro'yxatga qaraydi: TCP javob bermasa ham,
+    MediaMTX kameradan bayt olayotgan bo'lsa kamera tirik hisoblanadi.
+    Sweep'da faqat tekshiruvdan o'tmagan manzil bo'lsa chaqiriladi.
+
+    core/ media/ ga bog'lanmasligi uchun funksiya shu qatlamda turadi va
+    health'ga uzatiladi (reconciler'dagi `load_cameras` bilan bir xil).
+    """
+    paths = mediamtx_sync.list_active_paths()
+    if not paths:
+        return set()
+    ready = set()
+    for name, item in paths.items():
+        if not item.get("ready"):
+            continue
+        base = name
+        for suffix in (mediamtx_sync.TRANSCODE_SUFFIX, mediamtx_sync.SUB_SUFFIX):
+            if base.endswith(suffix):
+                base = base[: -len(suffix)]
+        ready.add(base)
+    if not ready:
+        return set()
+    with get_db() as db:
+        rows = db.execute(
+            "SELECT ip, port FROM cameras WHERE slug IN "
+            f"({','.join('?' * len(ready))})", tuple(ready)).fetchall()
+    return {(r["ip"], r["port"] or 554) for r in rows if r["ip"]}
+
+
 def bootstrap() -> None:
     init_db()
 
     # Kameralarning tirikligini fonda kuzatib boramiz — xaritada o'chiq
     # kameralar qizil bo'lib ko'rinadi.
+    # Oqim ketayotgan kamera "o'chiq" deb belgilanmasin: TCP tekshiruvi
+    # qurilma band yoki sekin bo'lganda ham yiqiladi, MediaMTX'dagi bayt
+    # esa tiriklikning aniq dalili.
+    health.set_streaming_probe(_streaming_pairs)
     health.start()
 
     # Suratlar diskda, pog'onali yangilanadi: issiq (so'ralgan) — 10 s,

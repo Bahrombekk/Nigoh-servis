@@ -159,3 +159,73 @@ def test_nvr_import_xato_parolda_kanallarni_tekshirmaydi(client, monkeypatch):
         "vendor": "hikvision", "channels": "1-64", "region": "Blok"})
     assert r.status_code == 401
     assert len(tries) == 1, f"qurilmaga {len(tries)} urinish ketdi, 1 bo'lishi kerak"
+
+
+# ---------- oqim ketayotgan kamera "o'chiq" bo'lmasin ----------
+
+def test_oqim_ketayotgan_kamera_offline_deb_belgilanmaydi(monkeypatch):
+    """Muammo: kamera jonli ko'rsatib turadi, bir daqiqadan keyin
+    yorlig'i "offline" bo'lib qoladi.
+
+    Sabab: TCP tekshiruvi va MediaMTX ikki mustaqil dalil edi va zaifi
+    kuchlisini bekor qilardi. Qurilma band, sekin yoki yangi ulanishni
+    rad etayotgan bo'lsa TCP yiqiladi — lekin MediaMTX o'sha paytda
+    kameradan bayt olib turgan bo'ladi, ya'ni kamera aniq tirik.
+    """
+    pair = ("10.255.255.11", 554)
+    monkeypatch.setattr(health, "_tcp_ok", lambda p: False)
+    health.set_streaming_probe(lambda: {pair})
+    try:
+        fresh = {pair: False}
+        rescued = health._rescue_streaming(fresh)
+        assert rescued == [pair]
+        assert fresh[pair] is True, "oqim ketyapti — kamera tirik hisoblanadi"
+    finally:
+        health.set_streaming_probe(None)
+
+
+def test_oqim_yoq_bolsa_offline_qoladi(monkeypatch):
+    """Himoya faqat oqim ketayotganda ishlaydi — aks holda haqiqatan
+    o'chgan kamera "online" bo'lib turib qolardi."""
+    pair = ("10.255.255.12", 554)
+    health.set_streaming_probe(lambda: set())
+    try:
+        fresh = {pair: False}
+        assert health._rescue_streaming(fresh) == []
+        assert fresh[pair] is False
+    finally:
+        health.set_streaming_probe(None)
+
+
+def test_streaming_probe_yiqilsa_sweep_toxtamaydi(monkeypatch):
+    """MediaMTX javob bermasa kuzatuv o'z ishini davom ettirishi kerak."""
+    def boom():
+        raise RuntimeError("mediamtx yiqildi")
+    health.set_streaming_probe(boom)
+    try:
+        fresh = {("10.255.255.13", 554): False}
+        assert health._rescue_streaming(fresh) == []
+    finally:
+        health.set_streaming_probe(None)
+
+
+def test_tcp_faqat_timeoutdan_keyin_qayta_urinadi(monkeypatch):
+    """Rad etilgan ulanish — aniq javob, qayta urinish behuda va sweep'ni
+    cho'zadi. Timeout esa noaniq: kamera band bo'lishi ham mumkin."""
+    calls = []
+
+    def fake_connect(pair, timeout):
+        calls.append(timeout)
+        return False, "refused"
+    monkeypatch.setattr(health, "_connect", fake_connect)
+    assert health._tcp_ok(("10.0.0.1", 554)) is False
+    assert calls == [health.TIMEOUT], "rad etilganda qayta urinilmaydi"
+
+    calls.clear()
+
+    def slow_then_ok(pair, timeout):
+        calls.append(timeout)
+        return (True, "") if timeout == health.RETRY_TIMEOUT else (False, "timeout")
+    monkeypatch.setattr(health, "_connect", slow_then_ok)
+    assert health._tcp_ok(("10.0.0.2", 554)) is True
+    assert calls == [health.TIMEOUT, health.RETRY_TIMEOUT], "timeout'da bir marta qayta urinadi"

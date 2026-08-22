@@ -461,6 +461,7 @@ const WATCH_DEAD = 3;
 const MAX_RETRY = 3;          // ketma-ket shuncha urinishdan keyin taslim
 const RETRY_WINDOW = 60000;   // shuncha tinch turgandan keyin hisob yangilanadi
 const JITTER_MS = 200;        // WebRTC jitter buferi nishoni (0 EMAS — izohga qarang)
+const RENEW_MARGIN = 5 * 60000;   // chipta muddatidan shuncha oldin yangilanadi
 
 /* WebRTC bu muhitda umuman ishlamasa (UDP yopiq), har ochilishda 3,5 soniya
    bekorga kutmaslik uchun yiqilish eslab qolinadi va keyingi ochilishlar
@@ -510,13 +511,38 @@ function warmStream(c) {
 
 function createPlayer(video, msgEl) {
   const p = {video, msgEl, hls: null, pc: null, token: 0, mode: "",
-             cam: null, quality: "", watch: null, retries: 0, lastRetry: 0};
+             cam: null, quality: "", watch: null, retries: 0, lastRetry: 0,
+             renew: null};
 
   p.stopWatch = () => { if (p.watch) { clearInterval(p.watch); p.watch = null; } };
+  p.stopRenew = () => { if (p.renew) { clearTimeout(p.renew); p.renew = null; } };
+
+  /* Chiptani yangilash uchun qayta ochish. p.retry() dan farqi: bu
+     nosozlik EMAS, shuning uchun urinishlar hisobiga kirmaydi va
+     "taslim bo'lish" chegarasiga yaqinlashtirmaydi. */
+  p.reopen = (why) => {
+    if (!p.cam) return;
+    console.log(`[pleyer] ${why} — oqim qayta ochilmoqda`);
+    p.open(p.cam, p.quality);
+  };
+
+  /* Chipta bir soat yashaydi, HLS esa playlistni cheksiz so'rayveradi.
+     Muddat tugashidan RENEW_MARGIN oldin oqim jimgina qayta ochiladi —
+     aks holda uzoq tomoshada birdan 401 boshlanardi. Muddat manzilning
+     o'zida: token = "<epoch>.<imzo>". */
+  p.scheduleRenew = (url) => {
+    p.stopRenew();
+    const m = /[?&]token=(\d{9,})\./.exec(url || "");
+    if (!m) return;
+    const left = (+m[1] * 1000) - Date.now() - RENEW_MARGIN;
+    if (left <= 0 || left > 24 * 3600 * 1000) return;
+    p.renew = setTimeout(() => p.reopen("chipta muddati tugayapti"), left);
+  };
 
   p.stop = () => {
     p.token++;
     p.stopWatch();
+    p.stopRenew();
     if (p.hls) { p.hls.destroy(); p.hls = null; }
     if (p.pc) { p.pc.close(); p.pc = null; }
     video.pause();
@@ -565,6 +591,7 @@ function createPlayer(video, msgEl) {
     const t0 = performance.now();
     let tStream = 0, tSignal = 0, transport = "";
 
+
     const report = () => {
       if (!tStream) return;
       const now = performance.now();
@@ -583,6 +610,7 @@ function createPlayer(video, msgEl) {
         if (stale()) return;
         tStream = performance.now();
         p.mode = urls.mode;
+        p.scheduleRenew(urls.stream_url);
         const onFail = urls.mode === "sub"
           ? () => { if (!stale()) p.open(cam, ""); }        // sub yiqilsa asosiy
           : () => { if (!stale()) msgEl.textContent = FAIL_MSG; };
@@ -794,6 +822,18 @@ function createPlayer(video, msgEl) {
           // shu qotiradi — yuklashni turtib qo'yamiz.
           if (d.details === Hls.ErrorDetails.BUFFER_STALLED_ERROR) {
             hls.startLoad();
+            return;
+          }
+          // Chipta o'lgan (401/403). Bu tarmoq xatosi EMAS: o'sha
+          // manzilni qayta yuklash abadiy 401 beradi, chunki chipta
+          // manzil ichida. Yagona yechim — /stream dan yangisini olish.
+          // Chipta muddatidan oldin ham o'lishi mumkin: backend qayta
+          // ishga tushsa oqim sessiyalari xotira bilan birga ketadi.
+          const code = d.response && d.response.code;
+          if (code === 401 || code === 403) {
+            console.log(`[hls] ${code} — chipta o'lgan, yangisi so'ralmoqda`);
+            hls.destroy(); p.hls = null; p.stopWatch();
+            if (!staleFn()) p.reopen("chipta yangilandi");
             return;
           }
           if (!d.fatal) return;
