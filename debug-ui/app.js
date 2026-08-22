@@ -462,6 +462,7 @@ const MAX_RETRY = 3;          // ketma-ket shuncha urinishdan keyin taslim
 const RETRY_WINDOW = 60000;   // shuncha tinch turgandan keyin hisob yangilanadi
 const JITTER_MS = 200;        // WebRTC jitter buferi nishoni (0 EMAS — izohga qarang)
 const RENEW_MARGIN = 5 * 60000;   // chipta muddatidan shuncha oldin yangilanadi
+const MAX_REOPEN = 3;             // manzil yangilash urinishlari chegarasi
 
 /* WebRTC bu muhitda umuman ishlamasa (UDP yopiq), har ochilishda 3,5 soniya
    bekorga kutmaslik uchun yiqilish eslab qolinadi va keyingi ochilishlar
@@ -512,7 +513,7 @@ function warmStream(c) {
 function createPlayer(video, msgEl) {
   const p = {video, msgEl, hls: null, pc: null, token: 0, mode: "",
              cam: null, quality: "", watch: null, retries: 0, lastRetry: 0,
-             renew: null};
+             renew: null, reopens: 0};
 
   p.stopWatch = () => { if (p.watch) { clearInterval(p.watch); p.watch = null; } };
   p.stopRenew = () => { if (p.renew) { clearTimeout(p.renew); p.renew = null; } };
@@ -522,7 +523,17 @@ function createPlayer(video, msgEl) {
      "taslim bo'lish" chegarasiga yaqinlashtirmaydi. */
   p.reopen = (why) => {
     if (!p.cam) return;
-    console.log(`[pleyer] ${why} — oqim qayta ochilmoqda`);
+    // Cheksiz aylanishdan himoya: /stream har safar yangi manzil bersa-yu
+    // u baribir yaroqsiz bo'lsa (masalan MediaMTX ko'tarilmayapti), pleyer
+    // abadiy aylanib qolmasin. Tasvir kelishi bilan hisob nolga qaytadi.
+    if (p.reopens >= MAX_REOPEN) {
+      p.stop();
+      msgEl.textContent = FAIL_MSG;
+      console.log(`[pleyer] ${why} — ${MAX_REOPEN} marta qayta ochildi, to'xtatildi`);
+      return;
+    }
+    p.reopens++;
+    console.log(`[pleyer] ${why} — oqim qayta ochilmoqda (${p.reopens}/${MAX_REOPEN})`);
     p.open(p.cam, p.quality);
   };
 
@@ -623,13 +634,22 @@ function createPlayer(video, msgEl) {
         if (staleFn()) return;
         msgEl.textContent = "";
         p.retries = 0;              // tasvir keldi — urinishlar hisobi tozalanadi
+        p.reopens = 0;
         report();                   // birinchi kadr keldi — o'lchov to'liq
       }, {once: true});
       const rtcWorth = Date.now() - _rtcFailedAt > RTC_RETRY_MS;
       if (urls.webrtc_url && rtcWorth) {
-        playWebRtc(urls.webrtc_url, staleFn).catch(() => {
-          noteRtcFail(cam.id);
+        playWebRtc(urls.webrtc_url, staleFn).catch((e) => {
           if (staleFn()) return;
+          // Manzil eskirgan (chipta o'lgan yoki yo'l yo'qolgan) — bu
+          // WebRTC nosozligi EMAS. Buni "WebRTC ishlamaydi" deb belgilash
+          // butun panelni keraksiz HLS'ga o'tkazib yuborardi.
+          const st = e && e.status;
+          if (st === 401 || st === 403 || st === 404) {
+            p.reopen(`WHEP ${st} — oqim manzili eskirgan`);
+            return;
+          }
+          noteRtcFail(cam.id);
           playHls(urls.stream_url, staleFn, onFail);
         });
         return;
@@ -665,7 +685,12 @@ function createPlayer(video, msgEl) {
       });
       const res = await fetch(whepUrl, {method: "POST",
         headers: {"Content-Type": "application/sdp"}, body: pc.localDescription.sdp});
-      if (!res.ok) { pc.close(); throw new Error("WHEP " + res.status); }
+      if (!res.ok) {
+        pc.close();
+        const err = new Error("WHEP " + res.status);
+        err.status = res.status;      // 404 — yo'l yo'q, WebRTC'ning aybi emas
+        throw err;
+      }
       const answer = await res.text();
       tSignal = performance.now();          // signalizatsiya tugadi
       if (staleFn()) { pc.close(); return; }
@@ -824,14 +849,20 @@ function createPlayer(video, msgEl) {
             hls.startLoad();
             return;
           }
-          // Chipta o'lgan (401/403). Bu tarmoq xatosi EMAS: o'sha
-          // manzilni qayta yuklash abadiy 401 beradi, chunki chipta
-          // manzil ichida. Yagona yechim — /stream dan yangisini olish.
-          // Chipta muddatidan oldin ham o'lishi mumkin: backend qayta
-          // ishga tushsa oqim sessiyalari xotira bilan birga ketadi.
+          /* 401/403 — chipta o'lgan; 404 — yo'l MediaMTX'da yo'q.
+             Uchalasida ham o'sha manzilni qayta yuklash befoyda, chunki
+             muammo manzilning ichida. Yagona yechim — /stream ni qayta
+             chaqirish: u yangi chipta beradi VA yo'lni qayta yaratadi
+             (ensure_path).
+
+             Ikkalasi ham normal holat, nosozlik emas:
+               * chipta backend qayta ishga tushganda o'ladi (oqim
+                 sessiyalari xotirada yashaydi);
+               * yo'l MediaMTX qayta ko'tarilganda yo'qoladi — yo'llar
+                 talab bo'yicha yaratiladi va faylda saqlanmaydi. */
           const code = d.response && d.response.code;
-          if (code === 401 || code === 403) {
-            console.log(`[hls] ${code} — chipta o'lgan, yangisi so'ralmoqda`);
+          if (code === 401 || code === 403 || code === 404) {
+            console.log(`[hls] ${code} — oqim manzili eskirgan, yangisi so'ralmoqda`);
             hls.destroy(); p.hls = null; p.stopWatch();
             if (!staleFn()) p.reopen("chipta yangilandi");
             return;

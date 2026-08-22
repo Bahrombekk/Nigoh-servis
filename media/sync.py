@@ -683,6 +683,13 @@ def push_to_api(cameras: list[dict], api_base: str | None = None,
         if current is None:
             ops.append(("POST", f"/v3/config/paths/add/{name}", conf))
         elif any(current.get(k) != v for k, v in conf.items()):
+            # Ko'rilayotgan yo'l qayta sozlanmaydi. MediaMTX yo'l
+            # konfiguratsiyasi o'zgarganda manbani QAYTA OCHADI —
+            # tomoshabin uchun bu videoning uzilishi bo'lib ko'rinadi.
+            # O'zgarish yo'qolmaydi: yo'l bo'shashi bilan keyingi tsiklda
+            # qo'llanadi.
+            if name in busy:
+                continue
             ops.append(("PATCH", f"/v3/config/paths/patch/{name}", conf))
     for name in existing:
         if name not in wanted and name not in busy:

@@ -90,3 +90,64 @@ def test_issiq_toplam_sourceondemandni_ochiradi():
         assert "sourceOnDemandCloseAfter" not in conf
     finally:
         _warm.clear()
+
+
+def test_korilayotgan_yol_qayta_sozlanmaydi(monkeypatch):
+    """Devorda tomosha qilib o'tirganda video uzilardi.
+
+    Sabab zanjiri: sub yo'l ochilganda 10 daqiqaga issiq qilinadi
+    (sourceOnDemand: false). 10 daqiqadan keyin issiqlik so'nadi,
+    konfiguratsiya o'zgaradi va reconciler PATCH yuboradi. MediaMTX esa
+    yo'l konfiguratsiyasi o'zgarganda manbani QAYTA OCHADI — tomoshabin
+    uchun bu videoning uzilishi.
+
+    Ko'rilayotgan yo'lga tegilmasligi kerak: o'zgarish yo'qolmaydi,
+    yo'l bo'shashi bilan keyingi tsiklda qo'llanadi.
+    """
+    from media import sync
+
+    cam = _cam(always_on=True)               # doimiy yo'l — wanted ichida
+    calls = []
+
+    def fake_api(method, path, payload=None, api_base=None):
+        if path.startswith("/v3/config/paths/list"):
+            # MediaMTX'dagi holat `wanted` dan farq qiladi -> PATCH kerak
+            return {"pageCount": 1, "items": [
+                {"name": "k1", "sourceOnDemand": True},
+                {"name": f"~^[a-z0-9_]+{TRANSCODE_SUFFIX}$"}]}
+        if path.startswith("/v3/paths/list"):
+            return {"pageCount": 1, "items": [
+                {"name": "k1", "ready": True, "readers": [{"type": "webrtc"}]}]}
+        calls.append((method, path))
+        return {}
+
+    monkeypatch.setattr(sync, "_api", fake_api)
+    res = sync.push_to_api([cam])
+    assert res["ok"]
+    # Shablon yo'l (regex) PATCH olishi mumkin — uni hech kim ko'rmaydi.
+    # Muhimi: TOMOSHABINI BOR kamera yo'liga tegilmasin.
+    patched = [c for c in calls if c[0] == "PATCH" and c[1].endswith("/k1")]
+    assert not patched, f"ko'rilayotgan yo'lga PATCH yuborildi: {patched}"
+
+
+def test_bosh_yol_qayta_sozlanaveradi(monkeypatch):
+    """Himoya faqat tomoshabini bor yo'lga — aks holda konfiguratsiya
+    hech qachon yangilanmay qolardi."""
+    from media import sync
+
+    cam = _cam(always_on=True)
+    calls = []
+
+    def fake_api(method, path, payload=None, api_base=None):
+        if path.startswith("/v3/config/paths/list"):
+            return {"pageCount": 1, "items": [
+                {"name": "k1", "sourceOnDemand": True},
+                {"name": f"~^[a-z0-9_]+{TRANSCODE_SUFFIX}$"}]}
+        if path.startswith("/v3/paths/list"):
+            return {"pageCount": 1, "items": []}      # hech kim ko'rmayapti
+        calls.append((method, path))
+        return {}
+
+    monkeypatch.setattr(sync, "_api", fake_api)
+    sync.push_to_api([cam])
+    assert any(c[0] == "PATCH" and c[1].endswith("/k1") for c in calls),         "bo'sh yo'l yangilanishi kerak"
