@@ -918,10 +918,30 @@ function createPlayer(video, msgEl) {
         // marta to'xtaganda ham oqim butunlay o'lardi. Faqat tiklash ikki
         // marta natija bermagandan keyin boshqa yo'l (sub -> asosiy yoki
         // xato xabari) qidiriladi.
-        let netFails = 0, mediaFails = 0, authReloads = 0;
+        let netFails = 0, mediaFails = 0, authReloads = 0, authJump = false;
         // Segment buferga tushdi — demak oqim tiklandi, ruxsat hisobini
         // nolga qaytaramiz (uzoq tomoshada chegara bekorga tugamasin).
-        hls.on(Hls.Events.FRAG_BUFFERED, () => { authReloads = 0; });
+        //
+        // Master qayta yuklangandan keyin esa alohida ish bor: yangi bufer
+        // NOLdan boshlanadi, video elementi esa eski joyida turadi va
+        // bufer oralig'idan tashqarida qoladi — segmentlar kelayotgan
+        // bo'lsa ham tasvir qotib qoladi. Shu sababli birinchi segment
+        // kelganda jonli chekkaga sakraymiz va ijroni qayta boshlaymiz.
+        hls.on(Hls.Events.FRAG_BUFFERED, () => {
+          authReloads = 0;
+          if (!authJump) return;
+          authJump = false;
+          try {
+            const b = video.buffered;
+            if (b.length) {
+              const boshi = b.start(0), oxiri = b.end(b.length - 1);
+              if (video.currentTime < boshi || video.currentTime > oxiri) {
+                video.currentTime = oxiri;
+              }
+            }
+          } catch (e) { /* bufer hali o'qilmasa — play o'zi tiklaydi */ }
+          video.play().catch(() => {});
+        });
         hls.on(Hls.Events.ERROR, (_, d) => {
           if (staleFn()) return;
           // Bufer to'xtashi fatal deb belgilanmaydi, lekin ekranni aynan
@@ -969,9 +989,10 @@ function createPlayer(video, msgEl) {
                         + `${authReloads === 1 ? "master qayta yuklanmoqda"
                                                : "yangi chipta olinmoqda"} `
                         + `(${authReloads}/3)`);
+            authJump = true;
             if (authReloads === 1) {
               hls.loadSource(url);
-              hls.startLoad();
+              hls.startLoad(-1);          // -1 = jonli chekkadan
               return;
             }
             api(`/api/v1/cameras/${cam.id}/stream?hevc=${HEVC_OK ? 1 : 0}`
@@ -980,7 +1001,7 @@ function createPlayer(video, msgEl) {
                 if (staleFn() || !u.stream_url) return;
                 p.scheduleRenew(u.stream_url);
                 hls.loadSource(u.stream_url);
-                hls.startLoad();
+                hls.startLoad(-1);        // -1 = jonli chekkadan
               })
               .catch(() => { if (!staleFn()) p.reopen("chipta yangilandi"); });
             return;
