@@ -958,11 +958,31 @@ function createPlayer(video, msgEl) {
              avval WebRTC urinishi (u yiqilsa 404 va kutish), keyin HLS —
              tomoshabin uchun bu bir necha soniyalik qora ekran va
              kengayib boradigan kutish (1 s, 2 s, ... 15 s). */
-          if ((code === 401 || code === 403) && ++authReloads <= 5) {
-            console.log(`[hls] ${code} — ruxsat sessiyasi eskirgan, master `
-                        + `qayta yuklanmoqda (${authReloads}/5)`);
-            hls.loadSource(url);
-            hls.startLoad();
+          if ((code === 401 || code === 403) && ++authReloads <= 3) {
+            // Birinchi urinish arzon: o'sha chipta bilan master qayta
+            // o'qiladi. Agar yetmasa — YANGI chipta so'raladi: MediaMTX
+            // bola pleylistiga chiptani so'rovdan ko'chiradi, ya'ni eski
+            // chipta bilan master har safar AYNAN O'SHA bola manzilini
+            // qaytaradi va bir xil so'rov bekorga takrorlanadi (o'lchov:
+            // v1.20.0 da 401 shu bilan yo'qolmaydi).
+            console.log(`[hls] ${code} — ruxsat sessiyasi eskirgan, `
+                        + `${authReloads === 1 ? "master qayta yuklanmoqda"
+                                               : "yangi chipta olinmoqda"} `
+                        + `(${authReloads}/3)`);
+            if (authReloads === 1) {
+              hls.loadSource(url);
+              hls.startLoad();
+              return;
+            }
+            api(`/api/v1/cameras/${cam.id}/stream?hevc=${HEVC_OK ? 1 : 0}`
+                + (p.quality ? `&quality=${p.quality}` : ""))
+              .then((u) => {
+                if (staleFn() || !u.stream_url) return;
+                p.scheduleRenew(u.stream_url);
+                hls.loadSource(u.stream_url);
+                hls.startLoad();
+              })
+              .catch(() => { if (!staleFn()) p.reopen("chipta yangilandi"); });
             return;
           }
           if (code === 401 || code === 403 || code === 404) {
