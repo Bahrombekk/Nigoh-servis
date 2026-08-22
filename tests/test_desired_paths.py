@@ -268,3 +268,64 @@ def test_issiqlik_yolni_royxatda_ushlab_turadi():
         assert "k1" + SUB_SUFFIX in desired_paths([cam])
     finally:
         _warm.clear()
+
+
+def test_ochirilgan_kamera_yoli_band_bolsa_ham_ketadi(monkeypatch):
+    """Kamerani o'chirib qo'yganda uning yo'li MediaMTX'da qolib ketardi
+    va tortib turaverardi.
+
+    Sabab: "ko'rilayotgan yo'lni o'chirma" himoyasi o'chirilgan kameraga
+    ham tegib ketgan edi — yo'l band bo'lgani uchun hech qachon
+    o'chirilmasdi. Natijada o'chirilgan kamera registratordan oqim
+    tortishda davom etardi va boshqa kameralarga joy qolmasdi.
+    """
+    from media import sync
+    sync._sent.clear()
+    cam = _cam(enabled=False)                 # kamera o'chirilgan
+    calls = []
+
+    def fake_api(method, path, payload=None, api_base=None):
+        if path.startswith("/v3/config/paths/list"):
+            return {"pageCount": 1, "items": [{"name": "k1"}]}
+        if path.startswith("/v3/paths/list"):
+            # Yo'l TIRIK va bayt tortyapti — ya'ni "band"
+            return {"pageCount": 1, "items": [
+                {"name": "k1", "ready": True, "readers": [{"type": "hls"}],
+                 "bytesSent": 999}]}
+        calls.append((method, path))
+        return {}
+
+    monkeypatch.setattr(sync, "_api", fake_api)
+    try:
+        sync.push_to_api([cam])
+        assert [c for c in calls if c[0] == "DELETE" and c[1].endswith("/k1")], \
+            "o'chirilgan kameraning yo'li olib tashlanmadi"
+    finally:
+        sync._sent.clear()
+
+
+def test_yoqilgan_kameraning_korilayotgan_yoli_saqlanadi(monkeypatch):
+    """Himoya o'z vazifasini bajarishda davom etsin: kamera yoqilgan va
+    ko'rilayotgan bo'lsa, vaqtinchalik holat tugasa ham o'chirilmaydi."""
+    from media import sync
+    sync._sent.clear()
+    cam = _cam(enabled=True)                  # yoqilgan, lekin issiq emas
+    calls = []
+
+    def fake_api(method, path, payload=None, api_base=None):
+        if path.startswith("/v3/config/paths/list"):
+            return {"pageCount": 1, "items": [{"name": "k1"}]}
+        if path.startswith("/v3/paths/list"):
+            return {"pageCount": 1, "items": [
+                {"name": "k1", "ready": True, "readers": [{"type": "hls"}],
+                 "bytesSent": 999}]}
+        calls.append((method, path))
+        return {}
+
+    monkeypatch.setattr(sync, "_api", fake_api)
+    try:
+        sync.push_to_api([cam])
+        assert not [c for c in calls if c[0] == "DELETE" and c[1].endswith("/k1")], \
+            "ko'rilayotgan yo'l o'chirildi"
+    finally:
+        sync._sent.clear()

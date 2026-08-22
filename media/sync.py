@@ -740,6 +740,24 @@ def push_to_api(cameras: list[dict], api_base: str | None = None,
     for name in [n for n in _sent if n not in active]:
         _sent.pop(name, None)                 # yopilgan yo'l hisobi kerak emas
 
+    # Kameraga TEGISHLI BO'LA OLADIGAN yo'llar. `wanted` dan farqi: bu
+    # yerda vaqtinchalik holat (issiqlik, managed) hisobga olinmaydi —
+    # faqat "bunday kamera bormi va yoqilganmi" degan savol.
+    #
+    # Ikkovini ajratish shart: `busy` himoyasi (ko'rilayotgan yo'lni
+    # o'chirmaslik) o'chirilgan kameraga TEGMASLIGI kerak. Aks holda
+    # kamerani o'chirib qo'ysangiz ham uning yo'li tortib turaveradi —
+    # band bo'lgani uchun hech qachon o'chirilmaydi.
+    valid: set[str] = set(camera_paths(cameras)) if with_transcode else set()
+    for cam in cameras:
+        if not (cam.get("enabled") and cam.get("ip")):
+            continue
+        valid.add(cam["slug"])
+        valid.add(cam["slug"] + TRANSCODE_SUFFIX)
+        sub_cam = sub_variant(cam)
+        if sub_cam:
+            valid.add(sub_cam["slug"])
+
     ops: list[tuple[str, str, dict | None]] = []
     for name, conf in wanted.items():
         current = existing.get(name)
@@ -755,7 +773,15 @@ def push_to_api(cameras: list[dict], api_base: str | None = None,
                 continue
             ops.append(("PATCH", f"/v3/config/paths/patch/{name}", conf))
     for name in existing:
-        if name not in wanted and name not in busy:
+        if name in wanted:
+            continue
+        if name not in valid:
+            # Kamera o'chirilgan yoki bazadan olib tashlangan — yo'l band
+            # bo'lsa ham ketadi. Aks holda u abadiy tortib turadi.
+            ops.append(("DELETE", f"/v3/config/paths/delete/{name}", None))
+        elif name not in busy:
+            # Kamera joyida, faqat vaqtinchalik holati tugagan. Kimdir
+            # ko'rayotgan bo'lsa tegilmaydi.
             ops.append(("DELETE", f"/v3/config/paths/delete/{name}", None))
 
     # Qo'shish/yangilash avval, o'chirish keyin: byudjet tugasa ham
