@@ -125,6 +125,12 @@ WRITE_QUEUE_SIZE = int(os.environ.get("MEDIAMTX_WRITE_QUEUE", "1024"))
 # yo'lni tozalash tsiklni soatlab band qilardi.
 SYNC_BUDGET_S = float(os.environ.get("MEDIAMTX_SYNC_BUDGET", "10"))
 
+# Oxirgi tomoshabin ketgandan keyin manba shuncha ushlab turiladi.
+# MediaMTX davomiyliklarni normallashtirib saqlaydi ("120s" -> "2m0s") —
+# taqqoslash aynan mos kelishi uchun uning o'z shaklida yoziladi, aks
+# holda har sinxronlashda keraksiz PATCH ketardi.
+SOURCE_CLOSE_AFTER = os.environ.get("MEDIAMTX_CLOSE_AFTER", "2m0s")
+
 # MediaMTX har bir ulanishda backend'dan ruxsat so'raydi. MediaMTX boshqa
 # mashinada bo'lsa, STREAM_AUTH_URL orqali backend'ning to'liq manzilini
 # bering (u mashinadan yetib boradigan qilib).
@@ -345,8 +351,18 @@ def source_path(cam: dict) -> dict:
         ),
         # UDP'da paketlar yo'qoladi va tasvir buziladi — TCP majburiy.
         "rtspTransport": "tcp",
-        # Issiq sub yo'llar ham "doim tayyor" hisoblanadi.
-        "sourceOnDemand": not (cam.get("always_on") or is_warm(cam["slug"])),
+        # DIQQAT: bu qiymat FAQAT always_on ga bog'liq bo'lishi shart.
+        #
+        # Ilgari bu yerda `is_warm(...)` ham bor edi va yo'l issiqligi
+        # so'nganda konfiguratsiya o'zgarardi. MediaMTX esa yo'l
+        # konfiguratsiyasi o'zgarganda MANBANI QAYTA OCHADI — tomoshabin
+        # uchun bu videoning uzilishi. Ya'ni issiqlikni shu yerda
+        # ishlatish tomosha o'rtasida uzilishni KELTIRIB CHIQARARDI.
+        #
+        # Endi issiqlik boshqa vazifani bajaradi: yo'l MediaMTX
+        # ro'yxatida QOLSIN (desired_paths ga qarang). Konfiguratsiyaning
+        # o'zi esa kamera yaratilganidan keyin o'zgarmaydi.
+        "sourceOnDemand": not cam.get("always_on"),
     }
     if conf["sourceOnDemand"]:
         # 20 soniya juda uzun edi: o'lik kamera shuncha vaqt "ulanmoqda…"
@@ -360,7 +376,12 @@ def source_path(cam: dict) -> dict:
         # Taqqoslash (ensure_path/push_to_api) aynan mos kelishi uchun
         # qiymatlar uning o'z shaklida yoziladi — aks holda har safar
         # keraksiz PATCH ketadi.
-        conf["sourceOnDemandCloseAfter"] = "1m0s"
+        # Oxirgi tomoshabindan keyin manba shuncha ushlab turiladi.
+        # Bu — issiqlikning konfiguratsiyani o'zgartirmaydigan varianti:
+        # kamera yopilib qayta ochilsa manba hali ulangan bo'ladi, ya'ni
+        # ochilish bir zumda. Uzunroq qilish arzon emas (kamera ulangan
+        # turadi), lekin 1 daqiqa qisqa edi.
+        conf["sourceOnDemandCloseAfter"] = SOURCE_CLOSE_AFTER
     return conf
 
 

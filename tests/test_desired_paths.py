@@ -78,20 +78,6 @@ def test_uzoq_tugun_transcodesiz():
     assert "k1" in wanted
     assert "k1" + TRANSCODE_SUFFIX not in wanted
     assert not any(k.startswith("~") for k in wanted)      # shablon ham yo'q
-
-
-def test_issiq_toplam_sourceondemandni_ochiradi():
-    cam = _cam(slug="k1_sub")
-    try:
-        assert source_path(cam)["sourceOnDemand"] is True
-        assert mark_warm("k1_sub")
-        conf = source_path(cam)
-        assert conf["sourceOnDemand"] is False
-        assert "sourceOnDemandCloseAfter" not in conf
-    finally:
-        _warm.clear()
-
-
 def test_korilayotgan_yol_qayta_sozlanmaydi(monkeypatch):
     """Devorda tomosha qilib o'tirganda video uzilardi.
 
@@ -226,32 +212,6 @@ def test_korilayotgan_sub_yol_issiq_bolib_qoladi(monkeypatch):
         assert sync.is_warm("k1" + SUB_SUFFIX), "ko'rilayotgan sub yo'l issiq qolishi kerak"
     finally:
         sync._sent.clear(); sync._warm.clear()
-
-
-def test_korilayotgan_asosiy_yol_ham_issiq_boladi():
-    """O'lchov bilan tasdiqlangan sabab: sourceOnDemand rejimida MediaMTX
-    manbani ochib-yopib turadi va tomosha shunda uziladi.
-
-      * qurilmadan to'g'ridan tortish      -> 92/90 soniya toza
-      * MediaMTX orqali, always_on bilan   -> 90 soniya toza
-      * MediaMTX orqali, sourceOnDemand    -> muzlaydi
-
-    Ya'ni asosiy oqim ham ko'rilayotganda issiq bo'lishi shart.
-    """
-    from media.sync import WARM_MAIN_TTL, is_warm
-    cam = _cam()
-    try:
-        assert source_path(cam)["sourceOnDemand"] is True
-        assert mark_warm("k1", WARM_MAIN_TTL)
-        assert is_warm("k1")
-        assert source_path(cam)["sourceOnDemand"] is False
-        # Issiq asosiy yo'l doimiy ro'yxatga ham tushadi, aks holda
-        # reconciler uni o'chirib yuborardi.
-        assert "k1" in desired_paths([cam])
-    finally:
-        _warm.clear()
-
-
 def test_issiq_muddat_qisqartirilmaydi():
     """Sub yo'l 10 daqiqaga issiq bo'lsa, asosiy yo'lning qisqa muddati
     uni qisqartirib yubormasligi kerak."""
@@ -261,5 +221,50 @@ def test_issiq_muddat_qisqartirilmaydi():
         uzun = W["k1"]
         mark_warm("k1", WARM_MAIN_TTL)       # qisqa muddat
         assert W["k1"] == uzun, "muddat qisqartirildi"
+    finally:
+        _warm.clear()
+
+
+def test_yol_konfiguratsiyasi_issiqlikdan_QATIY_mustaqil():
+    """Tomosha o'rtasidagi uzilishning ildizi shu yerda edi.
+
+    Ilgari issiqlik `sourceOnDemand` ni o'zgartirardi. Issiqlik so'nganda
+    konfiguratsiya o'zgarardi, reconciler PATCH yuborardi, MediaMTX esa
+    yo'l konfiguratsiyasi o'zgarganda MANBANI QAYTA OCHADI — tomoshabin
+    uchun bu videoning uzilishi.
+
+    O'lchov bilan tasdiqlangan:
+        qurilmadan to'g'ridan tortish       92/90 soniya toza
+        MediaMTX orqali, always_on          90 soniya toza
+        MediaMTX orqali, issiqlik o'zgarib  muzlaydi
+
+    Shuning uchun konfiguratsiya FAQAT always_on ga bog'liq bo'lishi
+    kerak — u kamera sozlamasi va o'z-o'zidan o'zgarmaydi.
+    """
+    cam = _cam()
+    try:
+        oldin = source_path(cam)
+        mark_warm("k1")
+        mark_warm("k1" + SUB_SUFFIX)
+        assert source_path(cam) == oldin, \
+            "issiqlik konfiguratsiyani o'zgartirdi — bu uzilishga olib keladi"
+        assert source_path(cam)["sourceOnDemand"] is True
+    finally:
+        _warm.clear()
+
+    # always_on esa o'zgartiradi — bu kamera sozlamasi, transient emas.
+    assert source_path(_cam(always_on=True))["sourceOnDemand"] is False
+
+
+def test_issiqlik_yolni_royxatda_ushlab_turadi():
+    """Issiqlikning yangi vazifasi: yo'l MediaMTX ro'yxatida qolsin.
+    Konfiguratsiyaga tegmaydi, faqat o'chirilishdan saqlaydi."""
+    cam = _cam(sub_path="/s2")
+    try:
+        assert "k1" not in desired_paths([cam])
+        mark_warm("k1")
+        assert "k1" in desired_paths([cam])
+        mark_warm("k1" + SUB_SUFFIX)
+        assert "k1" + SUB_SUFFIX in desired_paths([cam])
     finally:
         _warm.clear()
