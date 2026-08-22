@@ -469,9 +469,12 @@ const RENEW_MARGIN = 5 * 60000;   // chipta muddatidan shuncha oldin yangilanadi
    bo'lgan pleyer o'sha kamerani BUTUNLAY yo'qotardi — tomoshabin qora
    katak ko'rardi va sahifani qayta yuklashi kerak edi.
 
-   Endi pleyer kutadi va qaytadi: 1s, 2s, 4s, 8s, 16s, keyin har 30s.
-   Eng yomon holatda daqiqasiga ikki so'rov — bu hech narsa emas. */
-const REOPEN_BACKOFF = [1000, 2000, 4000, 8000, 16000];
+   Kutish oralig'i BOSHIDA QISQA: o'lchov ko'rsatdiki manba odatda 3
+   soniyada qaytadi (yo'l ready=False -> 3 s -> ready=True). Darhol
+   uzun kutishga o'tilsa tomoshabin bekorga 8-16 soniya qora ekran
+   ko'radi. Uzun oraliqlar faqat kamera haqiqatan o'lik bo'lganda
+   kerak — o'shanda ham server bo'g'ilmasin. */
+const REOPEN_BACKOFF = [1000, 1500, 2000, 3000, 5000, 8000, 15000];
 const REOPEN_MAX_WAIT = 30000;
 
 /* WebRTC bu muhitda umuman ishlamasa (UDP yopiq), har ochilishda 3,5 soniya
@@ -539,8 +542,8 @@ function createPlayer(video, msgEl) {
     const sec = Math.round(wait / 1000);
     console.log(`[pleyer] ${why} — ${sec} s dan keyin qayta ochiladi `
                 + `(urinish ${p.reopens})`);
-    msgEl.textContent = p.reopens <= 2 ? "qayta ulanmoqda…"
-                        : `qayta ulanmoqda… (${p.reopens})`;
+    msgEl.textContent = p.reopens <= 3 ? "qayta ulanmoqda…"
+                        : `kamera javob bermayapti — qayta urinilmoqda (${p.reopens})`;
     // Eski oqim tozalanadi, lekin token oshirilmaydi — kutish davomida
     // kelgan kech javoblar o'z-o'zidan e'tiborsiz qoladi.
     if (p.hls) { p.hls.destroy(); p.hls = null; }
@@ -664,7 +667,7 @@ function createPlayer(video, msgEl) {
           // butun panelni keraksiz HLS'ga o'tkazib yuborardi.
           const st = e && e.status;
           if (st === 401 || st === 403 || st === 404) {
-            p.reopen(`WHEP ${st} — oqim manzili eskirgan`);
+            p.reopen(`WHEP ${st} — oqim hozir mavjud emas`);
             return;
           }
           noteRtcFail(cam.id);
@@ -880,7 +883,8 @@ function createPlayer(video, msgEl) {
                  talab bo'yicha yaratiladi va faylda saqlanmaydi. */
           const code = d.response && d.response.code;
           if (code === 401 || code === 403 || code === 404) {
-            console.log(`[hls] ${code} — oqim manzili eskirgan, yangisi so'ralmoqda`);
+            console.log(`[hls] ${code} — oqim hozir mavjud emas `
+                        + `(chipta eskirgan yoki manba uzilgan)`);
             hls.destroy(); p.hls = null; p.stopWatch();
             if (!staleFn()) p.reopen("chipta yangilandi");
             return;
