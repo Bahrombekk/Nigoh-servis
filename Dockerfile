@@ -17,7 +17,20 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 # MediaMTX'ning o'zi — reconciler uni /app/mediamtx/mediamtx dan topadi.
-ARG MEDIAMTX_VERSION=v1.20.0
+#
+# v1.20.0 da HLS uchun cookie/session-id mexanizmi bola (variant)
+# pleylistiga tasodifiy "authentication error" (401) qaytaradi — mijoz
+# bir necha soniya normal ko'radi, keyin 401 boshlanadi va master qayta
+# olinmaguncha tiklanmaydi. Ma'lum xato: bluenviron/mediamtx#5700 va
+# #5736. v1.20.1 da HLS sessiyasi plain HTTP'da cookie o'rniga so'rov
+# parametriga o'tkazilgan ("stop using cookies with plain HTTP") va
+# muammo yo'qoladi.
+#
+# O'lchov (bir xil kod, bir xil kamera, cookie bilan curl, to'g'ridan
+# MediaMTX'ga 45 so'rov):
+#     v1.20.0 (server) — 401: 4 / 19 / 0  (yugurishga qarab tasodifiy)
+#     v1.20.1 (lokal)  — 401: 0
+ARG MEDIAMTX_VERSION=v1.20.1
 ARG MEDIAMTX_ARCH=amd64
 RUN mkdir -p /app/mediamtx \
     && curl -fsSL "https://github.com/bluenviron/mediamtx/releases/download/${MEDIAMTX_VERSION}/mediamtx_${MEDIAMTX_VERSION}_linux_${MEDIAMTX_ARCH}.tar.gz" \
