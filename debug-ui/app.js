@@ -887,7 +887,10 @@ function createPlayer(video, msgEl) {
         // marta to'xtaganda ham oqim butunlay o'lardi. Faqat tiklash ikki
         // marta natija bermagandan keyin boshqa yo'l (sub -> asosiy yoki
         // xato xabari) qidiriladi.
-        let netFails = 0, mediaFails = 0;
+        let netFails = 0, mediaFails = 0, authReloads = 0;
+        // Segment buferga tushdi — demak oqim tiklandi, ruxsat hisobini
+        // nolga qaytaramiz (uzoq tomoshada chegara bekorga tugamasin).
+        hls.on(Hls.Events.FRAG_BUFFERED, () => { authReloads = 0; });
         hls.on(Hls.Events.ERROR, (_, d) => {
           if (staleFn()) return;
           // Bufer to'xtashi fatal deb belgilanmaydi, lekin ekranni aynan
@@ -908,6 +911,29 @@ function createPlayer(video, msgEl) {
                * yo'l MediaMTX qayta ko'tarilganda yo'qoladi — yo'llar
                  talab bo'yicha yaratiladi va faylda saqlanmaydi. */
           const code = d.response && d.response.code;
+          /* 401/403 — bu chipta o'lgani EMAS. MediaMTX HLS uchun ruxsatni
+             sessiya darajasida eslab qoladi va har segment uchun backend'ni
+             qayta so'ramaydi; o'sha sessiya eskirganda esa 401 qaytaradi.
+             Ishlab chiqarishda o'lchandi (negoh.das-uty.uz, manbasi
+             mutlaqo barqaror kamerada ham ~60 soniyada takrorlanadi):
+
+                 aynan shu variant manzili qayta   -> 401
+                 YANGI chipta bilan o'sha manzil   -> 401
+                 master pleylist qayta olindi      -> 200
+
+             Ya'ni yangi chipta so'rashning foydasi yo'q — master'ni qayta
+             yuklash kerak, u MediaMTX'da sessiyani qaytadan ochadi.
+             Pleyerni butunlay yopib ochish esa qimmat: yangi chipta,
+             avval WebRTC urinishi (u yiqilsa 404 va kutish), keyin HLS —
+             tomoshabin uchun bu bir necha soniyalik qora ekran va
+             kengayib boradigan kutish (1 s, 2 s, ... 15 s). */
+          if ((code === 401 || code === 403) && ++authReloads <= 5) {
+            console.log(`[hls] ${code} — ruxsat sessiyasi eskirgan, master `
+                        + `qayta yuklanmoqda (${authReloads}/5)`);
+            hls.loadSource(url);
+            hls.startLoad();
+            return;
+          }
           if (code === 401 || code === 403 || code === 404) {
             console.log(`[hls] ${code} — oqim hozir mavjud emas `
                         + `(chipta eskirgan yoki manba uzilgan)`);
