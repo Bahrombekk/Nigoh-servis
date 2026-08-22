@@ -100,7 +100,34 @@ def stream_auth(body: dict):
     if action in ("read", "playback"):
         if security.stream_access_ok(ip, path, token):
             return {"ok": True}
+    # Rad etish JURNALGA yoziladi. Tashqaridan bu "video uzildi" bo'lib
+    # ko'rinadi va sababini taxmin qilib bo'lmaydi — MediaMTX aynan
+    # nima so'raganini bilish shart. Toshqin bo'lmasin uchun bir xil
+    # (yo'l, sabab) juftligi daqiqada bir marta yoziladi.
+    _log_denial(ip, action, path, token)
     raise HTTPException(401, "Oqimga ruxsat yo'q")
+
+
+_DENY_EVERY = 60.0
+_denied: dict[tuple, float] = {}
+
+
+def _log_denial(ip: str, action: str, path: str, token: str) -> None:
+    why = ("chiptasiz" if not token else
+           "chipta muddati tugagan yoki imzo mos emas")
+    key = (path, why)
+    now = time.monotonic()
+    with _fails_lock:
+        if now - _denied.get(key, 0.0) < _DENY_EVERY:
+            return
+        _denied[key] = now
+        if len(_denied) > 500:
+            for k, t in list(_denied.items()):
+                if now - t > _DENY_EVERY:
+                    _denied.pop(k, None)
+    log("auth", "stream_denied", level="warning",
+        path=path, action=action, ip=ip, sabab=why,
+        chipta=(token[:24] + "…") if token else "")
 
 
 @ui_router.post("/login")
