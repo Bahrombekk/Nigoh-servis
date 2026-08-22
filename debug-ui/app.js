@@ -120,11 +120,19 @@ function drawTopbar() {
     cell("p95 API", p95 === null ? "—" : `${p95}<u> ms</u>`);
 }
 
-/* Brauzer H.265 ni o'zi o'qiy oladimi — olsa server o'girmaydi. */
+/* Brauzer H.265 ni o'zi o'qiy oladimi — olsa server o'girmaydi.
+
+   DIQQAT: savol WebRTC uchun so'raladi. Server bitta yo'l qaytaradi,
+   pleyer esa avval WebRTC'ni sinaydi. Brauzerning HLS (MSE) tomoni
+   H.265 ni bilishi, WebRTC tomoni esa ko'rsatmasligi mumkin —
+   Windows'dagi Edge aynan shunday. "Ikkisidan biri bilsa yetadi" deb
+   hisoblansa xom H.265 WebRTC'ga beriladi va baytlar oqib turgan holda
+   tasvir birinchi kadrda qotib qoladi. Shuning uchun WebRTC bor bo'lsa
+   hukmni faqat u chiqaradi. */
 const HEVC_OK = (() => {
   try {
     const caps = RTCRtpReceiver.getCapabilities("video");
-    if (caps && caps.codecs.some((c) => /H265|hevc/i.test(c.mimeType))) return true;
+    if (caps) return caps.codecs.some((c) => /H265|hevc/i.test(c.mimeType));
   } catch (e) {}
   const type = 'video/mp4; codecs="hvc1.1.6.L93.B0"';
   try { if (window.MediaSource && MediaSource.isTypeSupported(type)) return true; } catch (e) {}
@@ -460,7 +468,25 @@ const WATCH_MS = 2000;
 const WATCH_DEAD = 3;
 const MAX_RETRY = 3;          // ketma-ket shuncha urinishdan keyin taslim
 const RETRY_WINDOW = 60000;   // shuncha tinch turgandan keyin hisob yangilanadi
-const JITTER_MS = 200;        // WebRTC jitter buferi nishoni (0 EMAS — izohga qarang)
+/* WebRTC jitter buferi nishoni (ms) — brauzer tasvirni ko'rsatishdan
+   oldin shuncha ushlab turadi.
+
+   Nolga majburlash (playoutDelayHint = 0) intuitiv, lekin xato: bufer
+   nolda tursa uzoq tarmoqda kadr yetishmay tasvir uzuq bo'ladi. Lekin
+   200 ms ham kam ekan — o'lchov (Edge, 10.30.x.x tarmog'idagi kamera,
+   30 soniya):
+
+       200 ms  — 7 marta qotish, jami 3,3 s (11 %), 29 kadr tashlandi,  6 PLI
+      1000 ms  — 1 marta qotish, jami 0,3 s ( 1 %),  0 kadr tashlandi,  0 PLI
+
+   Sababi: kamera kanalida paket yo'qolsa RTSP/TCP qayta yuborishni
+   kutadi, oqim to'xtaydi va keyin to'p-to'p bo'lib quvib yetadi. Kichik
+   bufer bu tebranishni yutolmaydi va brauzer aynan shuni ko'rsatadi.
+   Bir soniyalik kechikish kuzatuv uchun sezilmaydi, qotish esa darhol
+   ko'rinadi — shuning uchun silliqlik afzal ko'rilgan.
+
+   Faqat Chromium'da bor; qolganida jimgina e'tiborsiz qoladi. */
+const JITTER_MS = 1000;
 const RENEW_MARGIN = 5 * 60000;   // chipta muddatidan shuncha oldin yangilanadi
 /* Manzil eskirganda (401/404) qayta ochish. Chegara YO'Q — kutish
    oralig'i o'sadi. Sabab: ba'zi kameralar RTSP ulanishini muntazam

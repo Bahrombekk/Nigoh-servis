@@ -41,6 +41,7 @@ backend.log
 backend.err.log
 nigoh.log
 nigoh.log.*
+servis.log
 
 # ---- Muhit ----
 .env
