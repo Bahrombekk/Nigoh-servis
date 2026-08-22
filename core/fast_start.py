@@ -227,6 +227,16 @@ def request_keyframe_async(ip: str, username: str, password: str,
 # ---------- JPEG surat (snapshot) ----------
 
 SNAPSHOT_TTL = 8.0                          # soniya — shu orada bitta surat yetadi
+# RTSP orqali kadr olish (FFmpeg zaxirasi) HTTP-snapshot bilan tenglashtirib
+# bo'lmaydigan darajada qimmat: MediaMTX'da yangi o'quvchi sessiyasi ochilib
+# yopiladi. Issiq kamerada bu har 10 soniyada takrorlanardi — ya'ni tirik
+# oqim ustida sekundiga bir necha marta sessiya qurilishi, jurnal esa
+# "created / destroyed: torn down" bilan to'lardi. Bu yo'l uchun kesh
+# ancha uzun: surat "jonli" bo'lishi shart emas.
+FFMPEG_TTL = 120.0
+# Yo'l umuman sozlanmagan bo'lsa (kamerani hech kim ochmagan) urinish
+# albatta muvaffaqiyatsiz. Buni tez-tez takrorlashning ma'nosi yo'q.
+FFMPEG_FAIL_TTL = 300.0
 _SNAP_CACHE_MAX = 500                       # surat ~200 KB: chegara ≈ 100 MB
 
 _snap_cache: dict[int, tuple[float, bytes | None]] = {}
@@ -375,11 +385,15 @@ def snapshot(camera_id: int, ip: str, username: str, password: str,
 
     data = _ffmpeg_snapshot(slug)
     if data:
-        _snap_store(camera_id, now + SNAPSHOT_TTL, data)
+        # HTTP yo'l ishlamadi, RTSP ishladi. Kesh uzun: har 10 soniyada
+        # yangi RTSP sessiya ochish tirik oqimga xalaqit beradi.
+        _snap_store(camera_id, now + FFMPEG_TTL, data)
         _snap_url[camera_id] = _FFMPEG_SENTINEL   # keyingi safar to'g'ri shu yo'l
         return data
 
-    # Muvaffaqiyatsizlik ham keshlanadi — o'chiq kamerani qayta-qayta so'ramaslik uchun.
-    _snap_store(camera_id, now + SNAPSHOT_TTL, None)
+    # Muvaffaqiyatsizlik ham keshlanadi — o'chiq kamerani yoki sozlanmagan
+    # yo'lni qayta-qayta so'ramaslik uchun. Ilgari bu 8 soniya edi va
+    # jurnalda "path is not configured" cheksiz takrorlanardi.
+    _snap_store(camera_id, now + FFMPEG_FAIL_TTL, None)
     _snap_url.pop(camera_id, None)
     return None
