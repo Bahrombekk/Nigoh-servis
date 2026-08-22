@@ -42,3 +42,36 @@ def test_hls_oddiy_fmp4_bolib_qoladi():
     conf = _conf()
     assert conf["hlsVariant"] == "fmp4"
     assert conf.get("hlsLowLatency", False) is False
+
+
+# ---------- WebRTC uchun e'lon qilinadigan manzillar ----------
+
+def test_webrtc_hosti_media_basedan_olinadi(monkeypatch):
+    """Ishlab chiqarishda topilgan tuzoq: operator MEDIA_BASE ni to'g'ri
+    qo'ygan, lekin WebRTC baribir ishlamagan. Sabab — MediaMTX brauzerga
+    faqat mashinaning o'z interfeys manzillarini e'lon qilardi
+    (127.0.0.1, ichki LAN IP, docker0), internetdagi brauzer esa
+    ularning birortasiga yeta olmaydi.
+
+    MEDIA_BASE berilgan bo'lsa, brauzer o'sha domenga yetadi degani —
+    ikkinchi o'zgaruvchini talab qilishning ma'nosi yo'q.
+    """
+    from media import sync
+    for key in ("WEBRTC_HOSTS", "MEDIA_HOST", "MEDIA_BASE"):
+        monkeypatch.delenv(key, raising=False)
+
+    monkeypatch.setenv("MEDIA_BASE", "https://kamera.example.uz/media")
+    assert sync._webrtc_hosts() == ["kamera.example.uz"]
+
+    # Aniq berilgan qiymat MEDIA_BASE dan ustun.
+    monkeypatch.setenv("MEDIA_HOST", "10.0.0.5")
+    assert sync._webrtc_hosts() == ["10.0.0.5"]
+    monkeypatch.setenv("WEBRTC_HOSTS", "a.uz, b.uz")
+    assert sync._webrtc_hosts() == ["a.uz", "b.uz"]
+
+
+def test_hech_narsa_berilmasa_bosh(monkeypatch):
+    from media import sync
+    for key in ("WEBRTC_HOSTS", "MEDIA_HOST", "MEDIA_BASE"):
+        monkeypatch.delenv(key, raising=False)
+    assert sync._webrtc_hosts() == []

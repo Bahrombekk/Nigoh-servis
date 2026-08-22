@@ -32,6 +32,7 @@ import sys
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
@@ -62,12 +63,31 @@ WEBRTC_PORT = int(os.environ.get("WEBRTC_PORT", "8889"))
 WEBRTC_UDP_PORT = int(os.environ.get("WEBRTC_UDP_PORT", "8189"))
 WEBRTC_TCP_PORT = int(os.environ.get("WEBRTC_TCP_PORT", "8189"))
 
-# Brauzerga yuboriladigan qo'shimcha manzillar. Konteyner yoki NAT ortida
-# interfeys IP'lari mijozdan yetib bo'lmaydigan bo'ladi va ulanish
-# qurilmaydi. Vergul bilan: "10.0.0.5,kamera.example.uz". Berilmasa
-# MEDIA_HOST ishlatiladi (odatda o'sha manzil to'g'ri keladi).
-WEBRTC_HOSTS = [h.strip() for h in os.environ.get(
-    "WEBRTC_HOSTS", os.environ.get("MEDIA_HOST", "")).split(",") if h.strip()]
+def _webrtc_hosts() -> list[str]:
+    """Brauzerga WebRTC uchun e'lon qilinadigan manzillar.
+
+    Bo'sh qolsa MediaMTX faqat mashinaning O'Z interfeys manzillarini
+    beradi (127.0.0.1, ichki LAN IP, docker0) — internetdagi brauzer
+    ularning birortasiga yeta olmaydi, ICE ulanmaydi va tomoshabin
+    jimgina HLS'ga tushadi. Tashqaridan bu "WebRTC ishlamayapti" bo'lib
+    ko'rinadi, holbuki sozlama yetishmayapti.
+
+    Shu sababli MEDIA_BASE ham manba hisoblanadi: agar operator
+    `MEDIA_BASE=https://kamera.example.uz/media` deb yozgan bo'lsa,
+    brauzer o'sha domenga yetadi degani — ikkinchi o'zgaruvchini
+    talab qilishning ma'nosi yo'q.
+
+    Tartib: WEBRTC_HOSTS -> MEDIA_HOST -> MEDIA_BASE hosti.
+    """
+    raw = os.environ.get("WEBRTC_HOSTS") or os.environ.get("MEDIA_HOST") or ""
+    if not raw.strip():
+        base = os.environ.get("MEDIA_BASE", "").strip()
+        if base:
+            raw = urllib.parse.urlsplit(base).hostname or ""
+    return [h.strip() for h in raw.split(",") if h.strip()]
+
+
+WEBRTC_HOSTS = _webrtc_hosts()
 
 # Chiqish navbati. MediaMTX standarti — 512; bitta oqimni ko'p tomoshabin
 # ko'rganda u to'lib ketadi va server "reader is too slow" deb paketlarni
