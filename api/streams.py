@@ -79,6 +79,9 @@ def batch_streams(body: StreamsIn, request: Request):
                 mediamtx_sync.mark_warm(sub["slug"])
                 mediamtx_sync.ensure_path(sub, api_base)
             else:
+                # Asosiy oqim ham issiq bo'lsin — izoh api/cameras.py da.
+                mediamtx_sync.mark_warm(camera["slug"],
+                                        mediamtx_sync.WARM_MAIN_TTL)
                 mediamtx_sync.ensure_path(camera, api_base)
                 if api_base is None:           # o'girish faqat lokal tugunda
                     mediamtx_sync.ensure_transcode_path(camera)

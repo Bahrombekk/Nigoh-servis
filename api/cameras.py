@@ -143,6 +143,10 @@ def camera_stream(ref: str, request: Request, hevc: int = 0,
             mediamtx_sync.mark_warm(sub["slug"])
             mediamtx_sync.ensure_path(sub, api_base)
         else:
+            # Asosiy oqim ham ko'rilayotganda issiq bo'lsin: sourceOnDemand
+            # rejimida MediaMTX manbani ochib-yopib turadi va tomosha
+            # aynan shunda uziladi (o'lchov: media/sync.py izohida).
+            mediamtx_sync.mark_warm(camera["slug"], mediamtx_sync.WARM_MAIN_TTL)
             mediamtx_sync.ensure_path(camera, api_base)
             if api_base is None:               # o'girish faqat lokal tugunda
                 mediamtx_sync.ensure_transcode_path(camera)

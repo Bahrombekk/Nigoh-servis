@@ -226,3 +226,40 @@ def test_korilayotgan_sub_yol_issiq_bolib_qoladi(monkeypatch):
         assert sync.is_warm("k1" + SUB_SUFFIX), "ko'rilayotgan sub yo'l issiq qolishi kerak"
     finally:
         sync._sent.clear(); sync._warm.clear()
+
+
+def test_korilayotgan_asosiy_yol_ham_issiq_boladi():
+    """O'lchov bilan tasdiqlangan sabab: sourceOnDemand rejimida MediaMTX
+    manbani ochib-yopib turadi va tomosha shunda uziladi.
+
+      * qurilmadan to'g'ridan tortish      -> 92/90 soniya toza
+      * MediaMTX orqali, always_on bilan   -> 90 soniya toza
+      * MediaMTX orqali, sourceOnDemand    -> muzlaydi
+
+    Ya'ni asosiy oqim ham ko'rilayotganda issiq bo'lishi shart.
+    """
+    from media.sync import WARM_MAIN_TTL, is_warm
+    cam = _cam()
+    try:
+        assert source_path(cam)["sourceOnDemand"] is True
+        assert mark_warm("k1", WARM_MAIN_TTL)
+        assert is_warm("k1")
+        assert source_path(cam)["sourceOnDemand"] is False
+        # Issiq asosiy yo'l doimiy ro'yxatga ham tushadi, aks holda
+        # reconciler uni o'chirib yuborardi.
+        assert "k1" in desired_paths([cam])
+    finally:
+        _warm.clear()
+
+
+def test_issiq_muddat_qisqartirilmaydi():
+    """Sub yo'l 10 daqiqaga issiq bo'lsa, asosiy yo'lning qisqa muddati
+    uni qisqartirib yubormasligi kerak."""
+    from media.sync import WARM_MAIN_TTL, _warm as W
+    try:
+        mark_warm("k1")                      # uzun muddat (sub)
+        uzun = W["k1"]
+        mark_warm("k1", WARM_MAIN_TTL)       # qisqa muddat
+        assert W["k1"] == uzun, "muddat qisqartirildi"
+    finally:
+        _warm.clear()

@@ -215,22 +215,37 @@ def transcode_args(src_url: str, dst_url: str, gpu: bool = True,
 # o'chiriladi (doim ulangan). Muddati o'tsa reconciler navbatdagi tsiklda
 # farqni ko'rib sovutadi. Asosiy oqim uchun bu qimmat — faqat sub.
 
-WARM_TTL = 600.0       # soniya — oxirgi so'rovdan keyin shuncha issiq turadi
+WARM_TTL = 600.0       # soniya — sub yo'l: oxirgi so'rovdan keyin shuncha
+# Asosiy oqim ham ko'rilayotganda issiq bo'lishi SHART. sourceOnDemand
+# rejimida MediaMTX manbani ochib-yopib turadi (tomoshabin yo'q deb
+# hisoblab, closeAfter bo'yicha) va tomosha aynan shunda uziladi.
+# O'lchov bilan tasdiqlangan: qurilmadan to'g'ridan tortish 92/90 soniya
+# toza o'tdi, always_on bilan MediaMTX orqali ham 90 soniya toza, lekin
+# sourceOnDemand bilan muzlab qolardi.
+#
+# Muddat sub'nikidan qisqa: asosiy oqim ~1-4 Mbit/s va tomosha
+# tugagandan keyin uzoq ushlab turishning ma'nosi yo'q. Tomosha davom
+# etar ekan muddat har sinxronlash tsiklida yangilanadi.
+WARM_MAIN_TTL = 180.0
 WARM_LIMIT = 256       # bir vaqtda issiq yo'llar chegarasi
 
 _warm: dict[str, float] = {}          # sub-slug -> muddati (monotonic)
 _warm_lock = threading.Lock()
 
 
-def mark_warm(slug: str) -> bool:
-    """Sub yo'lni issiq qiladi (muddatni yangilaydi). Chegara to'lsa False."""
+def mark_warm(slug: str, ttl: float = WARM_TTL) -> bool:
+    """Yo'lni issiq qiladi (muddatni yangilaydi). Chegara to'lsa False.
+
+    Issiq yo'lda `sourceOnDemand` o'chadi, ya'ni MediaMTX manbani
+    ochib-yopmaydi — tomosha uzilmaydi.
+    """
     now = time.monotonic()
     with _warm_lock:
         for key in [k for k, t in _warm.items() if t <= now]:
             _warm.pop(key, None)
         if slug not in _warm and len(_warm) >= WARM_LIMIT:
             return False
-        _warm[slug] = now + WARM_TTL
+        _warm[slug] = max(_warm.get(slug, 0.0), now + ttl)
         return True
 
 
@@ -586,7 +601,7 @@ def desired_paths(cameras: list[dict], with_transcode: bool = True) -> dict:
         if not (cam.get("enabled") and cam.get("ip")):
             continue
         always = bool(cam.get("always_on"))
-        if always or is_managed(cam["slug"]):
+        if always or is_warm(cam["slug"]) or is_managed(cam["slug"]):
             wanted[cam["slug"]] = source_path(cam)
         sub = sub_variant(cam)
         if sub and (always or is_warm(sub["slug"]) or is_managed(sub["slug"])):
@@ -699,8 +714,8 @@ def push_to_api(cameras: list[dict], api_base: str | None = None,
             # Ko'rilayotgan sub yo'l issiq bo'lib turaversin: aks holda
             # 10 daqiqadan keyin issiqlik so'nadi, konfiguratsiya o'zgaradi
             # va MediaMTX manbani qayta ochadi — tomosha uziladi.
-            if name.endswith(SUB_SUFFIX):
-                mark_warm(name)
+            mark_warm(name, WARM_TTL if name.endswith(SUB_SUFFIX)
+                            else WARM_MAIN_TTL)
     for name in [n for n in _sent if n not in active]:
         _sent.pop(name, None)                 # yopilgan yo'l hisobi kerak emas
 
