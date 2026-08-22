@@ -83,6 +83,27 @@ def _stream_sig(path: str, expires: int) -> str:
     return base64.urlsafe_b64encode(mac.digest()[:20]).decode().rstrip("=")
 
 
+def _sig_matches(sig: str, path: str, expires: int) -> bool:
+    """Chipta shu yo'lga (yoki uning ichki resursiga) tegishlimi.
+
+    Chipta oqim yo'liga imzolanadi ("kamera_1"), lekin MediaMTX ba'zi
+    so'rovlarda ICHKI resurs bilan murojaat qiladi — masalan HLS variant
+    playlisti "kamera_1/video1_stream.m3u8". Aynan tekshirilsa bunday
+    so'rov rad etilardi va tomosha o'rtasida video uzilardi (o'lchov:
+    tomosha boshlangandan ~25-45 soniya keyin 401 boshlanardi).
+
+    Prefiks bo'yicha moslik xavfsiz: "kamera_1" chiptasi faqat
+    "kamera_1" va uning ichidagi resurslarga ruxsat beradi. Yondosh
+    "kamera_10" ga o'tmaydi — chegara sifatida "/" talab qilinadi.
+    """
+    if hmac.compare_digest(sig, _stream_sig(path, expires)):
+        return True
+    base = path.split("/", 1)[0]
+    if base and base != path:
+        return hmac.compare_digest(sig, _stream_sig(base, expires))
+    return False
+
+
 def stream_token(path: str) -> str:
     """Bitta yo'l uchun imzolangan chipta — oqim manziliga ?token= bo'lib qo'shiladi."""
     expires = int(time.time()) + STREAM_TOKEN_TTL
@@ -103,7 +124,7 @@ def stream_access_ok(ip: str, path: str, token: str) -> bool:
             expires = int(expires_s)
         except ValueError:
             expires = 0
-        if expires > now and hmac.compare_digest(sig, _stream_sig(path, expires)):
+        if expires > now and _sig_matches(sig, path, expires):
             with _stream_lock:
                 if len(_stream_sessions) > 10_000:      # chegara: eskilar chiqsin
                     for k in [k for k, t in _stream_sessions.items() if t <= now]:

@@ -33,3 +33,28 @@ def test_ichki_chipta():
     assert not security.internal_token_ok(tok + "x")
     # deterministik — launcher va backend bir xil qiymat oladi
     assert security.internal_token() == tok
+
+
+def test_ichki_resurs_chiptasi_qabul_qilinadi():
+    """Tomosha o'rtasida video uzilishining sababi.
+
+    Chipta oqim yo'liga imzolanadi ("kamera_1"), lekin MediaMTX ba'zi
+    so'rovlarda ichki resurs bilan murojaat qiladi — HLS variant
+    playlisti "kamera_1/video1_stream.m3u8". Aynan tekshirilganda bunday
+    so'rov rad etilardi: ishlab chiqarishda o'lchandi — tomosha
+    boshlangandan ~25-45 soniya keyin 401 boshlanib, keyin doimiy
+    bo'lib qolardi.
+    """
+    token = security.stream_token("kamera_1")
+    assert security.stream_access_ok("1.1.1.1", "kamera_1", token)
+    assert security.stream_access_ok("1.1.1.2", "kamera_1/video1_stream.m3u8", token)
+    assert security.stream_access_ok("1.1.1.3", "kamera_1/seg7.mp4", token)
+
+
+def test_yondosh_yolga_otmaydi():
+    """Prefiks bo'yicha moslik chegara sifatida "/" talab qiladi —
+    "kamera_1" chiptasi "kamera_10" ni ochmasligi kerak."""
+    token = security.stream_token("kamera_1")
+    assert not security.stream_access_ok("2.2.2.1", "kamera_10", token)
+    assert not security.stream_access_ok("2.2.2.2", "kamera_2", token)
+    assert not security.stream_access_ok("2.2.2.3", "boshqa/kamera_1", token)
