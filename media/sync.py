@@ -78,13 +78,38 @@ def _webrtc_hosts() -> list[str]:
     talab qilishning ma'nosi yo'q.
 
     Tartib: WEBRTC_HOSTS -> MEDIA_HOST -> MEDIA_BASE hosti.
+
+    Har bir qiymat HOST'ga keltiriladi. ICE nomzodiga faqat host yoki IP
+    yozilishi mumkin: sxema, yo'l yoki port bilan berilgan qiymat
+    MediaMTX'ga yaroqsiz nomzod bo'lib tushadi va ulanish jimgina
+    qurilmay qoladi. Amalda `MEDIA_HOST` ga to'liq URL yozib qo'yilgani
+    uchraydi, shuning uchun tozalash shu yerda qilinadi.
     """
     raw = os.environ.get("WEBRTC_HOSTS") or os.environ.get("MEDIA_HOST") or ""
     if not raw.strip():
-        base = os.environ.get("MEDIA_BASE", "").strip()
-        if base:
-            raw = urllib.parse.urlsplit(base).hostname or ""
-    return [h.strip() for h in raw.split(",") if h.strip()]
+        raw = os.environ.get("MEDIA_BASE", "").strip()
+    return [h for h in (_host_only(v) for v in raw.split(",")) if h]
+
+
+def _host_only(value: str) -> str:
+    """"https://kamera.example.uz/media" -> "kamera.example.uz".
+
+    Sxemasiz yozilgani ham to'g'ri ishlashi kerak ("kamera.example.uz/media"),
+    shuning uchun sxema bo'lmasa vaqtincha qo'shib qo'yiladi — usiz
+    urlsplit butun satrni yo'l deb qabul qiladi.
+    """
+    value = value.strip().rstrip("/")
+    if not value:
+        return ""
+    if "://" not in value:
+        # Port yoki yo'l bo'lmasa parse qilishning hojati yo'q.
+        if "/" not in value and ":" not in value:
+            return value
+        value = "//" + value
+    try:
+        return urllib.parse.urlsplit(value).hostname or ""
+    except ValueError:
+        return ""
 
 
 WEBRTC_HOSTS = _webrtc_hosts()

@@ -63,6 +63,16 @@ def test_webrtc_hosti_media_basedan_olinadi(monkeypatch):
     monkeypatch.setenv("MEDIA_BASE", "https://kamera.example.uz/media")
     assert sync._webrtc_hosts() == ["kamera.example.uz"]
 
+    # Amalda uchragan holat: MEDIA_HOST ga to'liq URL yozib qo'yilgan.
+    # ICE nomzodiga faqat host yozilishi mumkin — sxema va yo'l bilan
+    # berilgan qiymat MediaMTX'ga yaroqsiz nomzod bo'lib tushadi va
+    # ulanish JIMGINA qurilmay qoladi.
+    monkeypatch.setenv("MEDIA_HOST", "http://negoh.das-uty.uz/media")
+    assert sync._webrtc_hosts() == ["negoh.das-uty.uz"]
+    monkeypatch.setenv("MEDIA_HOST", "negoh.das-uty.uz:8889")
+    assert sync._webrtc_hosts() == ["negoh.das-uty.uz"]
+    monkeypatch.delenv("MEDIA_HOST")
+
     # Aniq berilgan qiymat MEDIA_BASE dan ustun.
     monkeypatch.setenv("MEDIA_HOST", "10.0.0.5")
     assert sync._webrtc_hosts() == ["10.0.0.5"]
