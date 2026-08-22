@@ -500,8 +500,13 @@ const RENEW_MARGIN = 5 * 60000;   // chipta muddatidan shuncha oldin yangilanadi
    uzun kutishga o'tilsa tomoshabin bekorga 8-16 soniya qora ekran
    ko'radi. Uzun oraliqlar faqat kamera haqiqatan o'lik bo'lganda
    kerak — o'shanda ham server bo'g'ilmasin. */
-const REOPEN_BACKOFF = [1000, 1500, 2000, 3000, 5000, 8000, 15000];
-const REOPEN_MAX_WAIT = 30000;
+// Kutish kengayib boradi, lekin 8 soniyadan oshmaydi. Ilgari 15 s va
+// 30 s bor edi: manba bir necha soniyada qaytadigan kamerada (o'lchov:
+// uzilgandan 5-6 s keyin qaytadi) tomoshabin bekorga yarim daqiqa qora
+// ekranga qarab turardi, chunki hisob faqat tasvir kelganda nolga
+// qaytadi va uzuq-yuluq manbada u o'sib ketadi.
+const REOPEN_BACKOFF = [1000, 1500, 2000, 3000, 5000, 8000];
+const REOPEN_MAX_WAIT = 8000;
 
 /* WebRTC bu muhitda umuman ishlamasa (UDP yopiq), har ochilishda 3,5 soniya
    bekorga kutmaslik uchun yiqilish eslab qolinadi va keyingi ochilishlar
@@ -522,18 +527,44 @@ const _store = {
 let _rtcFailedAt = +_store.get("nigoh_rtc_fail") || 0;
 const _rtcFailIds = new Set();
 
+// Bitta kamera ketma-ket shuncha marta yiqilsa — SHU kamera uchun
+// to'g'ridan HLS'ga o'tiladi. Nima uchun kerak: global bayroq ikki XIL
+// kamera yiqilishini talab qiladi, ya'ni bitta kamerani kuzatib
+// turgan odam uchun u hech qachon qo'yilmaydi va har qayta ulanishda
+// WHEP bekorga sinaladi (o'lchov: har urinish ~3,5 s). Serverda UDP
+// yopiq bo'lsa bu har uzilishda bekorga sarflangan vaqt.
+// Global bayroqni qo'ymaymiz — sabab kameraga xos bo'lishi ham mumkin.
+const RTC_CAM_FAIL_STREAK = 2;
+const _rtcCamFails = new Map();      // kamera id -> {n, at}
+
 function noteRtcFail(camId) {
+  const rec = _rtcCamFails.get(camId) || {n: 0, at: 0};
+  rec.n++;
+  rec.at = Date.now();
+  _rtcCamFails.set(camId, rec);
   _rtcFailIds.add(camId);
   if (_rtcFailIds.size < RTC_FAIL_STREAK) return;   // hali bitta kamera — muhit aybdor emas
   _rtcFailedAt = Date.now();
   _store.set("nigoh_rtc_fail", _rtcFailedAt);
 }
 
-function noteRtcOk() {
+function noteRtcOk(camId) {
+  if (camId !== undefined) _rtcCamFails.delete(camId);
   _rtcFailIds.clear();
   if (!_rtcFailedAt) return;
   _rtcFailedAt = 0;
   _store.del("nigoh_rtc_fail");
+}
+
+/* Shu kamera uchun WebRTC'ni sinash ma'noga egami. */
+function rtcWorthFor(camId) {
+  const now = Date.now();
+  if (now - _rtcFailedAt <= RTC_RETRY_MS) return false;      // muhit aybdor
+  const rec = _rtcCamFails.get(camId);
+  if (rec && rec.n >= RTC_CAM_FAIL_STREAK && now - rec.at <= RTC_RETRY_MS) {
+    return false;                                            // shu kamerada ishlamayapti
+  }
+  return true;
 }
 
 /* Oldindan isitish: diagnostika sahifasi ochilganda playlist bir marta
@@ -684,7 +715,7 @@ function createPlayer(video, msgEl) {
         p.reopens = 0;
         report();                   // birinchi kadr keldi — o'lchov to'liq
       }, {once: true});
-      const rtcWorth = Date.now() - _rtcFailedAt > RTC_RETRY_MS;
+      const rtcWorth = rtcWorthFor(cam.id);
       if (urls.webrtc_url && rtcWorth) {
         playWebRtc(urls.webrtc_url, staleFn).catch((e) => {
           if (staleFn()) return;
@@ -764,7 +795,7 @@ function createPlayer(video, msgEl) {
       // tinglovchining reject'i endi hech narsa qilmaydi, ya'ni bundan
       // keyingi uzilishlar ishlov ko'rmay qolardi. Doimiy tinglovchi
       // aynan shu bo'shliqni yopadi.
-      noteRtcOk();
+      noteRtcOk(cam.id);
       let dropped = null;
       pc.addEventListener("connectionstatechange", () => {
         if (staleFn() || pc !== p.pc) return;
