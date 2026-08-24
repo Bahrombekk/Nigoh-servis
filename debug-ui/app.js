@@ -339,7 +339,9 @@ function drawHome() {
   $("#hprob").innerHTML = probs.length
     ? `<div class="card" style="margin-top:14px"><h3>E'tibor talab qiladi</h3>${
         probs.slice(0, 25).map((c) => `<div class="prob-row" data-id="${c.id}">
-          <img src="/api/v1/cameras/${c.id}/snapshot?stale=1" loading="lazy"
+          <img ${c.snapshot_at
+                   ? `src="/api/v1/cameras/${c.id}/snapshot?stale=1"`
+                   : `style="visibility:hidden"`} loading="lazy"
             onerror="this.style.visibility='hidden'">
           <i class="dot s-${c.state}"></i><b>${esc(c.name)}</b>
           <span class="meta">${esc(c.region)}${c.ip ? " · " + esc(c.ip) : ""}</span>
@@ -1369,7 +1371,11 @@ let diagPlayer = null, diagQ = "";
 function openLive(c) {
   $("#dlive").style.display = "";
   const video = $("#dvideo");
-  video.poster = `/api/v1/cameras/${c.id}/snapshot`;
+  // Surat hech qachon olinmagan bo'lsa so'ramaymiz ham: endpoint
+  // ataylab 404 qaytaradi (offline kamerada eski kadr jonli bo'lib
+  // ko'rinmasin) va har so'rov konsolda xato bo'lib chiqadi.
+  if (c.snapshot_at) video.poster = `/api/v1/cameras/${c.id}/snapshot`;
+  else video.removeAttribute("poster");
   if (!diagPlayer) diagPlayer = createPlayer(video, $("#dlivemsg"));
   diagPlayer.open(c, diagQ);
 }
