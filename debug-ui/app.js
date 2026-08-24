@@ -574,10 +574,23 @@ function rtcWorthFor(camId) {
 function warmStream(c) {
   if (!c || !c.ip || c.state === "offline" || c.state === "disabled") return;
   api(`/api/v1/admin/cameras/${c.id}/keyframe`, {method: "POST"}).catch(() => {});
-  api(`/api/v1/cameras/${c.id}/stream?hevc=${HEVC_OK ? 1 : 0}`)
-    .then((u) => { if (u.stream_url) fetch(u.stream_url, {cache: "no-store"})
-      .catch(() => {}); })
-    .catch(() => {});
+  // Chipta so'rovi arzon: u faqat yo'lni MediaMTX'da sozlaydi va issiq
+  // to'plamga qo'shadi — kameraga ULANMAYDI.
+  //
+  // Ilgari bu yerda pleylist ham so'ralardi (`fetch(u.stream_url)`), va
+  // aynan o'sha kameraga qo'shimcha RTSP ulanish ochardi: MediaMTX
+  // sourceOnDemand yo'lini pleylist so'rovi bilan tortishni boshlaydi.
+  // Kamera esa bizdan ochilgan bir vaqtdagi sessiyalar sonini
+  // ko'tarmaydi — o'lchov (kamera 10.30.11.65, keepalive'siz sinov):
+  //
+  //     servis to'xtagan  — 84, 84, 85 s (barqaror)
+  //     servis ishlaganda — 3, 16, 28, 35, 54, 86 s (tarqoq)
+  //
+  // Ya'ni ortiqcha ulanish tomoshaning o'zini uzadi. Diagnostika
+  // sahifasini ochish uchun kameraga ulanishning ma'nosi yo'q: play
+  // bosilganda pleyer baribir ulanadi, keyframe so'rovi esa birinchi
+  // kadrni tezlashtiradi va u kameraning HTTP yuzasi orqali ketadi.
+  api(`/api/v1/cameras/${c.id}/stream?hevc=${HEVC_OK ? 1 : 0}`).catch(() => {});
 }
 
 function createPlayer(video, msgEl) {
