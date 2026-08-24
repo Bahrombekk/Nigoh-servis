@@ -50,6 +50,24 @@ CONFIG_PATH = DATA_DIR / "mediamtx.yml"
 API_BASE = os.environ.get("MEDIAMTX_API", "http://127.0.0.1:9997")
 API_TIMEOUT = 4.0
 
+# HLS uchun "CDN kaliti". Yoqilganda MediaMTX `Authorization: Bearer
+# <kalit>` bilan kelgan so'rovni SESSIYASIZ o'tkazadi va manzillarga na
+# `session=`, na `token=` qo'shadi.
+#
+# Nima uchun kerak: sessiyali rejimda manba qisqa uzilsa MediaMTX HLS
+# muxerini yo'q qiladi, muxer bilan sessiya ham o'ladi va mijoz DOIMIY
+# 401 oladi — o'lchovda o'sha manzil 96 marta ketma-ket 401 berdi va
+# o'z-o'zidan tiklanmadi (faqat master qayta olinganda tiklanadi, bu esa
+# buferni buzadi va ekranda uzilish bo'ladi). Bearer rejimida bekor
+# bo'ladigan holat yo'q, shuning uchun manba qaytishi bilan o'sha manzil
+# ishlashda davom etadi.
+#
+# DIQQAT: Bearer bilan kelgan so'rov bizning auth ilgagimizni chetlab
+# o'tadi. Sarlavhani nginx qo'yadi, ya'ni tomoshabin chiptasini ham
+# nginx tekshirishi shart (`auth_request` -> /api/auth/hls). Kalit
+# bo'sh bo'lsa mexanizm o'chiq va eski sessiyali yo'l ishlaydi.
+HLS_CDN_SECRET = os.environ.get("HLS_CDN_SECRET", "")
+
 RTSP_PORT = int(os.environ.get("MEDIAMTX_RTSP_PORT", "8554"))
 HLS_PORT = int(os.environ.get("HLS_PORT", "8888"))
 WEBRTC_PORT = int(os.environ.get("WEBRTC_PORT", "8889"))
@@ -477,6 +495,7 @@ def build_config(cameras: list[dict], auth_url: str | None = None,
         "hlsSegmentCount": 7,
         "hlsSegmentDuration": "1s",
         "hlsAllowOrigins": ["*"],
+        "hlsCDNSecret": HLS_CDN_SECRET,
         "hlsTrustedProxies": ["127.0.0.1"],
 
         "rtmp": False,

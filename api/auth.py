@@ -108,6 +108,50 @@ def stream_auth(body: dict):
     raise HTTPException(401, "Oqimga ruxsat yo'q")
 
 
+@router.get("/hls")
+def hls_auth(request: Request):
+    """Nginx `auth_request` uchun: shu HLS so'roviga ruxsat bormi.
+
+    `hlsCDNSecret` yoqilganda MediaMTX `Authorization: Bearer` bilan
+    kelgan so'rovni shartsiz o'tkazadi va bizning auth ilgagimizni
+    (POST /auth/stream) umuman chaqirmaydi. Sarlavhani nginx qo'yadi,
+    demak tomoshabin chiptasini ham nginx tekshirishi shart — aks holda
+    slug'ni bilgan har kim kamerani ko'ra olardi. Shu endpoint aynan
+    o'sha tekshiruv: nginx har bir /media/hls/ so'rovi uchun bu yerga
+    kiradi, 204 — ruxsat, 401 — rad.
+
+    Nima uchun umuman Bearer rejimiga o'tildi: sessiyali rejimda manba
+    qisqa uzilsa MediaMTX muxerni yo'q qiladi, sessiya o'ladi va mijoz
+    DOIMIY 401 oladi (o'lchov: o'sha manzil 96 marta ketma-ket 401,
+    o'z-o'zidan tiklanmaydi). Bearer rejimida sessiya yo'q, ya'ni bekor
+    bo'ladigan holat ham yo'q.
+
+    Chipta faqat BIRINCHI so'rovda (master pleylist) keladi — MediaMTX
+    Bearer rejimida bola pleylisti va segment manzillariga hech qanday
+    parametr qo'shmaydi. Shuning uchun keyingi so'rovlar `(ip, yo'l)`
+    sessiyasi orqali o'tadi; `stream_access_ok` shuni allaqachon
+    bajaradi.
+    """
+    uri = request.headers.get("x-original-uri", "")
+    ip = (request.headers.get("x-viewer-ip")
+          or (request.client.host if request.client else ""))
+    yol, _, query = uri.partition("?")
+    bolaklar = [b for b in yol.split("/") if b]
+    # /media/hls/<slug>/<resurs> -> <slug>/<resurs> (MediaMTX ko'rgan yo'l)
+    if len(bolaklar) >= 3 and bolaklar[0] == "media" and bolaklar[1] == "hls":
+        path = "/".join(bolaklar[2:])
+    else:
+        path = "/".join(bolaklar)
+    token = (parse_qs(query).get("token") or [""])[0]
+
+    if security.internal_token_ok(token):
+        return Response(status_code=204)
+    if security.stream_access_ok(ip, path, token):
+        return Response(status_code=204)
+    _log_denial(ip, "read", path, token)
+    raise HTTPException(401, "Oqimga ruxsat yo'q")
+
+
 _DENY_EVERY = 60.0
 _denied: dict[tuple, float] = {}
 
