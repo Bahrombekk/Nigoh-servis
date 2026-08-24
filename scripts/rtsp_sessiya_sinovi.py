@@ -132,14 +132,24 @@ try:
         except socket.timeout:
             continue
         if not d:
-            print(f"\n  ulanish YOPILDI (EOF): {time.time()-boshlandi:.0f} s")
+            dv = time.time() - boshlandi
+            print()
+            print(f"  ulanish YOPILDI (EOF): {dv:.0f} s, "
+                  f"{baytlar/1024/1024:.1f} MB "
+                  f"({baytlar/1024/max(dv,1):.0f} kB/s)")
             break
         baytlar += len(d)
     else:
-        print(f"\n  {LIMIT} s to'ldi — UZILMADI ({baytlar/1024/1024:.1f} MB)")
+        print()
+        print(f"  {LIMIT} s to'ldi — UZILMADI, "
+              f"{baytlar/1024/1024:.1f} MB "
+              f"({baytlar/1024/LIMIT:.0f} kB/s)")
 except ConnectionResetError:
-    print(f"\n  ulanish UZILDI (RST): {time.time()-boshlandi:.0f} s "
-          f"({baytlar/1024/1024:.1f} MB)")
+    dv = time.time() - boshlandi
+    print()
+    print(f"  ulanish UZILDI (RST): {dv:.0f} s, "
+          f"{baytlar/1024/1024:.1f} MB "
+          f"({baytlar/1024/max(dv,1):.0f} kB/s)")
 except OSError as e:
     print(f"\n  ulanish xatosi {time.time()-boshlandi:.0f} s: {e}")
 finally:
