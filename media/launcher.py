@@ -17,12 +17,20 @@ import time
 
 from core import security
 from core.db import get_db
+from core.rtsp_probe import build_rtsp_url
 
 from .sync import (RTSP_PORT, SUB_SUFFIX, ffmpeg_path, has_nvenc,
-                   transcode_args)
+                   relay_args, transcode_args)
 
-# Xom oqimni MediaMTX o'zi tortadi (FFmpeg kerak emas). Bu skript faqat
-# o'girish uchun chaqiriladi: `<kamera>_h264` so'ralganda.
+# Ikki vazifa bor:
+#
+#   `<kamera>_h264`  — O'GIRISH. Manba MediaMTX'dagi xom yo'l, natija
+#                      brauzer o'qiy oladigan H.264.
+#   `<kamera>`       — RELAY (qayta kodlashsiz uzatish). Manba KAMERANING
+#                      o'zi. Bu faqat RTSP_VIA_FFMPEG=1 bo'lganda
+#                      chaqiriladi; sababi relay_args() izohida —
+#                      MediaMTX RTSP keepalive yubormaydi va `timeout=60`
+#                      e'lon qilgan kamera har 60 soniyada uzadi.
 TRANSCODE_SUFFIX = "_h264"
 
 # Kamera o'chiq bo'lsa MediaMTX (runOnInitRestart) bizni darhol qayta
@@ -46,7 +54,7 @@ def load_camera(slug: str):
     with get_db() as db:
         row = db.execute(
             "SELECT slug, ip, port, username, password_enc, rtsp_path, "
-            "transcode, enabled FROM cameras WHERE slug = ?",
+            "sub_path, transcode, enabled FROM cameras WHERE slug = ?",
             (slug,),
         ).fetchone()
     return row
@@ -58,16 +66,27 @@ def main() -> int:
         print("Kamera nomi berilmadi", file=sys.stderr)
         return 2
 
-    if not slug.endswith(TRANSCODE_SUFFIX):
-        print(f"Bu yo'l o'girish uchun emas: {slug}", file=sys.stderr)
-        return 7
-    lookup = slug[: -len(TRANSCODE_SUFFIX)]
+    ogirish = slug.endswith(TRANSCODE_SUFFIX)
+    if ogirish:
+        lookup = slug[: -len(TRANSCODE_SUFFIX)]
+    else:
+        # Relay: yo'l nomining o'zi.
+        #
+        # Bu yerda RTSP_VIA_FFMPEG ni QAYTA TEKSHIRMAYMIZ. Sababi: bu
+        # skriptni MediaMTX ishga tushiradi, MediaMTX esa ilovadan oldin
+        # ko'tarilgan bo'lishi mumkin va uning muhitida yangi
+        # o'zgaruvchi bo'lmaydi — natijada relay jim ishlamay qolardi
+        # (o'lchovda aynan shu bo'ldi: "command exited with code 7"
+        # aylanib turdi). Qaror YO'L KONFIGURATSIYASIDA: MediaMTX
+        # launcher'ni faqat biz `runOnDemand` qilib sozlagan yo'l uchun
+        # chaqiradi, shablon yo'l esa faqat `_h264` ga mos keladi.
+        lookup = slug
 
-    # `<kamera>_sub_h264` — sub-oqimni o'girish. Bazada bunday slug yo'q
-    # (sub asosiy kameraning ikkinchi oqimi), shuning uchun kamera asosiy
-    # slug bo'yicha qidiriladi. Manba yo'li o'zgarmaydi: MediaMTX'da
-    # `<kamera>_sub` yo'li allaqachon ro'yxatdan o'tgan.
-    db_slug = lookup[: -len(SUB_SUFFIX)] if lookup.endswith(SUB_SUFFIX) else lookup
+    # `<kamera>_sub` (yoki `<kamera>_sub_h264`) — sub-oqim. Bazada bunday
+    # slug yo'q (sub asosiy kameraning ikkinchi oqimi), shuning uchun
+    # kamera asosiy slug bo'yicha qidiriladi.
+    sub = lookup.endswith(SUB_SUFFIX)
+    db_slug = lookup[: -len(SUB_SUFFIX)] if sub else lookup
 
     row = load_camera(db_slug)
     if row is None:
@@ -94,17 +113,34 @@ def main() -> int:
     # Ichki chipta shart: auth endi IP'ga qarab ruxsat bermaydi (proksi
     # ortida hamma 127.0.0.1 bo'lib ko'rinadi).
     auth = f"?token={security.internal_token()}"
-    source = f"rtsp://127.0.0.1:{RTSP_PORT}/{lookup}{auth}"
     destination = f"rtsp://127.0.0.1:{RTSP_PORT}/{slug}{auth}"
+    if ogirish:
+        # Manba — MediaMTX'dagi xom yo'l: kamera bilan bitta ulanish
+        # yetadi, uni ham xom, ham o'girilgan ko'rinishda beramiz.
+        source = f"rtsp://127.0.0.1:{RTSP_PORT}/{lookup}{auth}"
+    else:
+        # Relay — manba kameraning o'zi.
+        yol = (row["sub_path"] if sub else row["rtsp_path"]) or "/"
+        if sub and not row["sub_path"]:
+            print(f"{slug}: kamerada sub yo'l yo'q", file=sys.stderr)
+            return 5
+        source = build_rtsp_url(row["ip"], row["port"], yol,
+                                row["username"] or "",
+                                security.decrypt(row["password_enc"]))
 
     exe = ffmpeg_path()
     if not exe:
         print("FFmpeg topilmadi — PATH ga qo'shing", file=sys.stderr)
         return 6
 
-    args = transcode_args(source, destination, gpu=has_nvenc())
-    print(f"{slug}: H.264 ga o'girilmoqda ({'GPU' if has_nvenc() else 'CPU'})",
-          file=sys.stderr)
+    if ogirish:
+        args = transcode_args(source, destination, gpu=has_nvenc())
+        print(f"{slug}: H.264 ga o'girilmoqda ({'GPU' if has_nvenc() else 'CPU'})",
+              file=sys.stderr)
+    else:
+        args = relay_args(source, destination)
+        print(f"{slug}: kameradan FFmpeg orqali uzatilmoqda (qayta kodlashsiz)",
+              file=sys.stderr)
 
     # FFmpeg shu jarayonning o'rnini egallaydi — MediaMTX uni to'g'ridan
     # to'g'ri boshqaradi (to'xtatish signali ham to'g'ri yetib boradi).

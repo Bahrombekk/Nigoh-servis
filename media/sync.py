@@ -68,6 +68,25 @@ API_TIMEOUT = 4.0
 # bo'sh bo'lsa mexanizm o'chiq va eski sessiyali yo'l ishlaydi.
 HLS_CDN_SECRET = os.environ.get("HLS_CDN_SECRET", "")
 
+# Kamerani MediaMTX o'zi tortsinmi yoki FFmpeg tortsinmi.
+#
+# Standart holat — MediaMTX (yengil, jarayonsiz). Lekin MediaMTX RTSP
+# keepalive yubormaydi, shuning uchun sessiyani `timeout=60` bilan
+# e'lon qiladigan kameralar har 60 soniyada ulanishni uzadi va
+# tomoshabin 401 oladi. FFmpeg keepalive yuboradi.
+#
+# RTSP_VIA_FFMPEG=1 — hamma kamera FFmpeg orqali tortiladi.
+# FFMPEG_EXCLUDE=slug1,slug2 — istisnolar (masalan FFmpeg nusxalashda
+# B-kadrli H.264 oqimni buzsa; kodda bu ilgari kuzatilgan).
+RTSP_VIA_FFMPEG = os.environ.get("RTSP_VIA_FFMPEG", "0") == "1"
+FFMPEG_EXCLUDE = {s.strip() for s in
+                  os.environ.get("FFMPEG_EXCLUDE", "").split(",") if s.strip()}
+
+
+def pull_via_ffmpeg(slug: str) -> bool:
+    """Shu yo'l FFmpeg orqali tortiladimi."""
+    return RTSP_VIA_FFMPEG and slug not in FFMPEG_EXCLUDE
+
 RTSP_PORT = int(os.environ.get("MEDIAMTX_RTSP_PORT", "8554"))
 HLS_PORT = int(os.environ.get("HLS_PORT", "8888"))
 WEBRTC_PORT = int(os.environ.get("WEBRTC_PORT", "8889"))
@@ -195,13 +214,28 @@ _INPUT = ["-hide_banner", "-loglevel", "warning",
 _OUTPUT = ["-an", "-pkt_size", "1200", "-f", "rtsp", "-rtsp_transport", "tcp"]
 
 
-def relay_args(src_url: str, dst_url: str) -> list[str]:
-    """Kamera H.264 bergan holat: video umuman ochilmaydi.
+# Relay chiqishi: `-an` YO'Q — kameraning barcha treklari (video + audio)
+# borligicha o'tadi, ya'ni xom yo'lning mazmuni o'zgarmaydi.
+_RELAY_OUTPUT = ["-c", "copy", "-pkt_size", "1200",
+                 "-f", "rtsp", "-rtsp_transport", "tcp"]
 
-    Paketlar borligicha uzatiladi — na dekodlash, na kodlash bor.
-    Sarf: bir necha foiz protsessor va ~30 MB xotira.
+
+def relay_args(src_url: str, dst_url: str) -> list[str]:
+    """Oqimni qayta kodlashsiz uzatish (paketlar borligicha).
+
+    Ishlatiladi: kamerani MediaMTX o'zi tortishi o'rniga FFmpeg tortadi.
+    Nima uchun kerak bo'ldi — RTSP KEEPALIVE. Kamera sessiyani
+    `Session: ...;timeout=60` bilan e'lon qiladi va shu muddat ichida
+    keepalive kutadi; MediaMTX esa TCP orqali ma'lumot kelayotganini
+    yetarli deb hisoblaydi va keepalive yubormaydi. Natijada kamera har
+    60 soniyada ulanishni RST bilan uzadi (serverda tcpdump bilan
+    o'lchandi: SETUP -> 59 soniyadan keyin RST, orada bitta ham
+    OPTIONS/GET_PARAMETER yo'q). Har uzilishda HLS muxeri yo'q qilinadi,
+    sessiya o'ladi va tomoshabin 401 oladi. FFmpeg esa keepalive
+    yuboradi — o'lchov: shu kamerani ffmpeg 302 soniya uzilmasdan
+    o'qidi, MediaMTX esa 54 soniyada uzildi.
     """
-    return _INPUT + ["-i", src_url, "-c", "copy"] + _OUTPUT + [dst_url]
+    return _INPUT + ["-i", src_url] + _RELAY_OUTPUT + [dst_url]
 
 
 def transcode_args(src_url: str, dst_url: str, gpu: bool = True,
@@ -354,6 +388,28 @@ def _launcher(slug_expr: str) -> str:
     return f'"{python}" "{script}" {slug_expr}'
 
 
+def relay_path(cam: dict) -> dict:
+    """Kamerani FFmpeg tortadigan yo'l (qayta kodlashsiz, `-c copy`).
+
+    MediaMTX manbani o'zi ochmaydi — talab bo'yicha launcher chaqiriladi,
+    u kameraga ulanadi va oqimni shu yo'lga publish qiladi. Sababi
+    `relay_args()` izohida: MediaMTX RTSP keepalive yubormaydi va
+    `timeout=60` e'lon qilgan kamera har 60 soniyada ulanishni uzadi.
+
+    Konfiguratsiya kamera ma'lumotlariga BOG'LIQ EMAS (parol ham yo'q) —
+    launcher hammasini bazadan o'zi oladi. Shu sababli kamera tahrirlansa
+    ham yo'l konfiguratsiyasi o'zgarmaydi, ya'ni tomosha o'rtasida manba
+    qayta ochilmaydi.
+    """
+    conf = {
+        "runOnDemand": _launcher(cam["slug"]),
+        "runOnDemandRestart": True,
+        "runOnDemandStartTimeout": "12s",
+        "runOnDemandCloseAfter": SOURCE_CLOSE_AFTER,
+    }
+    return conf
+
+
 def source_path(cam: dict) -> dict:
     """Kamerani MediaMTX o'zi tortadigan yo'l.
 
@@ -362,6 +418,9 @@ def source_path(cam: dict) -> dict:
     bir necha MB), ham ishonchliroq — FFmpeg nusxalashda B-kadrli H.264
     oqimni buzib yuborardi.
     """
+    if pull_via_ffmpeg(cam["slug"]):
+        return relay_path(cam)
+
     conf = {
         "source": build_rtsp_url(
             cam["ip"], cam["port"], cam.get("rtsp_path") or "/",
