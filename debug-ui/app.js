@@ -860,14 +860,22 @@ function createPlayer(video, msgEl) {
     }
 
     /* HLS uchun xuddi shu vazifa: o'ynayotgan videoda currentTime o'smasa
-       oqim qotgan. Boshlanish paytida (paused / readyState past) hisob
-       yuritilmaydi — aks holda har ochilish soxta uzilish bo'lardi. */
+       oqim qotgan.
+
+       Shart `readyState < 2` EMAS, `currentTime <= 0`. Nima uchun: bufer
+       bo'shaganda readyState 2 dan 1 ga (HAVE_METADATA) tushadi — ya'ni
+       aynan QOTGAN holatda. Eski shart bilan kuzatuvchi shunda butunlay
+       chiqib ketardi, hisob yurmasdi va qotgan oqim hech qachon
+       aniqlanmasdi: tasvir abadiy muzlab turardi. `currentTime <= 0` esa
+       ochilish paytidagi soxta uzilishdan xuddi shunday himoya qiladi
+       (ijro boshlanmaguncha 0), lekin bir marta ketgandan keyin muzlashni
+       ko'rmay qolmaydi. */
     function armHlsWatch(staleFn) {
       let prev = -1, still = 0;
       p.stopWatch();
       p.watch = setInterval(() => {
         if (staleFn()) { p.stopWatch(); return; }
-        if (video.paused || video.readyState < 2) return;
+        if (video.paused || video.currentTime <= 0) return;
         const now = video.currentTime;
         if (Math.abs(now - prev) < 0.05) still++; else { still = 0; prev = now; }
         if (still >= WATCH_DEAD) { p.stopWatch(); p.retry("HLS qotdi"); }
@@ -898,7 +906,18 @@ function createPlayer(video, msgEl) {
         // hlsVariant: fmp4, LL-HLS emas), part'lar umuman yo'q — rejimni
         // yoqish faqat keraksiz kutish va noto'g'ri jonli chekka hisobiga
         // olib keladi.
-        const hls = new Hls({lowLatencyMode: false, maxBufferLength: 12,
+        // maxBufferLength 12 emas, 30: manba kanali siqilganda kamera RTP
+        // paketlarini tashlaydi, kalit kadr yo'qoladi va MediaMTX segment
+        // uzunligini cho'zadi — serverda o'lchandi:
+        //     [RTSP source] 1753 RTP packets lost
+        //     [muxer] segment duration changed from 2s to 10s
+        // 12 s bufer bunday segmentni BITTA ham sig'dira olmaydi, ya'ni
+        // har cho'zilishda bufer bo'shab bufferStalledError beradi. 30 s
+        // uch-to'rtta segmentni ushlaydi. Kechikishga ta'sir qilmaydi:
+        // jonli chekka `liveSyncDurationCount` bilan belgilanadi, bu esa
+        // faqat oldindan yig'ish chegarasi (pleylistda 7 segment turadi —
+        // mediamtx.yml, hlsSegmentCount).
+        const hls = new Hls({lowLatencyMode: false, maxBufferLength: 30,
           backBufferLength: 8, liveSyncDurationCount: 2,
           maxLiveSyncPlaybackRate: 1.1,
           manifestLoadingTimeOut: 25000,
@@ -921,8 +940,17 @@ function createPlayer(video, msgEl) {
           console.log(`[hls] segment so'ralmoqda: №${d.frag.sn}`));
         hls.on(Hls.Events.FRAG_BUFFERED, (_, d) =>
           console.log(`[hls] segment buferda: №${d.frag.sn}`));
-        hls.on(Hls.Events.ERROR, (_, d) =>
-          console.log(`[hls] XATO: ${d.details} fatal=${d.fatal}`));
+        /* Umumiy xato jurnali. bufferStalledError bu yerda ATAYLAB
+           chetlab o'tiladi: uni pastdagi maxsus ishlovchi hal qiladi va
+           nima qilganini o'zi yozadi ("bufer teshigi — sakradik" yoki
+           "master qayta yuklanmoqda"). Ikkinchi marta yozilsa konsolda
+           yolg'on signal chiqadi — xato hal qilingan bo'lsa ham
+           "XATO: bufferStalledError" ko'rinib turadi va tuzatish
+           ishlamayotgandek tuyuladi (aynan shu chalkashlik bo'lgan). */
+        hls.on(Hls.Events.ERROR, (_, d) => {
+          if (d.details === Hls.ErrorDetails.BUFFER_STALLED_ERROR) return;
+          console.log(`[hls] XATO: ${d.details} fatal=${d.fatal}`);
+        });
         video.addEventListener("playing", () => console.log("[hls] video ketdi"),
           {once: true});
         hls.loadSource(url);
@@ -934,35 +962,139 @@ function createPlayer(video, msgEl) {
         // marta natija bermagandan keyin boshqa yo'l (sub -> asosiy yoki
         // xato xabari) qidiriladi.
         let netFails = 0, mediaFails = 0, authReloads = 0, authJump = false;
-        // Segment buferga tushdi — demak oqim tiklandi, ruxsat hisobini
-        // nolga qaytaramiz (uzoq tomoshada chegara bekorga tugamasin).
-        //
-        // Master qayta yuklangandan keyin esa alohida ish bor: yangi bufer
-        // NOLdan boshlanadi, video elementi esa eski joyida turadi va
-        // bufer oralig'idan tashqarida qoladi — segmentlar kelayotgan
-        // bo'lsa ham tasvir qotib qoladi. Shu sababli birinchi segment
-        // kelganda jonli chekkaga sakraymiz va ijroni qayta boshlaymiz.
-        hls.on(Hls.Events.FRAG_BUFFERED, () => {
-          authReloads = 0;
-          if (!authJump) return;
-          authJump = false;
+        let stalls = 0;
+
+        /* Buferning holatini jurnal uchun matnga aylantiradi. Qotib
+           qolishni boshqa hech narsa tushuntirib bermaydi: teshik
+           qayerda, currentTime qayerda — faqat shu ko'rinadi. */
+        function bufInfo() {
           try {
             const b = video.buffered;
-            if (b.length) {
-              const boshi = b.start(0), oxiri = b.end(b.length - 1);
-              if (video.currentTime < boshi || video.currentTime > oxiri) {
-                video.currentTime = oxiri;
-              }
+            let s = "";
+            for (let i = 0; i < b.length; i++) {
+              s += `[${b.start(i).toFixed(1)}-${b.end(i).toFixed(1)}]`;
             }
-          } catch (e) { /* bufer hali o'qilmasa — play o'zi tiklaydi */ }
+            return `t=${video.currentTime.toFixed(1)} rs=${video.readyState}`
+                   + ` bufer=${s || "bo'sh"}`;
+          } catch (e) { return "bufer o'qilmadi"; }
+        }
+
+        /* Buferdagi TESHIKdan o'tib ketadi.
+
+           `video.buffered` — bir necha alohida oraliq bo'lishi mumkin,
+           va aynan shu yerda oldingi urinishim xato edi: faqat tashqi
+           konvert (start(0)…end(oxirgi)) tekshirilardi. currentTime ikki
+           oraliq ORASIDAGI teshikda turganda konvert ichida bo'ladi,
+           ya'ni "hammasi joyida" deb hisoblanardi — funksiya false
+           qaytarardi va tasvir qotib qolardi.
+
+           Teshik ikki sababdan paydo bo'ladi:
+             * muxer qaytadan yaratilganda vaqt o'qi noldan boshlanadi va
+               currentTime hamma oraliqdan tashqarida qoladi;
+             * kamera kadr tashlaganda (kanal siqilgan) segment yetib
+               kelmaydi va o'rtada bo'shliq qoladi.
+
+           Uch holat farqlanadi:
+             1) currentTime biror oraliq ichida, oldida joy bor -> teshik
+                yo'q, false;
+             2) currentTime teshikda yoki o'qdan tashqarida -> oldindagi
+                eng yaqin oraliq boshiga (yo'q bo'lsa jonli chekkaga)
+                sakraymiz, true;
+             3) currentTime oxirgi oraliqning chekkasida -> bu teshik
+                emas, bufer BO'SHAGAN. Sakrash foydasiz, false qaytaramiz
+                va yuqoridagi eskalatsiya (master qayta yuklash) ishlaydi. */
+        function jumpOverHole() {
+          try {
+            const b = video.buffered;
+            if (!b.length) return false;
+            const t = video.currentTime;
+            let inside = false, next = -1;
+            for (let i = 0; i < b.length; i++) {
+              // Oraliq ichidami — oxiridan 0,2 s berida bo'lishi kerak,
+              // aks holda "chekkada turish" ham "ichida" bo'lib chiqadi.
+              if (t >= b.start(i) - 0.1 && t < b.end(i) - 0.2) inside = true;
+              if (b.start(i) > t + 0.1 && next < 0) next = b.start(i);
+            }
+            if (inside) return false;                       // 1-holat
+            if (next >= 0) {                                // 2-holat: teshik
+              video.currentTime = next + 0.05;
+              video.play().catch(() => {});
+              return true;
+            }
+            const oxiri = b.end(b.length - 1);
+            if (Math.abs(t - oxiri) > 0.5) {                // 2-holat: yangi o'q
+              video.currentTime = oxiri;
+              video.play().catch(() => {});
+              return true;
+            }
+            return false;                                   // 3-holat: bo'shagan
+          } catch (e) {
+            return false;   // bufer hali o'qilmasa — play o'zi tiklaydi
+          }
+        }
+
+        // Segment buferga tushdi — demak oqim tiklandi, hisoblarni nolga
+        // qaytaramiz (uzoq tomoshada chegara bekorga tugamasin).
+        //
+        // Master qayta yuklangandan keyin esa alohida ish bor: bufer
+        // NOLdan boshlanadi, shuning uchun birinchi segment kelganda
+        // jonli chekkaga sakraymiz va ijroni qayta boshlaymiz.
+        hls.on(Hls.Events.FRAG_BUFFERED, () => {
+          authReloads = 0;
+          stalls = 0;
+          if (!authJump) return;
+          authJump = false;
+          jumpOverHole();
           video.play().catch(() => {});
         });
         hls.on(Hls.Events.ERROR, (_, d) => {
           if (staleFn()) return;
-          // Bufer to'xtashi fatal deb belgilanmaydi, lekin ekranni aynan
-          // shu qotiradi — yuklashni turtib qo'yamiz.
+          /* Bufer to'xtashi fatal deb belgilanmaydi, lekin ekranni aynan
+             shu qotiradi.
+
+             Ilgari bu yerda `hls.startLoad()` chaqirilardi. U YORDAM
+             BERMAYDI: to'xtashning sababi yuklash to'xtagani emas,
+             buferda TESHIK borligi (`jumpOverHole` izohi). Yuklash esa
+             allaqachon ketayotgan bo'ladi, ya'ni chaqiruv faqat hls.js'ning
+             o'z tiklanishini (nudge) uzib qo'yadi. Natijada xato
+             takrorlanaveradi — ishlab chiqarish konsolida ko'rindi:
+
+                 [hls] XATO: bufferStalledError fatal=false   (qayta-qayta)
+
+             va currentTime 6 soniya siljimagach kuzatuvchi (`armHlsWatch`,
+             WATCH_DEAD=3) butun pleyerni yopib ochadi — tomoshabin uchun
+             qora ekran. Bizda manba har 60 soniyada uziladi (shlyuz RTSP
+             ulanishini uzadi, sabab tarmoqda), ya'ni bu daqiqada bir marta
+             takrorlanardi.
+
+             To'g'ri javob uch qadamli:
+               1) teshik bo'lsa — jonli chekkaga sakraymiz (asl sabab shu);
+               2) teshik bo'lmasa — hls.js o'zi turtib ko'rsin, xalal
+                  bermaymiz (u buni bir necha marta uzluksiz sinaydi);
+               3) to'xtash baribir qaytarsa — master pleylistni qayta
+                  olamiz. Bu 401 dagi bilan bir xil yo'l va o'lchov bilan
+                  tasdiqlangan: master qayta so'ralganda muxer qaytadan
+                  yaratilgan bo'lsa ham oqim tiklanadi. */
           if (d.details === Hls.ErrorDetails.BUFFER_STALLED_ERROR) {
-            hls.startLoad();
+            const holat = bufInfo();
+            if (jumpOverHole()) {
+              console.log(`[hls] bufer teshigi — o'tib ketdik (${holat})`);
+              stalls = 0;
+              return;
+            }
+            // Teshik yo'q, ya'ni bufer bo'shagan. Bir-ikki marta hls.js
+            // o'zi turtib ko'rsin; keyin master qayta yuklanadi.
+            if (++stalls <= 2) {
+              console.log(`[hls] bufer bo'shadi ${stalls}/2 — `
+                          + `hls.js tiklashi kutilmoqda (${holat})`);
+              return;
+            }
+            stalls = 0;
+            console.log(`[hls] bufer qayta-qayta to'xtadi — `
+                        + `master qayta yuklanmoqda (${holat})`);
+            authJump = true;
+            hls.loadSource(url);
+            hls.startLoad(-1);              // -1 = jonli chekkadan
             return;
           }
           /* 401/403 — chipta o'lgan; 404 — yo'l MediaMTX'da yo'q.
