@@ -69,7 +69,14 @@ _service_cache: dict[str, str] = {}        # ip -> javob bergan service yo'li
 # lekin muddatli — ONVIF keyinroq yoqilsa, qayta ishga tushirish shart emas.
 _profile_cache: dict[str, tuple[list[str], float]] = {}
 _NO_ONVIF_TTL = 600.0
-_last_keyframe: dict[tuple, float] = {}    # (ip, path) -> oxirgi so'rov vaqti
+# (ip, path, oqim) -> oxirgi so'rovlar vaqti. Ro'yxat, chunki har ochilishda
+# ketma-ket ikkita so'rov ketadi (`request_keyframe_async` izohiga qarang).
+_last_keyframe: dict[tuple, list[float]] = {}
+KEYFRAME_WINDOW = 2.0          # soniya — bosim oynasi
+KEYFRAME_BURST = 2             # shu oynada ruxsat etilgan so'rovlar
+# Ikkinchi so'rov shuncha kechikadi. WHEP signalizatsiyasining p95 qiymati
+# 418 ms (o'lchov), ya'ni bu vaqtga tomoshabin ulanib bo'lgan bo'ladi.
+KEYFRAME_AFTER_SIGNAL = float(os.environ.get("KEYFRAME_AFTER_SIGNAL", "0.7"))
 _lock = threading.Lock()
 
 
@@ -201,9 +208,18 @@ def request_keyframe(ip: str, username: str, password: str,
     key = (ip, rtsp_path or "", stream)
     now = time.monotonic()
     with _lock:
-        if now - _last_keyframe.get(key, 0.0) < 2.0:   # bosimdan saqlanish
+        # Bosimdan saqlanish, lekin BITTA emas, KETMA-KET IKKITAGA ruxsat.
+        # Sababi `request_keyframe_async` izohida: bitta so'rov ko'pincha
+        # tomoshabin ulanishidan oldin ishlaydi va bekorga ketadi.
+        urinishlar = [t for t in _last_keyframe.get(key, ())
+                      if now - t < KEYFRAME_WINDOW]
+        if len(urinishlar) >= KEYFRAME_BURST:
             return False
-        _last_keyframe[key] = now
+        _last_keyframe[key] = urinishlar + [now]
+        if len(_last_keyframe) > 5_000:               # xotira chegarasi
+            for k, ts in list(_last_keyframe.items()):
+                if not ts or now - ts[-1] > KEYFRAME_WINDOW:
+                    _last_keyframe.pop(k, None)
 
     if _onvif_keyframe(ip, username, password, rtsp_path, stream):
         return True
@@ -216,12 +232,32 @@ def request_keyframe(ip: str, username: str, password: str,
 def request_keyframe_async(ip: str, username: str, password: str,
                            rtsp_path: str = "", vendor: str = "",
                            stream: str = "main") -> None:
-    """Keyframe so'rovi fonda ketadi — oqim manzili javobini kechiktirmaydi."""
-    threading.Thread(
-        target=request_keyframe,
-        args=(ip, username, password, rtsp_path, vendor, stream),
-        daemon=True,
-    ).start()
+    """Keyframe so'rovi fonda ketadi — oqim manzili javobini kechiktirmaydi.
+
+    IKKI MARTA yuboriladi va sababi o'lchovda. Ishlab chiqarish
+    ko'rsatkichlari (293 ta haqiqiy WebRTC sessiyasi, /health -> open_ms):
+
+        stream_ms (backend)      p50   14 ms
+        signal_ms (WHEP)         p50  345 ms,  p95 418 ms
+        frame_ms  (birinchi kadr) p50 2329 ms, p95 8925 ms
+
+    Ya'ni butun kechikish birinchi kadrni kutishda. Bizning ONVIF so'rovimiz
+    esa ~190 ms da bajariladi — tomoshabin WebRTC bilan ULANMASDAN OLDIN.
+    Kamera IDR'ni o'sha zahoti yuboradi, uni hali hech kim o'qimayapti, va
+    tomoshabin baribir navbatdagi keyframe'ni (butun GOP) kutadi. Shuning
+    uchun bitta so'rov o'lchovda hech narsa o'zgartirmagan.
+
+    Ikkinchi so'rov signalizatsiya tugaganiga ishonch hosil qilingandan
+    keyin ketadi (p95 = 418 ms, zaxira bilan olindi), ya'ni IDR endi
+    ulangan tomoshabinga tushadi. Kamera ortiqcha so'rovni jimgina
+    e'tiborsiz qoldiradi, narxi — bitta yengil HTTP so'rov.
+    """
+    def yubor():
+        request_keyframe(ip, username, password, rtsp_path, vendor, stream)
+        time.sleep(KEYFRAME_AFTER_SIGNAL)
+        request_keyframe(ip, username, password, rtsp_path, vendor, stream)
+
+    threading.Thread(target=yubor, daemon=True).start()
 
 
 # ---------- JPEG surat (snapshot) ----------

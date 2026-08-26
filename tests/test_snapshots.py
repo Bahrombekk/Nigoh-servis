@@ -118,3 +118,46 @@ def test_semafor_uchinchi_jonli_olishni_rad_etadi(monkeypatch):
     # slot bo'shadi — endi jonli olishga uriniladi (capture=False -> baribir bo'sh)
     data, _, _ = snapshots.read(_row(9003, slug="yoq_slug"))
     assert data is None
+
+
+# ---------- keyframe so'rovi ----------
+
+def test_keyframe_ikki_marta_yuboriladi(monkeypatch):
+    """Ochilishda ONVIF so'rovi IKKI marta ketishi shart.
+
+    O'lchov (293 ta WebRTC sessiyasi): WHEP signalizatsiyasi p50 345 ms,
+    ONVIF so'rovi esa ~190 ms da bajariladi. Ya'ni bitta so'rov tomoshabin
+    ULANMASDAN OLDIN IDR keltiradi va u bekorga ketadi — tomoshabin
+    baribir butun GOP kutadi. Ikkinchi so'rov signalizatsiyadan keyin
+    ketadi.
+    """
+    import time
+
+    from core import fast_start
+
+    urinishlar = []
+    monkeypatch.setattr(fast_start, "_onvif_keyframe",
+                        lambda *a, **k: urinishlar.append(time.monotonic()) or True)
+    monkeypatch.setattr(fast_start, "KEYFRAME_AFTER_SIGNAL", 0.05)
+    fast_start._last_keyframe.clear()
+
+    fast_start.request_keyframe_async("10.0.0.1", "u", "p", "/ch1", "dahua")
+    time.sleep(0.4)
+    assert len(urinishlar) == 2, f"kutilgan 2 ta so'rov, kelgani {len(urinishlar)}"
+    assert urinishlar[1] - urinishlar[0] >= 0.05
+
+
+def test_keyframe_uchinchi_sorov_tosiladi(monkeypatch):
+    """Bosim himoyasi joyida qoladi: oynada ikkitadan ortiq o'tmaydi."""
+    from core import fast_start
+
+    n = []
+    monkeypatch.setattr(fast_start, "_onvif_keyframe",
+                        lambda *a, **k: n.append(1) or True)
+    fast_start._last_keyframe.clear()
+
+    args = ("10.0.0.2", "u", "p", "/ch1", "dahua")
+    assert fast_start.request_keyframe(*args) is True
+    assert fast_start.request_keyframe(*args) is True
+    assert fast_start.request_keyframe(*args) is False   # uchinchisi — yo'q
+    assert len(n) == 2
