@@ -15,6 +15,7 @@ import time
 from fastapi import APIRouter
 
 from core import bus, health, metrics, snapshots
+from media import reconciler
 from media import sync as mediamtx_sync
 
 router = APIRouter(tags=["health"])
@@ -45,10 +46,16 @@ def _egress_mbps(bytes_sent: int) -> float:
 @router.get("/health")
 def service_health():
     runtime = mediamtx_sync.node_runtime()
+    foreign = reconciler.foreign_nodes()
     egress = _egress_mbps(runtime["bytes_sent"]) if runtime else 0.0
     return {
-        "ok": runtime is not None,
+        "ok": runtime is not None and not foreign,
         "mediamtx": runtime is not None,
+        # Begona MediaMTX'ga (boshqa o'rnatmanikiga) qarab turgan tugunlar.
+        # Noldan farqli bo'lsa shu mashinada ikkinchi Nigoh ishlayapti va
+        # ikkalasi bitta MediaMTX'ni tortishyapti — kameralar uziladi.
+        # Sababi va yechimi jurnalda: `mediamtx_begona`.
+        "mediamtx_foreign": foreign,
         "health": health.sweep_stats(),
         "egress_mbps": egress,
         "egress_capacity_mbps": NIC_CAPACITY_MBPS,

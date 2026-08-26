@@ -465,9 +465,22 @@ const FAIL_MSG = "oqim ochilmadi";
 /* Watchdog: oqim "ulangan" bo'lib turib qotib qolishi eng ko'p uchraydigan
    nosozlik, va uni na connectionState, na hls.js xatosi ko'rsatadi. Shuning
    uchun harakat o'lchanadi — WebRTC'da dekodlangan kadrlar, HLS'da
-   currentTime. Uch tsikl (6 s) qimirlamasa oqim o'lik deb hisoblanadi. */
+   currentTime.
+
+   Chegara 6 soniya EDI va bu SOG'LOM oqimni uzardi. O'lchov (ikki xil
+   Dahua kanali, kameradan TO'G'RIDAN o'qib, MediaMTX ham, relay ham
+   ishtirok etmagan holda): ma'lumot 5-8 soniyalik portlashlar bilan
+   keladi, orada 3-6 soniya BUTUNLAY jim. Ya'ni normal ishlayotgan
+   kamerada ham dekodlangan kadrlar muntazam 3-6 soniya qimirlamaydi —
+   6 soniyalik chegara aynan shunga tushib, pleyer ulanishni uzib qayta
+   ochardi. Jurnalda bu bir soatda 98 marta "peer connection closed"
+   bo'lib ko'rindi, tomoshabin uchun esa uzluksiz uzilish edi.
+
+   12 soniya — o'lchangan eng uzun jimlikdan (6 s) ikki barobar katta.
+   Haqiqatan o'lgan oqim baribir ushlanadi, ustiga serverda mustaqil
+   nazorat bor: reconciler 20 soniyada `stalled` hodisasini yozadi. */
 const WATCH_MS = 2000;
-const WATCH_DEAD = 3;
+const WATCH_DEAD = 6;
 const MAX_RETRY = 3;          // ketma-ket shuncha urinishdan keyin taslim
 const RETRY_WINDOW = 60000;   // shuncha tinch turgandan keyin hisob yangilanadi
 /* WebRTC jitter buferi nishoni (ms) — brauzer tasvirni ko'rsatishdan

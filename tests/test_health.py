@@ -9,10 +9,10 @@ def test_health_kalitsiz_va_shakli():
         r = client.get("/health")            # kalitsiz — Docker HEALTHCHECK
         assert r.status_code == 200
         body = r.json()
-        assert set(body) == {"ok", "mediamtx", "health", "egress_mbps",
-                             "egress_capacity_mbps", "streams", "readers",
-                             "warm", "managed", "sse_subscribers", "snapshots",
-                             "open_ms"}
+        assert set(body) == {"ok", "mediamtx", "mediamtx_foreign", "health",
+                             "egress_mbps", "egress_capacity_mbps", "streams",
+                             "readers", "warm", "managed", "sse_subscribers",
+                             "snapshots", "open_ms"}
         # Muhitga bog'lanmaymiz: test mashinasida MediaMTX ishlayotgan
         # bo'lishi ham mumkin — shakl va turlargina tekshiriladi.
         assert isinstance(body["mediamtx"], bool)

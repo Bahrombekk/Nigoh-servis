@@ -3,6 +3,25 @@ chcp 65001 >nul
 title Nigoh — kamera xaritasi
 cd /d "%~dp0"
 
+rem `.env` shu yerda o'qiladi. main.py uni O'QIMAYDI (python-dotenv
+rem bog'liqlik sifatida qo'shilmagan) — ya'ni usiz servis .env dagi emas,
+rem standart portlarda ko'tarilardi. Bitta mashinada ikkinchi Nigoh
+rem o'rnatmasi bo'lsa bu portlar to'qnashadi va ikkala backend bitta
+rem MediaMTX'ni tortib, bir-birining yo'llarini o'chirib turadi —
+rem kameralar uzilib, qotib qoladi.
+if exist ".env" (
+  for /f "usebackq tokens=1,* delims==" %%a in (".env") do (
+    set "_k=%%a"
+    setlocal enabledelayedexpansion
+    if not "!_k:~0,1!"=="#" if not "%%b"=="" (
+      endlocal
+      set "%%a=%%b"
+    ) else (
+      endlocal
+    )
+  )
+)
+
 rem Lokal ishga tushirish — debug UI yoqiq bo'lsin (ishlab chiqarishda 0).
 if not defined ENABLE_UI set ENABLE_UI=1
 rem NIGOH_API_KEY majburiy (servis usiz ko'tarilmaydi). Lokal sinov uchun
@@ -36,14 +55,22 @@ if not exist "mediamtx\mediamtx.exe" (
   exit /b 1
 )
 
-if not exist "mediamtx.yml" (
-  echo   [*] mediamtx.yml yaratilmoqda...
-  venv\Scripts\python.exe -c "import main"
-)
+rem mediamtx.yml HAR SAFAR qayta yoziladi. Ilgari u faqat fayl yo'q
+rem bo'lsa yaratilardi: .env dagi port o'zgarsa (masalan MEDIAMTX_API)
+rem eski fayl qolib ketardi, MediaMTX band portga urinib ko'tarilmasdi,
+rem reconciler esa qo'shni o'rnatmaning API'sini ko'rib unga ulanardi va
+rem har 30 soniyada uning yo'llarini o'chirardi - kameralar uzilardi.
+echo   [*] mediamtx.yml yangilanmoqda...
+venv\Scripts\python.exe -c "import main"
 
-echo   [*] Eski jarayonlar to'xtatilmoqda...
-taskkill /IM mediamtx.exe /F >nul 2>&1
-taskkill /IM ffmpeg.exe /F >nul 2>&1
+rem Faqat SHU papkadagi jarayonlar to'xtatiladi. Ilgari bu yerda
+rem `taskkill /IM mediamtx.exe /F` turardi va u mashinadagi HAR QANDAY
+rem MediaMTX'ni o'ldirardi — shu jumladan ikkinchi loyihanikini. Natijada
+rem ikki o'rnatma bitta 9997-portni bo'lishib qolardi va har 30 soniyada
+rem bir-birining yo'llarini o'chirib turardi: kameralar uzilib, qotib
+rem qolardi. Sabab esa jurnalda ko'rinmasdi.
+echo   [*] Shu papkadagi eski jarayonlar to'xtatilmoqda...
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\toxtatish.ps1"
 
 echo   [*] MediaMTX ishga tushmoqda (video oqimlar)...
 start "MediaMTX" /min mediamtx\mediamtx.exe mediamtx.yml
@@ -51,11 +78,11 @@ start "MediaMTX" /min mediamtx\mediamtx.exe mediamtx.yml
 echo   [*] Kameralar ulanmoqda...
 timeout /t 6 /nobreak >nul
 
-echo   [*] Sayt ishga tushmoqda...
-start "" http://localhost:8010
+if not defined PORT set PORT=8010
+echo   [*] Sayt ishga tushmoqda (port %PORT%)...
+start "" http://localhost:%PORT%
 venv\Scripts\python.exe main.py
 
 echo.
 echo   Sayt to'xtatildi. MediaMTX ham yopilmoqda...
-taskkill /IM mediamtx.exe /F >nul 2>&1
-taskkill /IM ffmpeg.exe /F >nul 2>&1
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\toxtatish.ps1"

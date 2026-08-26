@@ -386,6 +386,63 @@ kod o'zgardi → git commit → serverda: git pull (yoki papkani ko'chirish)
 
 ---
 
+## 12½. "Kameralar uzilyapti, qotib qolyapti" — qayerdan qidirish
+
+Bu shikoyat bitta sababdan kelib chiqmaydi. Tartib bo'yicha tekshiring —
+ro'yxat eng ko'p uchraydiganidan boshlanadi.
+
+**1. Shu mashinada ikkinchi Nigoh o'rnatmasi bormi?**
+
+Eng og'ir va eng ko'p chalg'itadigan holat. Ikkala backend bitta MediaMTX
+API'siga qarasa, har biri ikkinchisining yo'llarini "ortiqcha" deb biladi
+va har 30 soniyada o'chiradi. Jurnalda:
+
+```
+"event": "sync"  ... "message": "MediaMTX yangilandi (+3 / ~1 / -43)"
+```
+
+`-43` har tsiklda takrorlansa — aynan shu. Tekshirish:
+
+```
+GET /health   ->  "mediamtx_foreign": 0 bo'lishi kerak
+grep mediamtx_begona nigoh.log
+```
+
+Yechim: ikkinchi xizmatni to'xtating yoki unga o'z portlarini bering
+(`.env` dagi izohga qarang — API, RTSP, HLS, WebRTC va ICE portlari).
+
+**2. MediaMTX umuman ko'tarilyaptimi?**
+
+Bitta band port yetarli — MediaMTX to'liq yiqiladi va faqat
+`mediamtx.log` da xato qoladi. Endi bu jurnalga chiqadi:
+
+```
+grep mediamtx_kotarilmadi nigoh.log
+```
+
+**3. Kamera sekin ochilyaptimi?**
+
+`mediamtx.log` da `runOnDemand command stopped: timed out` bo'lsa, manba
+belgilangan vaqtda ulgurmayapti — kamera hech qachon ochilmaydi, pleyer
+esa cheksiz qayta urinadi. `MEDIAMTX_*_START_TIMEOUT` ni oshiring.
+
+**4. Kamera ma'lumotni portlash bilan beryaptimi?**
+
+Uzun GOP (I-kadr oralig'i) bo'lgan kamera 5-8 soniya ma'lumot berib,
+keyin 3-6 soniya jim turadi. Bu normal ishlash, lekin barcha chegaralar
+undan uzun bo'lishi shart:
+
+| Chegara | Qiymat | Qayerda |
+|---|---|---|
+| MediaMTX `readTimeout` | 30 s | `MEDIAMTX_READ_TIMEOUT` |
+| Reconciler muzlash | 20 s | `STALL_AFTER` |
+| Pleyer watchdog | 12 s | `WATCH_DEAD` (debug-ui/app.js) |
+
+Eng yaxshi yechim — kameraning o'zida I-kadr oralig'ini qisqartirish
+(odatda fps ning 1-2 baravari).
+
+---
+
 ## 13. Bir sahifalik xulosa
 
 - **Nigoh = boshqaruv qatlami (FastAPI) + video dvijok (MediaMTX).**

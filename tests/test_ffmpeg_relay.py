@@ -60,3 +60,49 @@ def test_desired_paths_relay_bilan_ishlaydi(yoq):
     sync.mark_warm("kam_1")
     yollar = sync.desired_paths(cams)
     assert "runOnDemand" in yollar["kam_1"]
+
+
+def test_ffmpeg_only_tanlab_yoqiladi(monkeypatch):
+    """Relay HAMMAGA emas, faqat kerakli kameralarga yoqilishi kerak.
+
+    O'lchov (10.30.11.65, bir xil mashina, bir xil MediaMTX): MediaMTX
+    o'zi tortganda 180 s da 0 uzilish va bo'sh sekundlar 5 %, relay
+    orqali esa 51 %. Ya'ni relay standart yo'l bo'lolmaydi — u faqat
+    keepalive kutadigan registratorlar uchun.
+    """
+    import importlib
+
+    from media import sync
+
+    monkeypatch.setenv("FFMPEG_ONLY", "kam_a, kam_b")
+    monkeypatch.delenv("RTSP_VIA_FFMPEG", raising=False)
+    monkeypatch.delenv("FFMPEG_EXCLUDE", raising=False)
+    importlib.reload(sync)
+    try:
+        assert sync.pull_via_ffmpeg("kam_a") is True
+        assert sync.pull_via_ffmpeg("kam_b") is True
+        assert sync.pull_via_ffmpeg("kam_c") is False   # qolgani to'g'ridan
+    finally:
+        monkeypatch.undo()
+        importlib.reload(sync)
+
+
+def test_ffmpeg_only_global_bayroqdan_ustun(monkeypatch):
+    """`FFMPEG_ONLY` dagi kamera istisno ro'yxatida bo'lsa ham relay orqali.
+
+    Ikkovi bir vaqtda yozilishi chalkashlik, lekin natija aniq bo'lsin:
+    aniq nomlab ko'rsatilgan qaror umumiy istisnodan kuchliroq.
+    """
+    import importlib
+
+    from media import sync
+
+    monkeypatch.setenv("FFMPEG_ONLY", "kam_a")
+    monkeypatch.setenv("FFMPEG_EXCLUDE", "kam_a")
+    monkeypatch.setenv("RTSP_VIA_FFMPEG", "1")
+    importlib.reload(sync)
+    try:
+        assert sync.pull_via_ffmpeg("kam_a") is True
+    finally:
+        monkeypatch.undo()
+        importlib.reload(sync)

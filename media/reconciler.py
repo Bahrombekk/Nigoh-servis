@@ -11,8 +11,11 @@ Har 30 soniyada, har bir yoqilgan tugun (nodes jadvali) uchun:
      yo'qoladi — shu yerda o'z-o'zidan tiklanadi. Farq bo'lmasa hech
      narsa yuborilmaydi, ya'ni tinch holatda bu arzon tekshiruv xolos.
 
-  3. Faol oqimlarning bayt hisobi kuzatiladi — ikki tekshiruv orasida
+  3. Faol oqimlarning bayt hisobi kuzatiladi — STALL_AFTER davomida
      qo'zg'almagan tayyor oqim "muzlagan" deb belgilanadi (hodisa + alert).
+
+Tugundagi MediaMTX BIZNIKI ekani har tsiklda tekshiriladi: begona
+o'rnatmaga tegilmaydi (`sync.api_status` izohiga qarang).
 
 Natijada qo'lda aralashish kerak emas: kamera qo'shildi/o'chirildi yoki
 MediaMTX yiqildi — 30 soniya ichida tizim o'zini kerakli holatga keltiradi.
@@ -34,7 +37,13 @@ CHECK_INTERVAL = 30.0      # soniya — to'liq sinxronlash (yo'llar kelishtirila
 # Muzlash tekshiruvi ancha tez-tez: oqim qotganini 60 soniyada bilish
 # kuzatuv tizimi uchun juda kech. Faol yo'llar ro'yxati kichik (yo'llar
 # talab bo'yicha yaratiladi), shuning uchun bu arzon.
-STALL_INTERVAL = 5.0       # soniya
+STALL_INTERVAL = 5.0       # soniya — tekshiruv qadami
+# Shuncha vaqt bitta bayt kelmasa oqim muzlagan hisoblanadi. Qadamdan
+# ancha uzun bo'lishi SHART: kamera ma'lumotni portlash bilan yuborishi
+# normal holat (uzun GOP), va ikki portlash orasidagi jimlik muzlash
+# emas. 20 soniya — eng sekin kamerada ham ikki-uch keyframe oralig'i,
+# lekin kuzatuvchi uchun hali ham tez.
+STALL_AFTER = float(os.environ.get("STALL_AFTER", "20"))
 SPAWN_COOLDOWN = 30.0      # qayta urinishlar orasidagi eng kam vaqt
 STARTUP_WAIT = 8.0         # ishga tushirgandan keyin API'ni shuncha kutamiz
 
@@ -47,7 +56,8 @@ _lock = threading.Lock()
 _process: subprocess.Popen | None = None
 _last_spawn = 0.0
 
-_prev_bytes: dict[tuple[int, str], int] = {}   # (tugun, yo'l) -> bytesReceived
+# (tugun, yo'l) -> (bytesReceived, shu hisob oxirgi marta o'zgargan vaqt)
+_prev_bytes: dict[tuple[int, str], tuple[int, float]] = {}
 _stalled: dict[tuple[int, str], str] = {}      # (tugun, yo'l) -> ko'rsatma nomi
 
 # Ortiqcha yo'llar. MediaMTX har `paths/add`/`delete` so'roviga butun
@@ -63,6 +73,11 @@ _stalled: dict[tuple[int, str], str] = {}      # (tugun, yo'l) -> ko'rsatma nomi
 BLOAT_WARN_EVERY = 300.0                       # soniya
 _pending: dict[int, int] = {}                  # tugun -> tozalanmagan yo'llar
 _bloat_warned: dict[int, float] = {}
+
+# Begona MediaMTX (boshqa o'rnatmaniki) — `sync.api_status` izohiga qarang.
+FOREIGN_WARN_EVERY = 300.0                     # soniya
+_foreign: dict[int, float] = {}                # tugun -> oxirgi ko'rilgan vaqt
+_foreign_warned: dict[int, float] = {}
 
 # Oxirgi to'liq sinxronda API'si javob bergan tugunlar. Tez tsikl faqat
 # shularni tekshiradi — o'lik tugunning timeout'i tsiklni cho'zmasin.
@@ -104,6 +119,38 @@ def _note_pending(node: dict, pending: int) -> None:
                 "davrda kamera sekinroq ochiladi. Tezroq yo'l: MediaMTX'ni "
                 "qayta ishga tushiring (yo'llar faylga yozilmaydi, "
                 "kerakligi ko'rilganda o'zi tiklanadi).")
+
+
+def _warn_foreign(node: dict, api: str) -> None:
+    """Tugun begona MediaMTX'ga qarab turibdi — operatorni ogohlantiradi.
+
+    Bu jimgina o'tkazib yuboriladigan holat emas: shu mashinada ikkinchi
+    Nigoh o'rnatmasi ishga tushsa (yoki eski nusxaning `ishga-tushirish`
+    fayli bosilsa) ikkala backend bitta 9997-portga qaraydi va bir-birining
+    yo'llarini o'chirib turadi. Tashqaridan bu "kameralar uziladi, qotib
+    qoladi" bo'lib ko'rinadi va sababini topish qiyin.
+    """
+    now = time.monotonic()
+    with _lock:
+        _foreign[node["id"]] = now
+        if now - _foreign_warned.get(node["id"], 0.0) < FOREIGN_WARN_EVERY:
+            return
+        _foreign_warned[node["id"]] = now
+    message = sync._foreign_message(api)
+    log("reconciler", "mediamtx_begona", level="error",
+        node=node["name"], message=message)
+    try:
+        with get_db() as db:
+            events.add(db, "mediamtx", detail=message)
+    except Exception:
+        pass
+
+
+def foreign_nodes() -> int:
+    """Begona MediaMTX'ga qarab turgan tugunlar soni — /health uchun."""
+    cutoff = time.monotonic() - 2 * CHECK_INTERVAL
+    with _lock:
+        return sum(1 for t in _foreign.values() if t > cutoff)
 
 
 def _nodes() -> list[dict]:
@@ -153,44 +200,104 @@ def _spawn() -> bool:
     while time.monotonic() < deadline:
         if sync.api_available():
             return True
+        if _process.poll() is not None:
+            _log_spawn_death()
+            return False
         time.sleep(0.5)
     return False
 
 
+DEATH_WARN_EVERY = 300.0     # soniya — jurnal toshib ketmasin
+_death_warned = [0.0]
+
+
+def _log_spawn_death() -> None:
+    """MediaMTX ko'tarilmasdan o'ldi — SABABINI jurnalga chiqaradi.
+
+    Ilgari bu jimgina o'tardi: reconciler har tsiklda `mediamtx_restarted`
+    yozib qayta urinardi, sabab esa faqat `mediamtx.log` da qolardi va
+    hech kim u yerga qaramasdi. Amalda bitta port to'qnashuvi (`listen udp
+    :8189: bind: ...` — qo'shni o'rnatma bilan bo'lishilgan ICE porti)
+    butun video xizmatini o'ldirgan, tashqaridan esa "kameralar
+    ishlamayapti" bo'lib ko'ringan.
+    """
+    now = time.monotonic()
+    with _lock:
+        if now - _death_warned[0] < DEATH_WARN_EVERY:
+            return
+        _death_warned[0] = now
+    sabab = ""
+    try:
+        # Faqat oxiri o'qiladi: mediamtx.log megabaytlarga o'sishi mumkin,
+        # bizga esa o'lishdan oldingi bir necha satr yetadi.
+        with open(LOG_PATH, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            f.seek(max(0, f.tell() - 8192))
+            oxiri = f.read().decode("utf-8", errors="replace")
+        sabab = next((s for s in reversed(oxiri.splitlines()) if " ERR " in s), "")
+    except OSError:
+        pass
+    log("reconciler", "mediamtx_kotarilmadi", level="error",
+        code=_process.returncode if _process else None,
+        error=sabab or f"sabab {LOG_PATH.name} da",
+        message="MediaMTX ishga tushmadi. Eng ko'p uchraydigan sabab — port "
+                "band (shu mashinada ikkinchi o'rnatma). .env dagi "
+                "MEDIAMTX_API, MEDIAMTX_RTSP_PORT, HLS_PORT, WEBRTC_PORT "
+                "va WEBRTC_UDP_PORT/WEBRTC_TCP_PORT ni bo'sh portlarga o'zgartiring")
+
+
 def _check_stalls(node: dict) -> None:
-    """Faol oqimlarning bayt hisobi ikki tick orasida qo'zg'almasa — muzlagan.
+    """Bayt hisobi STALL_AFTER davomida qo'zg'almasa — oqim muzlagan.
 
     TCP tekshiruv (health) buni ko'rmaydi: registrator portga javob
     beraveradi, lekin kanal tasvir bermay qolishi mumkin. bytesReceived
-    esa yolg'on gapirmaydi — 30 soniyada bitta bayt ham kelmagan tayyor
-    oqim aniq muzlagan.
+    esa yolg'on gapirmaydi.
+
+    O'lchov vaqt bo'yicha, TSIKL bo'yicha emas. Ilgari ketma-ket ikki
+    tsikl (5 s) taqqoslanardi va bu soxta signal mashinasi edi: uzun
+    GOP'li yoki kam tezlikdagi kamera ma'lumotni portlash bilan yuboradi
+    (o'lchov: bitta Dahua kanali har 6-8 soniyada ~675 KB, orada nol), va
+    har portlash orasida yo'l "muzladi -> tiklandi" bo'lib jurnalga
+    tushardi — 5 soniyalik "muzlash" 12 marta ketma-ket. Tomoshabinga
+    SSE orqali `stalled` yuborilardi, ya'ni ishlab turgan kamera
+    muammoli bo'lib ko'rinardi.
     """
     node_id = node["id"]
     active = sync.list_active_paths(node["api_base"])
     if active is None:
         return
+    now = time.monotonic()
     changes: list[tuple[str, str, str]] = []     # (ko'rsatma, yo'l, holat)
     with _lock:
         for name, item in active.items():
             key = (node_id, name)
-            if not item.get("ready"):
-                continue                          # hali ulanmagan — muzlash emas
             got = int(item.get("bytesReceived") or 0)
             prev = _prev_bytes.get(key)
-            if prev is not None and got == prev:
-                if key not in _stalled:
-                    display = name if node_id == 1 else f"{name}@{node['name']}"
-                    _stalled[key] = display
-                    changes.append((display, name, "stalled"))
-            elif key in _stalled:
-                changes.append((_stalled.pop(key), name, "resumed"))
+            # Bayt keldi (yoki yo'lni birinchi marta ko'ryapmiz) — hisob
+            # noldan boshlanadi. Faqat shu yerda vaqt yangilanadi:
+            # o'zgarmagan tsiklda yangilansa muddat hech qachon to'lmasdi.
+            if prev is None or got != prev[0]:
+                _prev_bytes[key] = (got, now)
+                if key in _stalled:
+                    changes.append((_stalled.pop(key), name, "resumed"))
+                continue
+            if not item.get("ready"):
+                # Hali ulanmoqda — bu muzlash emas va hisob ham YURMASIN.
+                # Aks holda sekin ochiladigan kamera (o'lchov: bittasida
+                # relay 15 s da ulangan) tayyor bo'lgan zahoti "muzlagan"
+                # deb belgilanardi: soat u ulanayotgan paytda ishlab
+                # bo'lgan bo'lardi.
+                _prev_bytes[key] = (got, now)
+                continue
+            if now - prev[1] >= STALL_AFTER and key not in _stalled:
+                display = name if node_id == 1 else f"{name}@{node['name']}"
+                _stalled[key] = display
+                changes.append((display, name, "stalled"))
         for key in list(_stalled):
             if key[0] == node_id and key[1] not in active:
                 _stalled.pop(key)                 # oqim yopildi — muzlash tugadi
-        for key in [k for k in _prev_bytes if k[0] == node_id]:
+        for key in [k for k in _prev_bytes if k[0] == node_id and k[1] not in active]:
             _prev_bytes.pop(key)
-        _prev_bytes.update({(node_id, n): int(i.get("bytesReceived") or 0)
-                            for n, i in active.items()})
     if not changes:
         return
     at = datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -226,7 +333,17 @@ def _tick(load_cameras: Callable[[], list[dict]], announce: bool) -> bool:
     for node in _nodes():
         api = node["api_base"]
         local = sync.is_local_api(api)
-        if not sync.api_available(api):
+        status = sync.api_status(api)
+        if status == sync.FOREIGN:
+            # Begona instansiya: kelishtirmaymiz HAM, o'zimiznikini
+            # ko'tarmaymiz ham. Ko'targanda ham foyda yo'q — API porti
+            # band, yangi jarayon darhol o'lardi va biz uni har tsiklda
+            # qayta urintirardik.
+            _warn_foreign(node, api)
+            with _lock:
+                _reachable.discard(node["id"])
+            continue
+        if status != "ok":
             if not (local and _autostart_allowed() and _spawn()):
                 with _lock:
                     _reachable.discard(node["id"])

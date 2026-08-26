@@ -40,6 +40,7 @@ from pathlib import Path
 
 import yaml
 
+from core import security
 from core.db import DATA_DIR
 from core.rtsp_probe import build_rtsp_url
 
@@ -50,9 +51,10 @@ CONFIG_PATH = DATA_DIR / "mediamtx.yml"
 API_BASE = os.environ.get("MEDIAMTX_API", "http://127.0.0.1:9997")
 API_TIMEOUT = 4.0
 
-# HLS uchun "CDN kaliti". Yoqilganda MediaMTX `Authorization: Bearer
-# <kalit>` bilan kelgan so'rovni SESSIYASIZ o'tkazadi va manzillarga na
-# `session=`, na `token=` qo'shadi.
+# HLS uchun "CDN kaliti" — HAR DOIM yoqiq (core.security dan keladi,
+# secret.key'dan hosil qilinadi). MediaMTX `Authorization: Bearer <kalit>`
+# bilan kelgan so'rovni SESSIYASIZ o'tkazadi va manzillarga na `session=`,
+# na `token=` qo'shadi.
 #
 # Nima uchun kerak: sessiyali rejimda manba qisqa uzilsa MediaMTX HLS
 # muxerini yo'q qiladi, muxer bilan sessiya ham o'ladi va mijoz DOIMIY
@@ -64,9 +66,11 @@ API_TIMEOUT = 4.0
 #
 # DIQQAT: Bearer bilan kelgan so'rov bizning auth ilgagimizni chetlab
 # o'tadi. Sarlavhani nginx qo'yadi, ya'ni tomoshabin chiptasini ham
-# nginx tekshirishi shart (`auth_request` -> /api/auth/hls). Kalit
-# bo'sh bo'lsa mexanizm o'chiq va eski sessiyali yo'l ishlaydi.
-HLS_CDN_SECRET = os.environ.get("HLS_CDN_SECRET", "")
+# nginx tekshirishi shart (`auth_request` -> /api/auth/hls). Ikkalasini
+# ham `python scripts/nginx_conf.py` to'g'ri yozib beradi. Sarlavha
+# umuman kelmasa MediaMTX eski sessiyali yo'lda ishlaydi (ya'ni yuqorida
+# tasvirlangan 401 qaytadi) — shu holat /api/auth/hls da aniqlanib
+# jurnalga ogohlantirish bo'lib tushadi.
 
 # Kamerani MediaMTX o'zi tortsinmi yoki FFmpeg tortsinmi.
 #
@@ -75,30 +79,89 @@ HLS_CDN_SECRET = os.environ.get("HLS_CDN_SECRET", "")
 # e'lon qiladigan kameralar har 60 soniyada ulanishni uzadi va
 # tomoshabin 401 oladi. FFmpeg keepalive yuboradi.
 #
-# RTSP_VIA_FFMPEG=1 — hamma kamera FFmpeg orqali tortiladi.
-# FFMPEG_EXCLUDE=slug1,slug2 — istisnolar (masalan FFmpeg nusxalashda
-# B-kadrli H.264 oqimni buzsa; kodda bu ilgari kuzatilgan).
+# DIQQAT: relay TEKIN EMAS. Shu o'rnatmada o'lchandi — bitta Dahua
+# kanali (10.30.11.65), bir xil mashina, bir xil MediaMTX:
+#
+#     MediaMTX o'zi tortadi : 180 s da 0 uzilish,  bo'sh sekundlar  5 %
+#     FFmpeg relay          :                      bo'sh sekundlar 51 %
+#
+# Ya'ni relay oqimni bo'lak-bo'lak qiladi: ma'lumot 5-8 soniya kelib,
+# 3-6 soniya jim turadi. Bu FFmpeg bayrog'i bilan tuzalmaydi — sinaldi:
+# `-flush_packets 1` 63 %, `-max_interleave_delta 0` yomonlashtirdi,
+# `-muxdelay 0` 55 %. Tomoshabin uchun bu qotib-qotib turgan video.
+#
+# Shuning uchun relay HAMMAGA emas, faqat KERAKLI kameralarga yoqilsin:
+#
+#   RTSP_VIA_FFMPEG=1        — hamma kamera relay orqali (keng bolg'a);
+#   FFMPEG_EXCLUDE=a,b       — o'shanda istisnolar;
+#   FFMPEG_ONLY=a,b          — teskarisi va afzali: relay FAQAT shu
+#                              kameralarga, qolganini MediaMTX o'zi
+#                              tortadi. RTSP_VIA_FFMPEG kerak emas.
 RTSP_VIA_FFMPEG = os.environ.get("RTSP_VIA_FFMPEG", "0") == "1"
 FFMPEG_EXCLUDE = {s.strip() for s in
                   os.environ.get("FFMPEG_EXCLUDE", "").split(",") if s.strip()}
+FFMPEG_ONLY = {s.strip() for s in
+               os.environ.get("FFMPEG_ONLY", "").split(",") if s.strip()}
 
 
 def pull_via_ffmpeg(slug: str) -> bool:
-    """Shu yo'l FFmpeg orqali tortiladimi."""
+    """Shu yo'l FFmpeg relay orqali tortiladimi.
+
+    `FFMPEG_ONLY` ro'yxatga kirgan kamera har doim relay orqali ketadi —
+    u aynan shu kamera uchun qo'yilgan qaror (masalan `timeout=60` e'lon
+    qilib, keepalive kutadigan registrator: MediaMTX keepalive yubormaydi
+    va 60 soniyada uziladi, FFmpeg esa yuboradi).
+    """
+    if slug in FFMPEG_ONLY:
+        return True
     return RTSP_VIA_FFMPEG and slug not in FFMPEG_EXCLUDE
 
 RTSP_PORT = int(os.environ.get("MEDIAMTX_RTSP_PORT", "8554"))
 HLS_PORT = int(os.environ.get("HLS_PORT", "8888"))
 WEBRTC_PORT = int(os.environ.get("WEBRTC_PORT", "8889"))
 
-# WebRTC media portlari. UDP — asosiy (eng samarali). TCP esa MediaMTX'da
-# standart holda O'CHIQ, natijada UDP yopiq tarmoqda (korporativ firewall,
-# ba'zi mobil operatorlar) brauzer jimgina HLS'ga tushardi — ya'ni eng
-# sekin yo'lga. ICE ustuvorligi baribir avval UDP'ni sinaydi, TCP faqat
-# zaxira bo'lib qoladi. Firewall'da 8189 ni ikkala protokol uchun oching.
-# WEBRTC_TCP_PORT=0 — butunlay o'chirish.
-WEBRTC_UDP_PORT = int(os.environ.get("WEBRTC_UDP_PORT", "8189"))
-WEBRTC_TCP_PORT = int(os.environ.get("WEBRTC_TCP_PORT", "8189"))
+
+def api_port(api_base: str | None = None) -> int:
+    """MediaMTX API porti — `mediamtx.yml` ga aynan shu yoziladi.
+
+    Bitta mashinada ikki tugun turishi mumkin (masalan asosiy tizim va
+    mikroservis). Port qotib qolsa ikkinchisi o'z MediaMTX'ini ko'tara
+    olmaydi: port band bo'lgani uchun ishga tushmaydi, `api_available`
+    esa birinchisining API'sini ko'rib "hammasi joyida" deydi. Natijada
+    ikkinchi tugunning reconcileri begona MediaMTX'ni boshqara boshlaydi
+    va har tickda birinchisining yo'llarini o'chirib tashlaydi — tomosha
+    bir necha soniyada uziladi. Shuning uchun manba yagona: MEDIAMTX_API.
+    """
+    tail = (api_base or API_BASE).split("//")[-1]
+    _, _, port = tail.partition(":")
+    port = port.split("/")[0].strip()
+    return int(port) if port.isdigit() else 9997
+
+
+API_PORT = api_port()
+# Metrikalar porti ham tugun bilan birga suriladi — aks holda ikkinchi
+# MediaMTX 9998 ni band deb topib yiqiladi.
+METRICS_PORT = int(os.environ.get("MEDIAMTX_METRICS_PORT", str(API_PORT + 1)))
+
+# WebRTC media (ICE) portlari. UDP — asosiy (eng samarali). TCP esa
+# MediaMTX'da standart holda O'CHIQ, natijada UDP yopiq tarmoqda
+# (korporativ firewall, ba'zi mobil operatorlar) brauzer jimgina HLS'ga
+# tushardi — ya'ni eng sekin yo'lga. ICE ustuvorligi baribir avval UDP'ni
+# sinaydi, TCP faqat zaxira bo'lib qoladi. Firewall'da bu portni ikkala
+# protokol uchun oching. WEBRTC_TCP_PORT=0 — butunlay o'chirish.
+#
+# Port WEBRTC_PORT bilan BIRGA suriladi (METRICS_PORT API_PORT bilan
+# surilgani kabi). Nima uchun: bitta mashinada ikkinchi o'rnatma bo'lsa
+# operator .env da API/RTSP/HLS/WEBRTC portlarini o'zgartiradi, ICE porti
+# esa e'tibordan chetda qolardi — va MediaMTX aynan shu bitta to'qnashuv
+# sababli UMUMAN ko'tarilmasdi ("listen udp :8189: bind: Only one usage
+# of each socket address..."), reconciler esa uni tinmay qayta urintirib
+# turardi. Standart WEBRTC_PORT'da qiymat o'zgarmaydi: 8889 -> 8189.
+# Siljish standart qiymatdan hisoblanadi; WEBRTC_PORT juda kichik
+# bo'lsa (masalan 80) natija yaroqsiz portga tushmasin.
+WEBRTC_ICE_PORT = max(1024, min(65535, 8189 + (WEBRTC_PORT - 8889)))
+WEBRTC_UDP_PORT = int(os.environ.get("WEBRTC_UDP_PORT", str(WEBRTC_ICE_PORT)))
+WEBRTC_TCP_PORT = int(os.environ.get("WEBRTC_TCP_PORT", str(WEBRTC_ICE_PORT)))
 
 def _webrtc_hosts() -> list[str]:
     """Brauzerga WebRTC uchun e'lon qilinadigan manzillar.
@@ -167,6 +230,34 @@ SYNC_BUDGET_S = float(os.environ.get("MEDIAMTX_SYNC_BUDGET", "10"))
 # taqqoslash aynan mos kelishi uchun uning o'z shaklida yoziladi, aks
 # holda har sinxronlashda keraksiz PATCH ketardi.
 SOURCE_CLOSE_AFTER = os.environ.get("MEDIAMTX_CLOSE_AFTER", "2m0s")
+
+# Talab bo'yicha manba ochilishini shuncha kutamiz. Ikki xil qiymat bor,
+# chunki ikki yo'lning narxi ham har xil:
+#
+#   SOURCE_START_TIMEOUT — MediaMTX kameraga O'ZI ulanadi. O'lchov: uzoq
+#       tarmoqdagi kamera (RTT ~50 ms) 10,5 soniyada ochilgan, shuning
+#       uchun 12 s. 8 s uni butunlay yo'qotardi.
+#
+#   RELAY_START_TIMEOUT — zanjir uzunroq: MediaMTX -> python launcher
+#       (venv importi, bazadan kamera) -> FFmpeg -> kameraga RTSP ulanish
+#       -> birinchi keyframe. Shu o'rnatmada o'lchandi (FFmpeg'ning
+#       o'zigina, launcher hisobga olinmagan): 10.30.11.65 -> 6,6 s,
+#       10.30.45.73 -> 6,7 s, 10.30.17.67 -> 13,4-15,2 s (uch o'lchov).
+#       Ya'ni 12 s bilan oxirgi kamera HECH QACHON ochilmasdi: MediaMTX
+#       `runOnDemand command stopped: timed out` deb buyruqni o'ldirar,
+#       pleyer qayta urinardi va tomoshabin uzluksiz "qayta ulanmoqda"
+#       ko'rardi. O'lik kamera bu qiymatni kutmaydi — launcher avval TCP
+#       tekshiruv qiladi (media/launcher.py: camera_reachable, 3 s).
+# Manbadan paket kelmasa MediaMTX ulanishni shuncha kutadi (uning
+# standarti 10s — uzun GOP'li kamerada kam; build_config izohiga qarang).
+READ_TIMEOUT = os.environ.get("MEDIAMTX_READ_TIMEOUT", "30s")
+
+SOURCE_START_TIMEOUT = os.environ.get("MEDIAMTX_START_TIMEOUT", "12s")
+RELAY_START_TIMEOUT = os.environ.get("MEDIAMTX_RELAY_START_TIMEOUT", "30s")
+# O'girish (`_h264`) zanjiri yana bir pog'ona uzun: uning manbasi xom
+# yo'l, ya'ni avval o'sha yo'l ko'tarilishi kerak (RELAY_START_TIMEOUT),
+# ustiga dekod/kodlash ishga tushishi qo'shiladi.
+TRANSCODE_START_TIMEOUT = os.environ.get("MEDIAMTX_TRANSCODE_START_TIMEOUT", "45s")
 
 # MediaMTX har bir ulanishda backend'dan ruxsat so'raydi. MediaMTX boshqa
 # mashinada bo'lsa, STREAM_AUTH_URL orqali backend'ning to'liq manzilini
@@ -404,7 +495,7 @@ def relay_path(cam: dict) -> dict:
     conf = {
         "runOnDemand": _launcher(cam["slug"]),
         "runOnDemandRestart": True,
-        "runOnDemandStartTimeout": "12s",
+        "runOnDemandStartTimeout": RELAY_START_TIMEOUT,
         "runOnDemandCloseAfter": SOURCE_CLOSE_AFTER,
     }
     return conf
@@ -448,7 +539,7 @@ def source_path(cam: dict) -> dict:
         # (A1, RTT ~50 ms) 10,5 soniyada ochilgan, 8 s uni butunlay
         # yo'qotardi. 12 s — o'shanaqa kamera sig'adi, o'liklari esa
         # ikki barobar tez rad javobini beradi.
-        conf["sourceOnDemandStartTimeout"] = "12s"
+        conf["sourceOnDemandStartTimeout"] = SOURCE_START_TIMEOUT
         # MediaMTX davomiyliklarni normallashtirib saqlaydi ("60s" -> "1m0s").
         # Taqqoslash (ensure_path/push_to_api) aynan mos kelishi uchun
         # qiymatlar uning o'z shaklida yoziladi — aks holda har safar
@@ -474,7 +565,7 @@ def camera_paths(cameras: list[dict]) -> dict:
         f"~^[a-z0-9_]+{TRANSCODE_SUFFIX}$": {
             "runOnDemand": _launcher("$MTX_PATH"),
             "runOnDemandRestart": True,
-            "runOnDemandStartTimeout": "20s",
+            "runOnDemandStartTimeout": TRANSCODE_START_TIMEOUT,
             "runOnDemandCloseAfter": "1m0s",   # MediaMTX normallashtirgan shakl
         }
     }
@@ -494,6 +585,9 @@ def build_config(cameras: list[dict], auth_url: str | None = None,
     rtsp_port = int(node.get("rtsp_port") or RTSP_PORT)
     hls_port = int(node.get("hls_port") or HLS_PORT)
     webrtc_port = int(node.get("webrtc_port") or WEBRTC_PORT)
+    # Uzoq tugunda API porti tugunning o'z manzilidan olinadi.
+    api_prt = api_port(node.get("api_base")) if remote else API_PORT
+    metrics_prt = api_prt + 1 if remote else METRICS_PORT
     # Brauzer WebRTC uchun serverning yetib boradigan manzilini bilishi
     # kerak: uzoq tugunda bu uning o'z public_host'i, markaziy tugunda —
     # WEBRTC_HOSTS (yoki MEDIA_HOST).
@@ -504,12 +598,13 @@ def build_config(cameras: list[dict], auth_url: str | None = None,
         # Sekin tomoshabin butun oqimni buzmasin (yuqoridagi izoh).
         "writeQueueSize": WRITE_QUEUE_SIZE,
         "api": True,
-        "apiAddress": ":9997" if remote else "127.0.0.1:9997",
+        "apiAddress": f":{api_prt}" if remote else f"127.0.0.1:{api_prt}",
 
         # Prometheus metrikalari (oqimlar, tomoshabinlar, baytlar) —
         # keyinchalik Grafana ulash uchun tayyor turadi.
         "metrics": True,
-        "metricsAddress": ":9998" if remote else "127.0.0.1:9998",
+        "metricsAddress": (f":{metrics_prt}" if remote
+                           else f"127.0.0.1:{metrics_prt}"),
 
         # Kirish nazorati: har bir o'qish so'rovini backend tekshiradi —
         # saytdan berilgan chiptasiz oqim ochilmaydi. Backend ishlamayotgan
@@ -520,6 +615,15 @@ def build_config(cameras: list[dict], auth_url: str | None = None,
         "authHTTPExclude": [
             {"action": "api"}, {"action": "metrics"}, {"action": "pprof"},
         ],
+
+        # Manbadan shuncha vaqt bitta paket kelmasa MediaMTX ulanishni
+        # uzadi. Standart 10 soniya — uzun GOP'li kamera uchun bu KAM:
+        # shu o'rnatmada o'lchandi, bitta Dahua kanali ma'lumotni har 6-8
+        # soniyada portlatib beradi va bitta tebranish yetarli edi —
+        # `closed: read tcp ...: i/o timeout`, publisher o'ladi, tomosha
+        # uziladi. O'lik manbani bu qiymat yashirmaydi: reconciler uni
+        # STALL_AFTER (20 s) da o'zi aniqlaydi va hodisa yozadi.
+        "readTimeout": READ_TIMEOUT,
 
         "rtsp": True,
         "rtspAddress": f":{rtsp_port}",
@@ -554,7 +658,7 @@ def build_config(cameras: list[dict], auth_url: str | None = None,
         "hlsSegmentCount": 7,
         "hlsSegmentDuration": "1s",
         "hlsAllowOrigins": ["*"],
-        "hlsCDNSecret": HLS_CDN_SECRET,
+        "hlsCDNSecret": security.hls_cdn_secret(),
         "hlsTrustedProxies": ["127.0.0.1"],
 
         "rtmp": False,
@@ -602,12 +706,59 @@ def _api(method: str, path: str, payload: dict | None = None,
     return json.loads(raw) if raw else None
 
 
-def api_available(api_base: str | None = None) -> bool:
+# API javob berdi, lekin bu MediaMTX BIZNIKI emas.
+#
+# Nima uchun alohida holat kerak: reconciler "javob bermayapti" degan
+# javobni ko'rsa o'zining MediaMTX'ini ko'taradi, "hammasi joyida"
+# degan javobni ko'rsa yo'llarni kelishtiradi — begona instansiyada
+# ikkalasi ham xato. Kelishtirish esa halokatli: `push_to_api` bizning
+# kameralarimizda yo'q yo'llarni ORTIQCHA deb biladi va o'chiradi, ya'ni
+# har 30 soniyada begona o'rnatmaning barcha yo'llarini nurga aylantiradi
+# (o'lchov: shu mashinada ikkita loyiha bitta 9997-portni bo'lishgan va
+# jurnal `+3 / ~1 / -43` ni tinmay takrorlagan — tomoshabin uchun bu
+# har yarim daqiqada uziladigan, qotib qoladigan video edi).
+FOREIGN = "begona"
+
+
+def api_status(api_base: str | None = None) -> str:
+    """`ok` | `yoq` (javob bermayapti) | `begona` (boshqa o'rnatmaniki).
+
+    Egalik `authHTTPAddress` bo'yicha aniqlanadi: MediaMTX har ulanishda
+    ruxsatni AYNAN SHU manzildan so'raydi, ya'ni u qaysi backend'ga
+    bo'ysunishini ochiq aytib turadi. Bizniki bo'lsa — o'zimiz yozgan
+    `STREAM_AUTH_URL`. Boshqa manzil — boshqa backend'ning MediaMTX'i,
+    unga tegishga haqqimiz yo'q.
+    """
     try:
-        _api("GET", "/v3/config/global/get", api_base=api_base)
-        return True
+        conf = _api("GET", "/v3/config/global/get", api_base=api_base)
     except (urllib.error.URLError, OSError, ValueError):
-        return False
+        return "yoq"
+    theirs = (conf or {}).get("authHTTPAddress") or ""
+    # Bo'sh qiymat — auth umuman sozlanmagan (eski yoki qo'lda yozilgan
+    # konfiguratsiya). Bunda egalikni bilib bo'lmaydi; ilgarigidek
+    # ishonamiz, aks holda ishlab turgan o'rnatmalar to'satdan to'xtardi.
+    if theirs and theirs != STREAM_AUTH_URL:
+        return FOREIGN
+    return "ok"
+
+
+def api_available(api_base: str | None = None) -> bool:
+    """MediaMTX javob beryaptimi VA u bizniki mi."""
+    return api_status(api_base) == "ok"
+
+
+def _foreign_message(api_base: str | None = None) -> str:
+    """Operatorga aniq ko'rsatma — taxmin qilishga o'rin qolmasin."""
+    try:
+        conf = _api("GET", "/v3/config/global/get", api_base=api_base) or {}
+    except (urllib.error.URLError, OSError, ValueError):
+        conf = {}
+    return (f"{api_base or API_BASE} dagi MediaMTX boshqa o'rnatmaniki "
+            f"(ruxsatni {conf.get('authHTTPAddress') or '?'} dan so'rayapti, "
+            f"bizniki {STREAM_AUTH_URL}) — unga tegilmadi. Yo shu ikkinchi "
+            f"xizmatni to'xtating, yo bu o'rnatmaga o'z MediaMTX'ini bering "
+            f"(MEDIAMTX_API va MEDIAMTX_RTSP_PORT/HLS_PORT/WEBRTC_PORT "
+            f"boshqa portlarga)")
 
 
 def ensure_path(cam: dict, api_base: str | None = None) -> bool:
@@ -776,6 +927,16 @@ def push_to_api(cameras: list[dict], api_base: str | None = None,
     ortiqchalari o'chiriladi. O'zgarmaganlarga tegilmaydi, amallar parallel
     yuboriladi — 5000 kamerada ham soniyalar ichida tugaydi.
     """
+    # Begona MediaMTX'ga TEGMAYMIZ. Tekshiruv aynan shu yerda: quyida
+    # "bizning kameralarda yo'q" degan yo'llar o'chiriladi, ya'ni boshqa
+    # o'rnatmaning MediaMTX'ida bu funksiya butun konfiguratsiyani
+    # supurib tashlaydi. Chaqiruvchi reconciler ham, admin paneli ham
+    # bo'lishi mumkin — shuning uchun himoya chaqiruvchida emas, shu
+    # yerda turadi.
+    if api_status(api_base) == FOREIGN:
+        return {"ok": False, "added": 0, "updated": 0, "removed": 0,
+                "pending": 0, "message": _foreign_message(api_base)}
+
     if with_transcode is None:
         with_transcode = is_local_api(api_base)   # o'girish faqat lokal tugunda
     wanted = desired_paths(cameras, with_transcode)
