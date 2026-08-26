@@ -40,7 +40,6 @@ from pathlib import Path
 
 import yaml
 
-from core import security
 from core.db import DATA_DIR
 from core.rtsp_probe import build_rtsp_url
 
@@ -51,10 +50,14 @@ CONFIG_PATH = DATA_DIR / "mediamtx.yml"
 API_BASE = os.environ.get("MEDIAMTX_API", "http://127.0.0.1:9997")
 API_TIMEOUT = 4.0
 
-# HLS uchun "CDN kaliti" — HAR DOIM yoqiq (core.security dan keladi,
-# secret.key'dan hosil qilinadi). MediaMTX `Authorization: Bearer <kalit>`
-# bilan kelgan so'rovni SESSIYASIZ o'tkazadi va manzillarga na `session=`,
-# na `token=` qo'shadi.
+# HLS uchun "CDN kaliti" — `.env` dagi HLS_CDN_SECRET dan olinadi va
+# nginx'dagi `proxy_set_header Authorization "Bearer <kalit>"` bilan
+# AYNAN bir xil bo'lishi shart. Bo'sh qolsa mexanizm o'chiq va MediaMTX
+# eski sessiyali yo'lda ishlaydi.
+#
+# Yoqilganda MediaMTX `Authorization: Bearer <kalit>` bilan kelgan
+# so'rovni SESSIYASIZ o'tkazadi va manzillarga na `session=`, na
+# `token=` qo'shadi.
 #
 # Nima uchun kerak: sessiyali rejimda manba qisqa uzilsa MediaMTX HLS
 # muxerini yo'q qiladi, muxer bilan sessiya ham o'ladi va mijoz DOIMIY
@@ -71,6 +74,7 @@ API_TIMEOUT = 4.0
 # umuman kelmasa MediaMTX eski sessiyali yo'lda ishlaydi (ya'ni yuqorida
 # tasvirlangan 401 qaytadi) — shu holat /api/auth/hls da aniqlanib
 # jurnalga ogohlantirish bo'lib tushadi.
+HLS_CDN_SECRET = os.environ.get("HLS_CDN_SECRET", "")
 
 # Kamerani MediaMTX o'zi tortsinmi yoki FFmpeg tortsinmi.
 #
@@ -658,7 +662,7 @@ def build_config(cameras: list[dict], auth_url: str | None = None,
         "hlsSegmentCount": 7,
         "hlsSegmentDuration": "1s",
         "hlsAllowOrigins": ["*"],
-        "hlsCDNSecret": security.hls_cdn_secret(),
+        "hlsCDNSecret": HLS_CDN_SECRET,
         "hlsTrustedProxies": ["127.0.0.1"],
 
         "rtmp": False,
