@@ -1,15 +1,23 @@
 "use strict";
-/* Nigoh — servis konsoli (v2). Xarita yo'q: xarita, rollar va dashboard
-   asosiy tizimda. Bu panel bitta savolga javob beradi: "backend'da
-   xatomi yoki kamerada?" — jadval, devor, signal zanjiri, tizim
-   ko'rsatkichlari, SSE hodisalari va qurilma skani.
+/* Nigoh — diagnostika konsoli (v4, "Nigoh Diagnostika" maketi asosida).
 
-   Hamma ma'lumot haqiqiy API'dan:
+   Konsol bitta savolga javob beradi: "xato qayerda — kamerada,
+   registratorda, tugunda yoki brauzerda?" Bosh sahifa shu savolning
+   o'zi: muammoli kameralar chapda, tanlangani bo'yicha hukm va zanjir
+   bo'ylab dalillar o'ngda. Qolgan sahifalar hukmni tekshirish uchun:
+   ochilish tezligi (open_ms budjeti), topologiya (tugun → registrator),
+   kameralar jadvali, resurs, uzilishlar, devor, kamera sahifasi.
+
+   Hamma ma'lumot haqiqiy API'dan — soxta ko'rsatkich yo'q, o'lchanmagan
+   narsa "—" bo'lib chiqadi:
      /api/v1/admin/cameras   ro'yxat (to'liq maydonlar)
      /api/v1/cameras/status  snapshot_at va yangi holat
      /api/v1/admin/runtime   slug -> baytlar/tomoshabinlar (tezlik farqdan)
+     /api/v1/admin/uptime    uzilishlar reytingi (kamera / guruh kesimida)
+     /api/v1/admin/outages/hourly, /admin/cameras/{id}/history
+     /api/v1/admin/events    hodisalar jurnali (sabab kesimi shundan)
      /api/v1/events          SSE — holat o'zgarishlari
-     /health, /admin/status  tizim sahifasi                              */
+     /health, /admin/status, /admin/nodes  resurs va topologiya          */
 
 /* ═════════ yordamchi ═════════ */
 const $ = (s) => document.querySelector(s);
@@ -20,12 +28,52 @@ const age = (s) => s == null || s < 0 ? "yo'q"
   : s < 60 ? Math.round(s) + " s"
   : s < 3600 ? Math.round(s / 60) + " daq" : Math.round(s / 3600) + " soat";
 const clock = () => new Date().toTimeString().slice(0, 8);
-const LBL = {online:"Ishlayapti", stalled:"To'xtagan", offline:"O'chgan",
-             unknown:"Tekshirilmagan", disabled:"O'chirilgan"};
+const LBL = {online:"online", stalled:"stalled · kadr yo'q", offline:"offline",
+             unknown:"unknown · tekshirilmagan", disabled:"o'chirilgan"};
 /* Muammo-yo'naltirilgan ko'rinish: e'tibor talab qiladigan holatlar va
-   ularning jadvaldagi tartibi — yomoni tepada. */
+   ularning tartibi — yomoni tepada. */
 const PROB = new Set(["offline", "stalled", "unknown"]);
 const RANK = {offline:0, stalled:1, unknown:2, disabled:3, online:4};
+/* Holat -> nuqta rangi (CSS o'zgaruvchilari style.css da). */
+const DOT = {online:"var(--d-on)", stalled:"var(--d-stall)", offline:"var(--d-off)",
+             unknown:"var(--d-unk)", disabled:"var(--d-dis)"};
+/* Hukm turi -> nuqta rangi / matn rangi. */
+const KDOT = {ok:"var(--d-on)", warn:"var(--d-stall)", bad:"var(--d-off)", idle:"var(--d-unk)"};
+const KINK = {ok:"var(--green)", warn:"var(--amber)", bad:"var(--red)", idle:"var(--gray)"};
+const stateKind = (st) => st === "online" ? "ok" : st === "stalled" ? "warn"
+  : st === "offline" ? "bad" : "idle";
+
+const pad2 = (n) => (n < 10 ? "0" : "") + n;
+const dd = pad2;
+/* Server UTC beradi, operator mahalliy vaqtni ko'radi. */
+/* Server vaqtni UTC'da, ko'pincha zonasiz beradi ("2026-09-07 10:00:00" yoki
+   "...T10:00:00"). Zonasiz satr brauzerda mahalliy deb o'qilardi va hamma
+   vaqt 5 soat siljib ko'rinardi — shuning uchun zona yo'q bo'lsa Z qo'shiladi. */
+const utc = (iso) => {
+  if (!iso) return new Date(NaN);
+  let s = String(iso).trim().replace(" ", "T");
+  if (!/(Z|[+-]\d\d:?\d\d)$/.test(s)) s += "Z";
+  return new Date(s);
+};
+const localHM = (iso) => { const d = utc(iso); return isNaN(d) ? "—" : dd(d.getHours()) + ":" + dd(d.getMinutes()); };
+const localDM = (iso) => { const d = utc(iso); return isNaN(d) ? "—" : dd(d.getDate()) + "." + dd(d.getMonth() + 1); };
+/* Sekundlarni odam o'qiydigan davomiylikka: 0 bo'lsa chiziqcha. */
+const durHM = (sec) => {
+  if (!sec) return "—";
+  const h = Math.floor(sec / 3600), m = Math.round((sec % 3600) / 60);
+  return h ? `${h}h ${pad2(m)}m` : `${m}m`;
+};
+const fmtDur = (s) => s < 60 ? Math.round(s) + " s"
+  : s < 3600 ? Math.round(s / 60) + " daqiqa"
+  : s < 86400 ? (s / 3600).toFixed(1) + " soat" : (s / 86400).toFixed(1) + " kun";
+/* Uptime foizining rangi: 99% dan yuqori — normal, 95% gacha — e'tibor. */
+const upColor = (p) => p >= 99 ? "var(--green)" : p >= 95 ? "var(--amber)" : "var(--red)";
+/* ISO vaqtdan hozirgacha o'tgan soniyalar (noto'g'ri bo'lsa -1). */
+const sinceSec = (iso) => {
+  if (!iso) return -1;
+  const t = utc(iso).getTime();
+  return isNaN(t) ? -1 : Math.max(0, (Date.now() - t) / 1000);
+};
 
 function toast(t, b, k = "") {
   const d = document.createElement("div");
@@ -54,14 +102,10 @@ async function api(path, options = {}) {
   return res.json();
 }
 
-/* ═════════ yuqori global chiziq ═════════
-
-   Sahifadan qat'i nazar ko'rinadi. Hamma raqam haqiqiy manbadan:
-   kirish — /admin/runtime baytlari farqidan, uzilish/o'chiq/mavjudlik —
-   /admin/uptime dan, p95 esa shu brauzerning o'z so'rovlaridan. Soxta
-   ko'rsatkich yo'q: o'lchanmaydigan narsa umuman chiqmaydi.          */
-
-const API_LAT = [];                      // oxirgi so'rovlar kechikishi (ms)
+/* API kechikishi — shu brauzerning o'z so'rovlaridan p95. Resurs
+   sahifasida chiqadi: "konsol sekin" degan shikoyat servisdami yoki
+   tarmoqdami — shu raqam aytadi. */
+const API_LAT = [];
 function noteApi(ms) {
   API_LAT.push(ms);
   if (API_LAT.length > 200) API_LAT.shift();
@@ -72,53 +116,25 @@ function apiP95() {
   return Math.round(a[Math.min(a.length - 1, Math.round((a.length - 1) * 0.95))]);
 }
 
-async function loadFleetStats() {
-  try {
-    // node kesimi eng kichik javob (bir necha qator), lekin park bo'yicha
-    // yig'indini beradi — shu yetadi.
-    const r = await api("/api/v1/admin/uptime?hours=24&group_by=node");
-    const g = r.groups || [];
-    S.fleet = {
-      outages: g.reduce((a, x) => a + x.outages, 0),
-      offline: g.reduce((a, x) => a + x.offline_seconds, 0),
-      cameras: g.reduce((a, x) => a + x.cameras, 0),
-    };
-    const span = Math.max(1, S.fleet.cameras * 86400);
-    S.fleet.uptime = Math.round(1000 * (span - S.fleet.offline) / span) / 10;
-  } catch (e) { S.fleet = null; }
-  drawTopbar();
-}
-
+/* ═════════ yuqori chiziq ═════════
+   Sahifadan qat'i nazar ko'rinadi: "hozir qanday" degan savolga javob
+   sahifa almashtirmasdan olinadi. Health tsikli 60 s, reconciler 30 s —
+   serverdagi doimiylar (core/health.py, media/reconciler.py). */
 function drawTopbar() {
   const cams = S.cams || [];
-  if (!cams.length) return;
   const cnt = (st) => cams.filter((c) => c.state === st).length;
-  const on = cnt("online"), prob = cams.filter((c) => PROB.has(c.state)).length;
-  const pctOn = cams.length ? Math.round(1000 * on / cams.length) / 10 : 0;
-
-  $("#tbdot").className = "dot s-" + (prob ? (cnt("offline") ? "offline" : "stalled")
-                                           : "online");
-  $("#tbtitle").textContent = prob
-    ? `${prob} kamera muammoli · ${pctOn}% flot onlayn`
-    : `Hammasi joyida · ${cams.length} kamera`;
-  $("#tbbreak").textContent =
-    `${on} online · ${cnt("stalled")} stalled · ${cnt("offline")} offline`
-    + (cams.filter((c) => !c.region).length
-        ? ` · ${cams.filter((c) => !c.region).length} hududsiz` : "");
-
-  const inMbps = cams.reduce((a, c) => a + camRt(c).inMbps, 0);
-  const f = S.fleet, p95 = apiP95();
-  const cell = (l, v) => `<div class="tb-s"><div class="l">${l}</div>
-    <div class="v">${v}</div></div>`;
-  $("#tbstats").innerHTML =
-    cell("Kirish", `${inMbps.toFixed(1)}<u> Mb/s</u>`) +
-    cell("Chiqish", S.health
-      ? `${Math.round(S.health.egress_mbps)}<u> Mb/s</u>` : "—") +
-    cell("Uzilish (24s)", f ? f.outages : "—") +
-    cell("O'chiq (24s)", f ? durHM(f.offline) : "—") +
-    cell("Mavjudlik", f ? `${f.uptime}<u>%</u>` : "—") +
-    cell("p95 API", p95 === null ? "—" : `${p95}<u> ms</u>`);
+  const prob = cams.filter((c) => PROB.has(c.state)).length;
+  const kind = !cams.length ? "" : prob ? (cnt("offline") ? "bad" : "warn") : "";
+  $("#hpill").className = "pill-h " + kind;
+  $("#tbdot").className = "dot s-" + (prob ? (cnt("offline") ? "offline" : "stalled") : "online");
+  // Telefonda faqat birinchi qism ko'rinadi (.hide-sm) — chiziq sig'sin.
+  $("#tbtitle").innerHTML = cams.length
+    ? `${prob} muammoli · ${cams.length} kamera<span class="hide-sm"> · health 60s · reconciler 30s</span>`
+    : "yuklanmoqda…";
+  const h = S.health;
+  $("#tbmeta").textContent = h ? `managed ${h.managed} · tomoshabin ${h.readers}` : "—";
 }
+setInterval(() => { $("#clock").textContent = clock(); }, 1000);
 
 /* Brauzer H.265 ni o'zi o'qiy oladimi — olsa server o'girmaydi.
 
@@ -145,14 +161,15 @@ const S = {
   rt: {},                 // slug -> {ready, readers, bytes_received, warm}
   rates: {},              // slug -> Mbit/s (ikki so'rov orasidagi farq)
   prevRt: null,           // {t, paths}
-  filt: "all", sortK: "state", sortD: 1, picked: new Set(),
-  wallN: 9, wallMode: "all",
+  filt: "prob", sortK: "state", sortD: 1, picked: new Set(),
+  up7: null, up7At: 0,    // kamera id -> 7 kunlik uptime (jadval ustuni)
+  wallN: 9, wallMode: "all", wallLive: false,
   evlog: [], evFilt: "all", evPause: false, evN: 0,
-  gBy: "region", gHours: 24, groups: null,      // guruhlar sahifasi
-  tHours: 24, stat: null, worst: null,          // tahlil sahifasi
-  diagDay: 0, hist: null,                       // kamera tahlili
-  fleet: null,                                  // yuqori chiziq agregati
-  curId: null, page: "home",
+  gBy: "region", gHours: 24, groups: null,      // topologiya: reyting jadvali
+  tHours: 24, stat: null, worst: null, causes: null,   // uzilishlar sahifasi
+  diagDay: 0, hist: null,                       // kamera sahifasi
+  sel: null, busy: null, note: {},              // "xato qayerda?" tanlovi va amal izi
+  curId: null, page: "verdict",
   nodes: [], health: null, status: null, recentEv: [],
 };
 
@@ -167,12 +184,44 @@ function camRt(cam) {
     ready: !!(p(cam.slug) || {}).ready,
     warm: variants.some((v) => (p(v) || {}).warm),
     bytes: variants.reduce((s, v) => s + ((p(v) || {}).bytes_received || 0), 0),
+    // Shu kameraga ochilgan RTSP sessiyalar (asosiy + sub). Registrator
+    // bir vaqtdagi sessiyalarni cheklaydi — sanash shu uchun.
+    sessions: (p(cam.slug) ? 1 : 0) + (p(cam.slug + "_sub") ? 1 : 0),
+    transcoding: !!p(cam.slug + "_h264"),
   };
 }
-function snapAge(cam) {
-  if (!cam.snapshot_at) return -1;
-  const t = Date.parse(cam.snapshot_at);
-  return isNaN(t) ? -1 : Math.max(0, (Date.now() - t) / 1000);
+function snapAge(cam) { return sinceSec(cam.snapshot_at); }
+/* Kamera qaysi tugunda — nom bilan. */
+function nodeName(c) {
+  const n = (S.nodes || []).find((x) => x.id === (c.node_id || 1));
+  return n ? n.name : (c.node_id || 1) === 1 ? "asosiy tugun" : "tugun #" + c.node_id;
+}
+
+/* ═════════ registrator (bitta IP ortidagi kanallar) ═════════
+
+   Bazada "registrator" degan alohida obyekt yo'q — bitta IP manzilda
+   bir necha kamera bo'lsa, bu registratorning kanallari. Ularning
+   holatini birga ko'rish hukm uchun eng kuchli dalil: barcha kanal
+   birga yo'qolgan bo'lsa aybdor kamera emas, registrator (quvvat,
+   magistral). Bitta kanal yo'qolgan bo'lsa — kanalning o'zi.        */
+function ipGroup(c) {
+  if (!c.ip) return [c];
+  return S.cams.filter((x) => x.ip === c.ip);
+}
+function nvrInfo(c) {
+  const g = ipGroup(c);
+  const n = g.length;
+  const off = g.filter((x) => x.state === "offline").length;
+  const stall = g.filter((x) => x.state === "stalled").length;
+  const on = g.filter((x) => x.state === "online").length;
+  const sessions = g.reduce((s, x) => s + camRt(x).sessions, 0);
+  return {ip: c.ip, cams: g, n, off, stall, on, sessions,
+          isNvr: n > 1,
+          allDown: n > 1 && off === n,
+          // Bitta registratorga 6 dan ortiq bir vaqtdagi sessiya —
+          // ko'p DVR'larda chegara shu atrofda (o'lchov: 8 kanalli
+          // Dahua 8 ta, Hikvision 6-8 ta). Bu aniq limit emas, belgi.
+          crowded: sessions > 6};
 }
 
 /* ═════════ kirish ═════════ */
@@ -198,13 +247,13 @@ function enter() {
   entered = true;
   $("#gate").classList.add("hidden");
   $("#app").classList.add("on");
-  loadCams(); pollRuntime(); loadStatus(); loadFleetStats(); startSSE();
+  loadCams(); pollRuntime(); loadStatus(); loadStat(); startSSE();
   setInterval(loadCams, 15000);
   setInterval(pollRuntime, 3000);
   setInterval(loadStatus, 30000);
   // Uzilishlar agregati sekin o'zgaradi — daqiqada bir marta yetadi.
-  setInterval(loadFleetStats, 60000);
-  setInterval(() => { if (S.page === "sys") drawSys(); }, 3000);
+  setInterval(() => { if (S.page === "out") loadStat(); }, 60000);
+  setInterval(() => { if (S.page === "res") drawSys(); }, 3000);
 }
 (async function boot() {
   try {
@@ -235,8 +284,10 @@ async function loadCams() {
     S.cams = all;
     S.byId = new Map(all.map((c) => [c.id, c]));
     drawCams(); drawNav(); drawTopbar();
-    if (S.page === "home") drawHome();
+    if (S.page === "verdict") drawVerdict();
+    if (S.page === "topo") drawTopo();
     if (S.page === "wall") drawWall(false);
+    if (S.page === "diag" && S.curId != null) drawDiag();
   } catch (e) { /* 401 gate'ni o'zi ochadi */ }
 }
 
@@ -261,9 +312,10 @@ async function pollRuntime() {
     S.prevRt = {t: now, paths: r.paths};
     S.rt = r.paths;
     if (S.page === "cams") drawCams();
-    if (S.page === "home") drawHome();
+    if (S.page === "verdict") drawVerdict();
+    if (S.page === "topo") drawTopo();
     if (S.page === "wall") updateWallFoot();
-    if (S.page === "diag" && S.curId != null) drawDiagCards();
+    if (S.page === "diag" && S.curId != null) { drawDiagCards(); drawSince(); }
     drawTopbar();
   } catch (e) {}
 }
@@ -274,121 +326,480 @@ async function loadStatus() {
     S.status = await api("/api/v1/admin/status");
     S.health = await api("/health");
     S.nodes = (await api("/api/v1/admin/nodes")).nodes;
-    // Bosh sahifa uchun so'nggi uzilishlar — "online" shovqini kerak emas.
+    // So'nggi uzilishlar — "online" shovqini kerak emas.
     try {
       S.recentEv = ((await api("/api/v1/admin/events?limit=60")).events || [])
         .filter((e) => e.kind !== "online");
     } catch (e) {}
-    $("#footinfo").textContent =
-      `${S.nodes.length} tugun · egress ${Math.round(S.health.egress_mbps)} Mbit/s`;
-    if (S.page === "sys") drawSys();
-    if (S.page === "home") drawHome();
+    drawTopbar();
+    if (S.page === "res") drawSys();
+    if (S.page === "speed") drawSpeed();
+    if (S.page === "topo") drawTopo();
+    if (S.page === "verdict") drawVerdict();
+  } catch (e) {}
+}
+
+/* 7 kunlik mavjudlik — kameralar jadvalidagi ustun. 5000 kamerada javob
+   ~600 KB, shuning uchun faqat jadval ochilganda va daqiqada bir marta. */
+async function loadUptime7() {
+  if (Date.now() - S.up7At < 60000) return;
+  S.up7At = Date.now();
+  try {
+    const r = await api("/api/v1/admin/uptime?hours=168&limit=5000");
+    S.up7 = new Map((r.cameras || []).map((c) => [c.id, c]));
+    if (S.page === "cams") drawCams();
   } catch (e) {}
 }
 
 /* ═════════ navigatsiya ═════════ */
 function go(p) {
   S.page = p;
-  $$(".nav-item").forEach((b) => b.classList.toggle("sel", b.dataset.p === p));
+  $$(".tabs .pill").forEach((b) => b.classList.toggle("sel",
+    b.dataset.p === p || (p === "diag" && b.dataset.p === "cams")));
   $$(".page").forEach((s) => s.classList.toggle("on", s.id === "p-" + p));
   if (p === "wall") drawWall(true); else stopWall();
   if (p !== "diag") closeLive();          // sahifadan chiqilsa video to'xtaydi
-  if (p === "home") drawHome();
-  if (p === "sys") { drawSys(); loadStatus(); }
+  if (p === "verdict") drawVerdict();
+  if (p === "speed") { drawSpeed(); loadStatus(); }
+  if (p === "topo") { drawTopo(); drawGroups(); loadGroups(); }
+  if (p === "cams") { drawCams(); loadUptime7(); }
+  if (p === "res") { drawSys(); loadStatus(); }
+  if (p === "out") { drawStat(); loadStat(); }
   if (p === "ev") renderFeed();
-  if (p === "groups") { drawGroups(); loadGroups(); }
-  if (p === "stat") { drawStat(); loadStat(); }
+  window.scrollTo(0, 0);
 }
-$$(".nav-item").forEach((b) => (b.onclick = () => go(b.dataset.p)));
+$$(".tabs .pill").forEach((b) => (b.onclick = () => go(b.dataset.p)));
 $("#dback").onclick = () => go("cams");
 
 function drawNav() {
-  $("#nc").textContent = S.cams.length;
-  const bad = S.cams.filter((c) => c.state === "offline" || c.state === "stalled").length;
-  $("#nw").textContent = bad ? bad + "!" : S.cams.filter((c) => c.state === "online").length;
-  $("#nw").className = "ct" + (bad ? " alert" : "");
   const prob = S.cams.filter((c) => PROB.has(c.state)).length;
-  $("#nh").textContent = prob ? prob + "!" : "✓";
-  $("#nh").className = "ct" + (prob ? " alert" : "");
+  $("#nv").textContent = S.cams.length ? (prob || "✓") : "";
+  $("#nv").className = "n" + (prob ? " alert" : "");
+  $("#nc").textContent = S.cams.length || "";
+  $("#nw").textContent = S.picked.size || "";
+  const t = S.stat ? S.stat.total : 0;
+  $("#nt").textContent = t ? t : "";
+  $("#nt").className = "n" + (t ? " alert" : "");
 }
 
-/* ═════════ holat (bosh sahifa) ═════════ */
-function drawHome() {
-  if (S.page !== "home") return;
-  const h = S.health, st = S.status || {};
-  const on = S.cams.filter((c) => c.state === "online").length;
+/* ═════════ "xato qayerda?" — hukm dvijoki ═════════
+
+   Hukm taxmin emas, dalillardan xulosa. Har qatlam uchun bitta o'lchov
+   bor va u to'g'ridan ko'rsatiladi:
+     Kamera        — health sweep (TCP 554), kamera holati
+     Registrator   — shu IP dagi boshqa kanallar holati, faol sessiyalar
+     Tugun         — MediaMTX'da yo'l bormi, bayt oqyaptimi (runtime)
+     Chipta        — tomoshabin bor-yo'qligi (chipta amal qilganini
+                     bildiradi: readers > 0 bo'lsa 401 bo'lmagan)
+     Brauzer       — surat yoshi, o'girish, watchdog
+   Qatlamlarning qay biri birinchi "qizil" bo'lsa — aybdor o'sha.     */
+function verdictFor(c) {
+  const rt = camRt(c), a = snapAge(c), nvr = nvrInfo(c);
+  const port = c.port || 554;
+  const step = (label, tag, kind, probe, note) => ({label, tag, kind, probe, note});
+  const nvrLabel = nvr.isNvr ? `Registrator ${c.ip}` : "Registrator";
+  const nvrIdle = step(nvrLabel, "yakka kamera", "idle", "—",
+    "Bu IP da boshqa kanal yo'q — registrator dalili yo'q, kamera o'zi baholanadi.");
+  const nvrStep = (k, tag, note) => nvr.isNvr ? step(nvrLabel, tag, k, `${nvr.n} kanal`, note) : nvrIdle;
+  const nodeNm = nodeName(c);
+  const note = S.note[c.id];
+
+  if (c.state === "disabled" || c.enabled === false) {
+    return {
+      badge: "o'chirib qo'yilgan", kind: "idle",
+      title: "Admin kamerani ataylab o'chirgan",
+      body: "Oqim ham, surat ham berilmaydi; health tsikli tekshirmaydi. Bu nosozlik emas — yoqilsa hamma qatlam qayta ishga tushadi.",
+      actLabel: "Yoqish", actKind: "enable", actNote: "oqim va surat qaytadan beriladi",
+      chain: [
+        step("Kamera · RTSP " + port, "tekshirilmaydi", "idle", "—", `${c.ip || "manzil yo'q"} — o'chirilgan kamera sweep'ga kirmaydi.`),
+        nvrStep(nvr.allDown ? "bad" : "idle", nvr.allDown ? "javob yo'q" : `${nvr.on} tirik`, `${nvr.n} kanal · ${nvr.sessions} faol sessiya.`),
+        step("Tugun · MediaMTX", "yo'l yo'q", "idle", nodeNm, "O'chirilgan kamera uchun yo'l yaratilmaydi."),
+        step("Chipta", "berilmaydi", "idle", "auth", "Oqim so'rovi 403 bilan rad etiladi."),
+        step("Brauzer", "—", "idle", "—", "Ko'rish mumkin emas."),
+      ],
+    };
+  }
+
+  if (c.state === "offline") {
+    const down = nvr.allDown;
+    const seen = sinceSec(c.last_seen);
+    return {
+      badge: down ? "registrator tomonida" : "kamera tomonida", kind: "bad",
+      title: down
+        ? `${c.ip}: barcha ${nvr.n} kanal birga yo'qolgan — muammo servisda emas`
+        : nvr.isNvr ? "Registrator tirik, lekin bu kanal portga javob bermayapti"
+        : "Kamera tarmoqdan javob bermayapti",
+      body: down
+        ? `TCP tekshiruv ${c.ip}:${port} ni ko'rmayapti va shu manzildagi qolgan kanallar ham offline. Bitta registrator ortidagi barcha kanal birga yo'qolsa — bu quvvat yoki magistral tarmoq. Servis, MediaMTX va chiptalar bu holatga aloqador emas.`
+        : nvr.isNvr
+        ? `Shu IP dagi ${nvr.on} kanal ishlayapti, ya'ni registrator va tarmoq joyida. Kanal registratorda o'chirilgan, RTSP yo'li o'zgargan yoki kamera kabeli uzilgan bo'lishi mumkin. "Qayta tekshirish" bosqichma-bosqich aytadi: tarmoq → login → yo'l.`
+        : `TCP tekshiruv ${c.ip}:${port} portiga ulanolmadi. Kabel va kommutatorni ko'ring; sabab aniq bo'lmasa "Qayta tekshirish" bosqichma-bosqich aytadi (tarmoq / parol / yo'l). Surat ataylab to'silgan — eski kadr jonli bo'lib ko'rinmasin.`,
+      actLabel: down ? "Registratorni qayta tekshirish" : "Kanalni qayta tekshirish", actKind: "probe",
+      actNote: `${c.ip}:${port}` + (seen >= 0 ? ` · oxirgi javob ${age(seen)} oldin` : ""),
+      chain: [
+        step("Kamera · RTSP " + port, "javob yo'q", "bad", "TCP 60s",
+          `${c.ip}:${port} portiga ulanish timeout bilan tugadi` + (seen >= 0 ? ` · oxirgi javob ${age(seen)} oldin.` : ".")),
+        nvrStep(down ? "bad" : "ok", down ? "javob yo'q" : `${nvr.on}/${nvr.n} tirik`,
+          down ? "Shu IP dagi barcha kanallar offline — registratorning o'zi yo'q."
+               : `Shu IP dagi ${nvr.on} kanal online — registrator va tarmoq joyida, ayb kanalda.`),
+        step("Tugun · MediaMTX", rt.ready ? "yo'l qotgan" : "yo'l yaratilmagan", "idle", nodeNm,
+          rt.ready ? "Yo'l ro'yxatda qolgan, reconciler 30 s ichida tozalaydi."
+                   : "Manba javob bermaganda yo'l ochilmaydi — bu kutilgan xatti-harakat, xato emas."),
+        step("Chipta", "berilmaydi", "idle", "auth", "Offline kameraga /stream 409 qaytaradi — chipta yaratilmaydi."),
+        step("Brauzer", "surat to'silgan", "warn", "404",
+          "Surat ataylab 404 — eski JPEG jonli deb chalg'itmasin. Eski kadr `?stale=1` bilan ochiladi."),
+      ],
+    };
+  }
+
+  if (c.state === "stalled") {
+    const crowded = nvr.crowded;
+    return {
+      badge: crowded ? "registrator tomonida" : "kamera tomonida", kind: "warn",
+      title: crowded
+        ? `${c.ip}: ${nvr.sessions} ta faol sessiya — registrator limiti ehtimoli`
+        : "Ulanish bor, lekin kadr kelmayapti",
+      body: crowded
+        ? `Reconciler 30 soniya ichida bitta bayt ko'rmadi — oqim muzlagan. TCP tekshiruv buni ko'rmaydi: registrator portga javob beraveradi. Shu IP ga ${nvr.sessions} ta sessiya ochilgan; ko'p DVR'larda chegara 6–8. Sessiyalar to'lganda yangi kanal ulanmaydi yoki eskisi uzib qo'yiladi.`
+        : `Reconciler baytlarni sanaydi va 30 soniya jimlikni "stalled" deb belgilaydi. Odatda kamera qayta yuklanayotganda yoki tarmoq uzilganda bo'ladi — reconciler o'zi tiklaydi. Tiklanmasa yo'lni qayta yaratish kerak.`,
+      actLabel: "Oqimni qayta ulash", actKind: "reconnect",
+      actNote: crowded ? "yo'l o'chirilib qayta yaratiladi — eski sessiya bo'shaydi" : "MediaMTX yo'lini o'chirib qayta yaratadi",
+      chain: [
+        step("Kamera · RTSP " + port, "port ochiq", "ok", "TCP 60s",
+          `${c.ip}:${port} javob beryapti` + (c.codec ? ` · kodek ${c.codec}` : "") + (c.resolution ? ` · ${c.resolution}` : "") + "."),
+        nvrStep(crowded ? "warn" : nvr.stall > 1 ? "warn" : "ok",
+          crowded ? `${nvr.sessions} sessiya` : nvr.stall > 1 ? `${nvr.stall} kanal muzlagan` : "sog'lom",
+          crowded ? `${nvr.n} kanal, ${nvr.sessions} faol sessiya — limitga yaqin yoki to'lgan.`
+                  : nvr.stall > 1 ? `Shu IP da ${nvr.stall} kanal birga muzlagan — registrator yoki uning tarmog'i.`
+                  : `${nvr.n} kanal · ${nvr.sessions} faol sessiya · ${nvr.on} online.`),
+        step("Tugun · MediaMTX", "bayt kelmadi", "warn", `${nodeNm} · 30s`,
+          `Yo'l ro'yxatda${rt.ready ? " va tayyor" : ""}, lekin oxirgi 30 soniyada bayt hisobi o'smadi (hozir ${rt.inMbps.toFixed(1)} Mbit/s).`),
+        step("Chipta", rt.readers ? "amal qiladi" : "tomoshabin yo'q", rt.readers ? "ok" : "idle", "auth",
+          rt.readers ? `${rt.readers} tomoshabin ulangan — 401 qaytmagan, himoya qatlami sabab emas.` : "Hozir hech kim ko'rmayapti — chipta so'ralmagan."),
+        step("Brauzer", rt.readers ? "watchdog kutyapti" : "—", rt.readers ? "warn" : "idle", "12s",
+          rt.readers ? "Pleyer kadrlar to'xtaganini sezadi va 12 soniyada qayta ulanadi." : "Ko'rish urinishi yo'q."),
+      ],
+    };
+  }
+
+  if (c.state === "unknown") {
+    return {
+      badge: "hali ma'lum emas", kind: "idle",
+      title: "Birinchi tekshiruv navbatda",
+      body: "Kamera bazaga qo'shilgan, lekin health tsikli (60 s) unga hali yetmagan. Holat aniqlanmaguncha ro'yxatda kulrang turadi — yoki hozir tekshiring.",
+      actLabel: "Hozir tekshirish", actKind: "probe", actNote: "RTSP probe: tarmoq → login → kodek → o'lcham",
+      chain: [
+        step("Kamera · RTSP " + port, "tekshirilmagan", "idle", "—", `${c.ip || "manzil yo'q"}:${port} hali so'ralmagan.`),
+        nvrStep(nvr.allDown ? "bad" : "idle", nvr.allDown ? "javob yo'q" : `${nvr.on} tirik`, `${nvr.n} kanal · ${nvr.on} online · ${nvr.off} offline.`),
+        step("Tugun · MediaMTX", "yo'l yo'q", "idle", nodeNm, "Talab bo'yicha yaratiladi — oldindan ro'yxatga olinmaydi."),
+        step("Chipta", "—", "idle", "auth", "Oqim so'ralmagan."),
+        step("Brauzer", "—", "idle", "—", "Ko'rish urinishi bo'lmagan."),
+      ],
+    };
+  }
+
+  // online
+  const snapStale = a >= 0 && a > 600 && c.ip;
+  const snapNone = a < 0 && c.ip;
+  const kind = snapStale ? "warn" : "ok";
+  return {
+    badge: snapStale ? "surat tomonida" : c.transcode ? "hammasi joyida · o'girish" : "hammasi joyida", kind,
+    title: snapStale ? "Video ishlayapti, surat eskirgan" : "Zanjir toza — aralashish kerak emas",
+    body: snapStale
+      ? `Oqim normal, lekin oxirgi surat ${age(a)} oldin olingan — snapshot manbai (kameraning HTTP yuzasi) javob bermayotgan bo'lishi mumkin. Asosiy tizimdagi surat ham eskirgan bo'ladi.`
+      : `Kameradan iste'molchigacha uzilish ko'rinmaydi.` +
+        (rt.ready ? ` Yo'l tayyor, kirish ${rt.inMbps.toFixed(1)} Mbit/s, ${rt.readers} tomoshabin.` : " Hozir hech kim ko'rmayapti — yo'l talab bo'lganda ochiladi.") +
+        (c.transcode ? ` Kodek ${c.codec} — brauzer uddalamasa FFmpeg H.264 ga o'giradi (~200-400 MB, NVENC sessiyasi).` : "") +
+        (rt.warm ? " Yo'l issiq to'plamda — qayta ochilish bir soniyagacha." : ""),
+    actLabel: snapStale ? "Suratni yangilash" : "Jonli ko'rish", actKind: snapStale ? "snap" : "view",
+    actNote: snapStale ? "kameradan yangi JPEG so'raladi" : `tomoshabin ${rt.readers} · yo'l ${rt.ready ? "tayyor" : "kutmoqda"}`,
+    chain: [
+      step("Kamera · RTSP " + port, "sog'lom", "ok", "TCP 60s",
+        `${c.ip || "tayyor oqim"}${c.codec ? " · " + c.codec : ""}${c.resolution ? " · " + c.resolution : ""}${c.fps ? " · " + c.fps + " fps" : ""}${c.always_on ? " · tez ochilish yoqilgan" : ""}.`),
+      nvrStep(nvr.crowded ? "warn" : nvr.off ? "warn" : "ok",
+        nvr.crowded ? `${nvr.sessions} sessiya` : nvr.off ? `${nvr.off} kanal offline` : "sog'lom",
+        `${nvr.n} kanal · ${nvr.sessions} faol sessiya · ${nvr.on} online${nvr.off ? ` · ${nvr.off} offline` : ""}.`),
+      step("Tugun · MediaMTX", rt.transcoding ? "o'girish ishlayapti" : rt.ready ? "xom uzatyapti" : "talab kutilmoqda",
+        rt.transcoding ? "warn" : rt.ready ? "ok" : "idle", nodeNm,
+        rt.transcoding ? `Brauzer ${c.codec} ni uddalamadi — FFmpeg H.264 ga o'giryapti (1 NVENC sessiyasi).`
+          : rt.ready ? `Yo'l ${c.slug} tayyor, o'girish yo'q — eng arzon yo'l.` : "Yo'l ko'rish so'ralganda yaratiladi."),
+      step("Chipta", rt.readers ? "amal qiladi" : "so'ralmagan", rt.readers ? "ok" : "idle", "auth",
+        "Imzoli, 1 soatlik, faqat shu yo'lga bog'langan. MediaMTX har so'rovni backend'dan tekshirtiradi."),
+      step("Brauzer", snapStale ? "surat eskirgan" : snapNone ? "surat hali yo'q" : "surat " + age(a),
+        snapStale ? "warn" : "ok", "poster",
+        snapStale ? `Oxirgi surat ${age(a)} oldin — snapshot tsikli bu kameraga yetmayapti.` : "Pleyer avval WebRTC'ni sinaydi, ishlamasa HLS'ga tushadi."),
+    ],
+  };
+}
+
+/* Hukm sahifasidagi amal. Har biri haqiqiy API chaqiruvi; natija
+   S.note ga yoziladi va karta ostida ko'rinadi. */
+async function vAct(kind, c) {
+  if (S.busy) return;
+  if (kind === "view") { openDiag(c.id); openLive(c); return; }
+  S.busy = c.id;
+  drawVerdict();
+  const done = (msg, k) => {
+    S.busy = null;
+    S.note[c.id] = msg;
+    drawVerdict();
+    if (k) toast(c.name, msg, k);
+  };
+  try {
+    if (kind === "probe") {
+      const r = await api("/api/v1/admin/probe", {method: "POST", body: {
+        ip: c.ip, port: c.port || 554, username: c.username || "",
+        rtsp_path: c.rtsp_path || "/", camera_id: c.id}});
+      probeResult = {...r, camera: c.id};
+      pushEv(r.ok ? "amal" : "xato", `<b>${esc(c.name)}</b> probe · ${esc(r.message)}`, c.id);
+      done(r.ok ? `Probe o'tdi: ${r.message}` : `Probe to'xtadi (${r.stage}): ${r.message}`);
+      loadCams();
+    } else if (kind === "reconnect") {
+      // Yo'lni qayta yaratishning yagona yo'li — kamerani o'chirib
+      // yoqish: MediaMTX yo'li olib tashlanadi, registratordagi
+      // sessiya bo'shaydi, keyin yo'l qaytadan qo'shiladi.
+      await api(`/api/v1/admin/cameras/${c.id}/enabled`, {method: "POST", body: {enabled: false}});
+      await new Promise((r) => setTimeout(r, 1200));
+      const r = await api(`/api/v1/admin/cameras/${c.id}/enabled`, {method: "POST", body: {enabled: true}});
+      S.byId.set(c.id, r); S.cams = S.cams.map((x) => x.id === c.id ? r : x);
+      pushEv("amal", `<b>${esc(c.name)}</b> yo'l qayta yaratildi`, c.id);
+      done("Yo'l o'chirilib qayta yaratildi. Kadr kelsa reconciler 30 s ichida holatni online qiladi.");
+    } else if (kind === "enable") {
+      const r = await api(`/api/v1/admin/cameras/${c.id}/enabled`, {method: "POST", body: {enabled: true}});
+      S.byId.set(c.id, r); S.cams = S.cams.map((x) => x.id === c.id ? r : x);
+      pushEv("amal", `<b>${esc(c.name)}</b> yoqildi`, c.id);
+      done("Yoqildi — health tsikli bir daqiqada holatni aniqlaydi.");
+    } else if (kind === "snap") {
+      const res = await fetch(`/api/v1/cameras/${c.id}/snapshot?t=${Date.now()}`, {cache: "no-store"});
+      done(res.ok ? "Surat yangilandi — disk zaxirasiga yozildi."
+        : `Surat olinmadi: ${res.status === 404 ? "manba javob bermadi" : res.status + "-xato"}.`);
+      loadCams();
+    } else done("Noma'lum amal.");
+  } catch (e) { done("Xato: " + e.message, "bad"); }
+}
+
+function suspectAge(c) {
+  if (c.state === "offline") { const s = sinceSec(c.last_seen); return s >= 0 ? age(s) : "—"; }
+  if (c.state === "stalled") { const a = snapAge(c); return a >= 0 ? age(a) : "—"; }
+  return "—";
+}
+
+function drawVerdict() {
+  if (S.page !== "verdict") return;
   const probs = S.cams.filter((c) => PROB.has(c.state))
-    .sort((a, b) => (RANK[a.state] ?? 9) - (RANK[b.state] ?? 9));
-  const totalIn = S.cams.reduce((s, c) => s + camRt(c).inMbps, 0);
+    .sort((a, b) => (RANK[a.state] ?? 9) - (RANK[b.state] ?? 9) ||
+                    String(a.name || "").localeCompare(String(b.name || "")));
+  $("#vn").textContent = S.cams.length ? `${probs.length} ta` : "yuklanmoqda…";
 
-  $("#hsum").textContent = probs.length
-    ? `${probs.length} ta kamera e'tibor talab qiladi`
-    : "Hammasi joyida";
+  // Tanlov: muammoli ro'yxatda qolgan bo'lsa saqlanadi, aks holda eng yomoni.
+  let cur = S.sel != null ? S.byId.get(S.sel) : null;
+  if (!cur || (!PROB.has(cur.state) && probs.length)) cur = probs[0] || null;
+  if (!cur && S.cams.length) cur = S.byId.get(S.sel) || null;
 
-  const tile = (lbl, val, sub) => `<div class="stat"><div class="lbl">${lbl}</div>
-    <div class="val">${val}</div><div class="sub">${sub}</div></div>`;
-  $("#hstats").innerHTML =
-    tile("Kameralar", `${on}<u> / ${S.cams.length}</u>`, "ishlayapti") +
-    tile("Muammoli", probs.length || "0", probs.length ? "quyida ro'yxati" : "yo'q") +
-    tile("MediaMTX", h && h.mediamtx ? "tirik" : "yiqilgan",
-         `${(S.nodes || []).length} tugun`) +
-    tile("Kirish", `${totalIn.toFixed(1)}<u> Mbit/s</u>`, "kameralardan") +
-    tile("Chiqish", h ? `${Math.round(h.egress_mbps)}<u> Mbit/s</u>` : "—",
-         h ? `${h.readers} tomoshabin` : "—");
+  $("#vsus").innerHTML = probs.length ? probs.slice(0, 40).map((c) => `
+    <button class="sus${cur && c.id === cur.id ? " sel" : ""}" data-id="${c.id}">
+      <i class="edge" style="background:${DOT[c.state]}"></i>
+      <span class="row"><span class="st" style="color:${KINK[stateKind(c.state)]}">${esc(LBL[c.state])}</span>
+        <span class="age">${esc(suspectAge(c))}</span></span>
+      <b>${esc(c.name)}</b>
+      <span class="where">${esc(c.region || "hududsiz")}${c.ip ? " · " + esc(c.ip) : ""} · ${esc(nodeName(c))}</span>
+    </button>`).join("") + (probs.length > 40
+      ? `<div class="meta" style="padding:6px 4px">…yana ${probs.length - 40} ta — Kameralar jadvalida</div>` : "")
+    : S.cams.length
+      ? `<div class="card tint-ok" style="padding:16px;font:400 12.5px var(--mono);color:var(--green)">✓ Barcha ${S.cams.length} kamera ishlayapti</div>`
+      : `<div class="meta">yuklanmoqda…</div>`;
+  $$("#vsus .sus").forEach((b) => (b.onclick = () => { S.sel = +b.dataset.id; drawVerdict(); }));
 
-  $("#hprob").innerHTML = probs.length
-    ? `<div class="card" style="margin-top:14px"><h3>E'tibor talab qiladi</h3>${
-        probs.slice(0, 25).map((c) => `<div class="prob-row" data-id="${c.id}">
-          <img ${c.snapshot_at
-                   ? `src="/api/v1/cameras/${c.id}/snapshot?stale=1"`
-                   : `style="visibility:hidden"`} loading="lazy"
-            onerror="this.style.visibility='hidden'">
-          <i class="dot s-${c.state}"></i><b>${esc(c.name)}</b>
-          <span class="meta">${esc(c.region)}${c.ip ? " · " + esc(c.ip) : ""}</span>
-          <span class="meta" style="margin-left:auto">${LBL[c.state]}${
-            c.state === "offline" && c.last_seen
-              ? " · oxirgi: " + esc(String(c.last_seen).slice(5, 16).replace("T", " "))
-              : ""}</span></div>`).join("")}</div>`
-    : `<div class="allok">✓ Barcha kameralar ishlayapti</div>`;
-  $$("#hprob .prob-row").forEach((r) => (r.onclick = () => openDiag(+r.dataset.id)));
+  if (!cur) {
+    $("#vright").innerHTML = S.cams.length ? "" : `<div class="empty">Kameralar yuklanmoqda…</div>`;
+    return;
+  }
+  S.sel = cur.id;
+  const v = verdictFor(cur);
+  const busy = S.busy === cur.id;
+  const nt = S.note[cur.id];
+  const sw = (S.health && S.health.health) || (S.status && S.status.health) || {};
+  const checked = sw.finished_at || sw.at ? `sweep ${age(sinceSec(sw.finished_at || sw.at))} oldin` : "health 60s / reconciler 30s";
+  $("#vright").innerHTML = `
+    <div class="card vcard tint-${v.kind}">
+      <div class="badge-row"><span class="badge ${v.kind}">${esc(v.badge)}</span>
+        <span class="meta" style="color:var(--ink-3)">${esc(cur.name)}${cur.ip ? " · " + esc(cur.ip) : ""}</span></div>
+      <p class="title">${esc(v.title)}</p>
+      <p class="body">${esc(v.body)}</p>
+      <div class="acts">
+        ${busy ? `<span class="busy"><i></i>bajarilyapti…</span>`
+               : `<button class="btn" id="vact">${esc(v.actLabel)}</button>`}
+        <span class="note">${esc(v.actNote)}</span>
+        <button class="link" id="vdiag" style="margin-left:auto">Kamera sahifasi →</button>
+      </div>
+      ${nt && !busy ? `<p class="vnote">${esc(nt)}</p>` : ""}
+    </div>
+    <div class="card"><h3>Zanjir bo'ylab dalillar <span class="h3-sub">${esc(checked)}</span></h3>
+      <div class="chain">${v.chain.map((s) => `
+        <div class="step tint-${s.kind}"><i class="dot" style="background:${KDOT[s.kind]}"></i>
+          <div class="cnt"><div class="ln"><b>${esc(s.label)}</b>
+            <span class="tg" style="color:${KINK[s.kind]}">${esc(s.tag)}</span>
+            <span class="pr">${esc(s.probe)}</span></div>
+          <div class="nt">${esc(s.note)}</div></div></div>`).join("")}</div>
+    </div>`;
+  const b = $("#vact");
+  if (b) b.onclick = () => vAct(v.actKind, cur);
+  $("#vdiag").onclick = () => openDiag(cur.id);
+}
 
-  const evs = (S.recentEv || []).slice(0, 12);
-  $("#hev").innerHTML = evs.length ? evs.map((e) => `<div class="hist-r">
-      <span class="hist-t">${esc((e.ts || "").slice(5, 16))}</span>
-      <i class="dot s-${e.kind === "offline" ? "offline"
-        : e.kind === "stalled" ? "stalled" : "unknown"}"></i>
-      <span>${esc(e.kind)}</span>
-      <span style="color:var(--faint);margin-left:6px">${esc(e.slug || e.detail || "")}</span>
-    </div>`).join("")
-    : `<div style="color:var(--faint);font-size:13px">Uzilish qayd etilmagan.</div>`;
+/* ═════════ ochilish tezligi ═════════
 
-  const sw = (st.health || (h && h.health) || {});
-  const sn = (h && h.snapshots) || {};
-  $("#hjobs").innerHTML =
-    `<dt>Health sweep</dt><dd>${sw.checked || 0} manzil · ${sw.online || 0} tirik</dd>
-    <dt>Snapshot tsikli</dt><dd>${sn.total ? sn.total + " ta" : "hali yo'q"}</dd>
-    <dt>SSE obunachi</dt><dd>${h ? h.sse_subscribers : "—"}</dd>`;
+   Pleyer har ochilishni uch bo'lakka bo'lib o'lchaydi va serverga
+   yuboradi (POST /metrics/open); /health transport kesimida p50/p95
+   qaytaradi. Kamera kesimida bo'linish yo'q — server saqlamaydi, va bu
+   to'g'ri: "sekin" degan savolga transport kesimi javob beradi.       */
+const TR_LBL = {webrtc: "WebRTC", hls: "HLS", hls_fallback: "HLS · WebRTC yiqilgach"};
+const TR_HINT = {webrtc: "signal_ms — WHEP so'rovi", hls: "signal bosqichi yo'q",
+                 hls_fallback: "WebRTC urinishi vaqtga qo'shilgan"};
+
+function drawSpeed() {
+  if (S.page !== "speed") return;
+  const om = (S.health && S.health.open_ms) || {};
+  const tr = Object.entries(om).filter(([, v]) => v && v.n).sort((a, b) => b[1].n - a[1].n);
+  const stat = (lbl, val, note, cls, ink) => `<div class="stat ${cls || ""}">
+    <div class="lbl" style="color:${ink || "var(--gray)"}">${lbl}</div>
+    <div class="val" style="color:${ink || "var(--ink)"}">${val}</div>
+    <div class="note" style="color:${ink || "var(--gray)"}">${note}</div></div>`;
+  if (!tr.length) {
+    $("#spstats").innerHTML =
+      stat("p50 ochilish", "—", "hali o'lchov yo'q") + stat("p95 ochilish", "—", "hali o'lchov yo'q") +
+      stat("keyframe kutish", "—", "frame_ms · kamera GOP") + stat("servis ulushi", "—", "stream_ms · backend + MediaMTX");
+    $("#spbudget").innerHTML = `<div class="empty" style="margin-top:8px">O'lchov yo'q. Pleyer har ochilishda vaqtni yuboradi —
+      kamerani jonli oching, raqamlar shu yerda paydo bo'ladi.<br>Server qayta ishga tushsa hisob noldan boshlanadi.</div>`;
+    $("#spadvice").textContent = "Ochilish vaqti taxmin qilinmaydi — faqat o'lchanadi.";
+    return;
+  }
+  const main = tr[0][1];
+  const p = (t, f, q) => (t[f] && t[f][q]) || 0;
+  const slow = 3000;
+  const p50 = p(main, "total_ms", "p50"), p95 = p(main, "total_ms", "p95");
+  const frame = p(main, "frame_ms", "p50"), stream = p(main, "stream_ms", "p50"), signal = p(main, "signal_ms", "p50");
+  const n = tr.reduce((s, [, v]) => s + v.n, 0);
+  $("#spstats").innerHTML =
+    stat("p50 ochilish", (p50 / 1000).toFixed(2) + "<u>s</u>", `${TR_LBL[tr[0][0]] || tr[0][0]} · ${n} o'lchov`) +
+    stat("p95 ochilish", (p95 / 1000).toFixed(2) + "<u>s</u>", "eng yomon 5%",
+         "tint-warn", p95 > slow ? "var(--red)" : "var(--amber)") +
+    stat("keyframe kutish", frame + "<u>ms</u>", "o'rtacha frame_ms · kamera GOP", "tint-warn", "var(--amber)") +
+    stat("servis ulushi", stream + "<u>ms</u>", "stream_ms · backend + MediaMTX", "tint-ok", "var(--green)");
+
+  const maxT = Math.max(1, ...tr.map(([, v]) => p(v, "total_ms", "p50")));
+  $("#spbudget").innerHTML = tr.map(([k, v]) => {
+    const t = p(v, "total_ms", "p50");
+    const w = (x) => Math.round(x / maxT * 100);
+    return `<div class="budget">
+      <div class="nm"><b>${esc(TR_LBL[k] || k)}</b><span>${v.n} o'lchov · ${esc(TR_HINT[k] || "")}</span></div>
+      <div class="bar"><i style="width:${w(p(v, "stream_ms", "p50"))}%;background:#1B4DFF"></i>
+        <i style="width:${w(p(v, "signal_ms", "p50"))}%;background:#0A6E5A"></i>
+        <i style="width:${w(p(v, "frame_ms", "p50"))}%;background:#C98A16"></i></div>
+      <div class="tot" style="color:${t > slow ? "var(--red)" : t > slow / 2 ? "var(--amber)" : "var(--ink-3)"}">${(t / 1000).toFixed(2)}s</div>
+    </div>
+    <div class="budget" style="border-top:none;padding-top:0">
+      <span></span><span class="meta">stream ${p(v, "stream_ms", "p50")} · signal ${p(v, "signal_ms", "p50")} · frame ${p(v, "frame_ms", "p50")} ms
+        · p95 ${(p(v, "total_ms", "p95") / 1000).toFixed(2)}s</span><span></span></div>`;
+  }).join("");
+
+  const tot = Math.max(1, stream + signal + frame);
+  const big = frame >= stream && frame >= signal ? "frame" : signal >= stream ? "signal" : "stream";
+  $("#spadvice").textContent = big === "frame"
+    ? `Ochilishning ${Math.round(frame / tot * 100)}% i kameradan keyframe kutishga ketyapti (o'rtacha ${frame} ms), servis ulushi esa ${stream} ms. Tezlikni backend'da emas, registratorlarda I Frame Interval'ni fps ning 1–2 baravariga tushirib olish kerak — bepul va barcha kanalga ta'sir qiladi. "Tez ochilsin" belgisi ham bor, lekin u doimiy resurs yeydi.`
+    : big === "signal"
+    ? `Signalizatsiya ${signal} ms — bu tarmoq/proksi belgisi (servis ${stream} ms, keyframe ${frame} ms). Uzoq kameralar uchun o'sha joyga alohida MediaMTX tuguni qo'ying: kamera trafigi lokal qoladi, magistralga faqat ko'rilayotgan oqim chiqadi.`
+    : `Servis ulushi ${stream} ms — eng katta bo'lak backend/MediaMTX'da. MediaMTX'da ortiqcha yo'llar (pending_paths) yoki uzoq tugun API'si tekshirilsin; Resurs sahifasidagi "managed" soni tomoshabinlarga qarab o'sishi kerak, kameralarga qarab emas.`;
+}
+
+/* ═════════ topologiya ═════════
+   Tugun → registrator (IP) → kanallar. Registrator qatori bosilsa
+   kameralar jadvali o'sha IP bo'yicha filtrlanadi.                   */
+function drawTopo() {
+  if (S.page !== "topo") return;
+  const nodes = (S.nodes || []).length ? S.nodes
+    : [{id: 1, name: "Asosiy", status: S.health ? (S.health.mediamtx ? "online" : "offline") : "unknown"}];
+  $("#tnodes").innerHTML = nodes.map((n) => {
+    const cams = S.cams.filter((c) => (c.node_id || 1) === n.id);
+    const kind = n.status === "online" ? "ok" : n.status === "degraded" ? "warn" : n.status === "offline" ? "bad" : "idle";
+    const rtm = n.runtime || {};
+    const groups = new Map();
+    cams.forEach((c) => {
+      const k = c.ip || "tayyor oqim";
+      if (!groups.has(k)) groups.set(k, []);
+      groups.get(k).push(c);
+    });
+    const rows = [...groups.entries()].map(([ip, g]) => {
+      const info = nvrInfo(g[0]);
+      const off = g.filter((x) => x.state === "offline").length;
+      const stall = g.filter((x) => x.state === "stalled").length;
+      const on = g.filter((x) => x.state === "online").length;
+      const sess = g.reduce((s, x) => s + camRt(x).sessions, 0);
+      const single = g.length === 1;
+      const allDown = !single && off === g.length && g[0].ip;
+      const k = allDown ? "bad" : (stall || (off && !single) || info.crowded) ? "warn" : off ? "bad" : "ok";
+      const tag = allDown ? "javob yo'q" : info.crowded ? "sessiya ko'p" : stall ? `${stall} kanal muzlagan`
+        : off ? (single ? "javob yo'q" : `${off} kanal offline`) : on ? "sog'lom" : "tekshirilmagan";
+      const note = allDown ? "Barcha kanallar birga yo'qolgan — quvvat yoki magistral."
+        : off && single ? "Yakka kamera javob bermayapti — kabel, quvvat yoki kameraning o'zi."
+        : info.crowded ? `${sess} faol sessiya — ko'p DVR'larda chegara 6–8. Yangi ulanish uchun eski sessiya bo'shashi kerak.`
+        : stall ? "Ulanish bor, bayt kelmayapti — reconciler kuzatyapti."
+        : off ? "Registrator tirik, ayrim kanal javob bermayapti — kanal o'chirilgan yoki kabel."
+        : `${on} online · ${sess} faol sessiya.`;
+      return {ip, g, k, tag, note, sess, on, off, stall, rank: k === "bad" ? 0 : k === "warn" ? 1 : 2};
+    }).sort((a, b) => a.rank - b.rank || b.g.length - a.g.length);
+    const shown = rows.slice(0, 40);
+    return `<div class="node">
+      <div class="node-h"><i class="dot" style="background:${KDOT[kind]}"></i><b>${esc(n.name)}</b>
+        <span class="st ${kind}">${esc(n.status || "—")}</span>
+        <span class="nkv"><span>kamera ${cams.length}</span><span>yo'l ${rtm.ready ?? n.ready ?? "—"}</span>
+          <span>tomoshabin ${rtm.readers ?? n.readers ?? "—"}</span>
+          ${n.stalled ? `<span style="color:var(--amber)">muzlagan ${n.stalled}</span>` : ""}
+          ${n.pending_paths ? `<span style="color:var(--amber)">ortiqcha yo'l ${n.pending_paths}</span>` : ""}
+          ${n.api_base ? `<span>${esc(n.api_base)}</span>` : ""}</span></div>
+      ${shown.map((r) => `<button class="nvr" data-ip="${esc(r.ip)}">
+        <span class="nm"><i class="dot" style="background:${KDOT[r.k]}"></i>
+          <span class="cnt"><b>${esc(r.ip)}</b><span>${r.g.length} kanal · ${r.g.length > 1 ? "registrator" : "yakka kamera"}</span></span></span>
+        <span class="sess"><span>sessiya ${r.sess}</span>
+          <span class="bar-h"><i style="width:${Math.min(100, r.sess / 8 * 100)}%;background:${r.sess > 6 ? "var(--d-stall)" : "var(--d-on)"}"></i></span></span>
+        <span class="tg" style="color:${KINK[r.k]}">${esc(r.tag)}</span>
+        <span class="nt">${esc(r.note)}</span></button>`).join("")}
+      ${rows.length > 40 ? `<div class="node-more">…yana ${rows.length - 40} registrator — Kameralar jadvalida</div>` : ""}
+      ${!rows.length ? `<div class="node-more">Bu tugunga kamera biriktirilmagan.</div>` : ""}
+    </div>`;
+  }).join("");
+  $$("#tnodes .nvr").forEach((b) => (b.onclick = () => {
+    const ip = b.dataset.ip;
+    $("#csearch").value = ip === "tayyor oqim" ? "" : ip;
+    S.filt = "all";
+    $$("#cfilt .pill").forEach((x) => x.classList.toggle("sel", x.dataset.f === "all"));
+    go("cams");
+  }));
 }
 
 /* ═════════ kameralar jadvali ═════════ */
-$$("#cfilt .chip").forEach((b) => (b.onclick = () => {
+$$("#cfilt .pill").forEach((b) => (b.onclick = () => {
   S.filt = b.dataset.f;
-  $$("#cfilt .chip").forEach((x) => x.classList.toggle("sel", x === b));
+  $$("#cfilt .pill").forEach((x) => x.classList.toggle("sel", x === b));
   drawCams();
 }));
 $("#csearch").oninput = () => drawCams();
-$$("#p-cams thead th[data-s]").forEach((th) => (th.onclick = () => {
+$$(".chead button[data-s]").forEach((th) => (th.onclick = () => {
   const k = th.dataset.s;
   S.sortD = S.sortK === k ? -S.sortD : 1; S.sortK = k; drawCams();
 }));
 
+function up7(c) { return S.up7 ? S.up7.get(c.id) : null; }
+
 function tableRows() {
-  const q = $("#csearch").value.toLowerCase();
+  const q = $("#csearch").value.toLowerCase().trim();
   const key = (c) => {
     if (S.sortK === "state") return RANK[c.state] ?? 9;   // muammolilar tepada
     if (S.sortK === "inMbps") return camRt(c).inMbps;
     if (S.sortK === "readers") return camRt(c).readers;
     if (S.sortK === "snapAge") return snapAge(c);
+    if (S.sortK === "uptime") { const u = up7(c); return u ? u.uptime_pct : 101; }
+    if (S.sortK === "ip") return (c.ip || "") + " " + (c.region || "");
     return c[S.sortK] ?? "";
   };
   const match = (c) => S.filt === "all" ? true
@@ -396,7 +807,8 @@ function tableRows() {
   return S.cams.filter((c) =>
       match(c) &&
       (!q || (c.name || "").toLowerCase().includes(q) ||
-        (c.ip || "").includes(q) || (c.external_id || "").includes(q)))
+        (c.ip || "").includes(q) || (c.external_id || "").toLowerCase().includes(q) ||
+        (c.region || "").toLowerCase().includes(q)))
     .sort((a, b) => {
       const x = key(a), y = key(b);
       const d = (typeof x === "number" ? x - y
@@ -406,21 +818,34 @@ function tableRows() {
 }
 
 function drawCams() {
+  if (S.page !== "cams") { drawNav(); return; }
   const rs = tableRows();
   $("#ctb").innerHTML = rs.map((c) => {
-    const rt = camRt(c), a = snapAge(c);
-    return `<tr data-id="${c.id}" class="${S.picked.has(c.id) ? "pick" : ""}">
-    <td><span class="cbx">✓</span></td>
-    <td><span class="st"><i class="dot s-${c.state}"></i>${LBL[c.state] || c.state}</span></td>
-    <td class="name">${esc(c.name)}<div class="meta" style="font-size:11px">${esc(c.external_id || "")}</div></td>
-    <td>${esc(c.region)}</td><td class="meta">${esc(c.ip || "—")}</td>
-    <td class="meta">${c.codec ? esc(c.codec) + (c.sub_codec ? " · " + esc(c.sub_codec) : "") : "—"}</td>
-    <td class="meta">${rt.inMbps ? rt.inMbps.toFixed(1) + " Mb/s" : "—"}</td>
-    <td class="meta">${rt.readers || "—"}</td>
-    <td class="meta">${c.state === "offline"
-      ? '<span class="tag bad">berilmaydi</span>' : esc(age(a))}</td>
-  </tr>`;}).join("");
-  $$("#ctb tr").forEach((r) => {
+    const rt = camRt(c), a = snapAge(c), u = up7(c);
+    const k = stateKind(c.state);
+    const since = c.state === "offline" ? (sinceSec(c.last_seen) >= 0 ? age(sinceSec(c.last_seen)) + " dan beri" : "")
+      : c.state === "stalled" ? (a >= 0 ? age(a) + " dan beri" : "")
+      : c.state === "unknown" ? "yangi" : "";
+    return `<button class="crow${S.picked.has(c.id) ? " pick" : ""}" data-id="${c.id}"
+      style="box-shadow:inset 3px 0 0 ${c.state === "online" ? "transparent" : DOT[c.state]}">
+      <span class="cbx">${S.picked.has(c.id) ? "✓" : ""}</span>
+      <span class="nm"><i class="dot" style="background:${DOT[c.state]}"></i>
+        <span class="cnt"><b>${esc(c.name)}</b>
+          <span style="color:${KINK[k]}">${esc(LBL[c.state] || c.state)} <span style="color:var(--mute)">${esc(since)}${c.external_id ? " · " + esc(c.external_id) : ""}</span></span></span></span>
+      <span class="col"><span class="m1">${esc(c.ip || "tayyor oqim")}</span>
+        <span class="m2">${esc(c.region || "hududsiz")} · ${esc(nodeName(c))}</span></span>
+      <span class="col"><span class="m1">${c.codec ? esc(c.codec) + (c.sub_codec ? " · " + esc(c.sub_codec) : "") : "—"}${c.transcode ? " → H264" : ""}</span>
+        <span class="m2" style="color:${rt.ready ? "var(--green)" : "var(--mute)"}">yo'l: ${rt.ready ? "managed" : rt.warm ? "issiq" : "yo'q"}</span></span>
+      <span class="right">${rt.inMbps ? rt.inMbps.toFixed(1) + " Mb/s" : "—"}</span>
+      <span class="col">${u
+        ? `<span class="m1" style="color:${upColor(u.uptime_pct)}">${u.uptime_pct}%</span>
+           <span class="m2">${u.outages ? u.outages + " uzilish · " + durHM(u.offline_seconds) : "uzilishsiz"}</span>`
+        : `<span class="m1" style="color:var(--mute)">—</span>`}</span>
+      <span class="right">${rt.readers || "—"}</span>
+      <span class="right" style="color:var(--mute)">${c.state === "offline"
+        ? '<span class="tag bad">yopiq</span>' : esc(age(a))}</span>
+    </button>`;}).join("");
+  $$("#ctb .crow").forEach((r) => {
     const id = +r.dataset.id;
     r.onclick = (e) => {
       if (e.target.closest(".cbx")) {
@@ -429,11 +854,13 @@ function drawCams() {
       } else openDiag(id);
     };
   });
-  $("#cempty").innerHTML = rs.length ? "" : `<div class="empty">
-    Bu filtrga mos kamera yo'q.<br>Filtrni kengaytiring yoki qidiruvni tozalang.</div>`;
+  $("#cempty").innerHTML = rs.length ? "" : `<div class="empty">${
+    S.filt === "prob" && S.cams.length
+      ? `✓ Muammoli kamera yo'q — ${S.cams.length} kamera ishlayapti.<br>Hammasini ko'rish uchun «Hammasi» filtrini tanlang.`
+      : "Bu filtrga mos kamera yo'q.<br>Filtrni kengaytiring yoki qidiruvni tozalang."}</div>`;
   $("#cbulk").innerHTML = S.picked.size ? `<div class="bulk">
     <b>${S.picked.size} ta</b> tanlandi
-    <span style="color:var(--faint);font-size:12.5px">Devorda sub oqim ochiladi</span>
+    <span class="meta">devorda sub oqim ochiladi</span>
     <button class="btn" style="margin-left:auto" id="bwall">Devorda ochish</button>
     <button class="btn ghost" id="bclr">Bekor</button></div>` : "";
   if (S.picked.size) {
@@ -442,15 +869,24 @@ function drawCams() {
   }
   const cnt = (s) => S.cams.filter((c) => c.state === s).length;
   const probN = S.cams.filter((c) => PROB.has(c.state)).length;
-  $$("#cfilt .chip").forEach((b) => {
+  $$("#cfilt .pill").forEach((b) => {
     const f = b.dataset.f;
     b.querySelector(".n").textContent =
       f === "all" ? S.cams.length : f === "prob" ? probN : cnt(f);
   });
+  const N = Math.max(1, S.cams.length);
+  const seg = ["online", "stalled", "offline", "unknown", "disabled"];
+  $("#parkbar").innerHTML = seg.map((s) =>
+    `<i style="width:${(cnt(s) / N * 100).toFixed(2)}%;background:${DOT[s]}"></i>`).join("");
+  $("#parkleg").innerHTML = seg.filter((s) => cnt(s) || s === "online").map((s) =>
+    `<span><i style="background:${DOT[s]}"></i>${s} ${cnt(s)}</span>`).join("");
+  $$(".chead button[data-s]").forEach((b) => {
+    b.classList.toggle("sel", b.dataset.s === S.sortK);
+    b.querySelector(".arrow").textContent = b.dataset.s === S.sortK ? (S.sortD === 1 ? "▲" : "▼") : "";
+  });
   const totalIn = S.cams.reduce((s, c) => s + camRt(c).inMbps, 0);
-  $("#csum").textContent = `${S.cams.length} ta · ${cnt("online")} tasi ishlayapti · ` +
-    (probN ? `${probN} ta muammoli · ` : "") +
-    `${totalIn.toFixed(1)} Mbit/s kirish`;
+  $("#csum").textContent = `${rs.length} ta ko'rsatilyapti · ${S.cams.length} dan · ${cnt("online")} online` +
+    (probN ? ` · ${probN} muammoli` : "") + ` · ${totalIn.toFixed(1)} Mbit/s kirish · qatorni bosib kamera sahifasini oching`;
   drawNav();
 }
 document.addEventListener("keydown", (e) => {
@@ -459,7 +895,7 @@ document.addEventListener("keydown", (e) => {
   }
 });
 
-/* ═════════ video pleyer (devor uchun) ═════════ */
+/* ═════════ video pleyer ═════════ */
 const FAIL_MSG = "oqim ochilmadi";
 
 /* Watchdog: oqim "ulangan" bo'lib turib qotib qolishi eng ko'p uchraydigan
@@ -1207,42 +1643,28 @@ function createPlayer(video, msgEl) {
 }
 
 
-/* ═════════ guruhlar va tahlil (uzilishlar agregati) ═════════
+/* ═════════ topologiya: uzilishlar reytingi (guruh kesimida) ═════════
 
-   Ikkalasi ham /admin/uptime va /admin/outages/hourly dan oziqlanadi —
-   hisob serverda, events jadvalidan. 5000 kamerani brauzerga tortib
-   guruhlashning ma'nosi yo'q: guruh javobi 2-11 KB, kamera kesimidagi
-   to'liq ro'yxat esa ~900 KB.                                        */
+   /admin/uptime dan oziqlanadi — hisob serverda, events jadvalidan.
+   5000 kamerani brauzerga tortib guruhlashning ma'nosi yo'q: guruh
+   javobi 2-11 KB, kamera kesimidagi to'liq ro'yxat esa ~900 KB.      */
 
 const HOURS_LBL = {24: "24 soat", 168: "7 kun", 720: "30 kun"};
-
-/* Sekundlarni odam o'qiydigan davomiylikka: 0 bo'lsa chiziqcha. */
-const durHM = (sec) => {
-  if (!sec) return "—";
-  const h = Math.floor(sec / 3600), m = Math.round((sec % 3600) / 60);
-  return h ? `${h}s ${m}d` : `${m}d`;
-};
-
-/* Uptime foizining rangi: 99% dan yuqori — normal, 95% gacha — e'tibor. */
-const upColor = (p) => p >= 99 ? "var(--ok)" : p >= 95 ? "var(--warn)" : "var(--fail)";
 
 async function loadGroups() {
   try {
     const r = await api(`/api/v1/admin/uptime?hours=${S.gHours}&group_by=${S.gBy}`);
     S.groups = r.groups || [];
-  } catch (e) { S.groups = []; toast("Guruhlar olinmadi", e.message, "bad"); }
+  } catch (e) { S.groups = []; toast("Reyting olinmadi", e.message, "bad"); }
   drawGroups();
 }
 
 function drawGroups() {
-  if (S.page !== "groups") return;
+  if (S.page !== "topo") return;
   const gs = S.groups;
   if (gs === null) { $("#gsum").textContent = "yuklanmoqda…"; return; }
   const outages = gs.reduce((a, g) => a + g.outages, 0);
-  $("#gsum").textContent =
-    `${gs.length} ta guruh · ${outages} uzilish · ${HOURS_LBL[S.gHours]}`;
-  $("#ng").textContent = outages || "✓";
-  $("#ng").className = "ct" + (outages ? " alert" : "");
+  $("#gsum").textContent = `${gs.length} ta guruh · ${outages} uzilish · ${HOURS_LBL[S.gHours]}`;
 
   $("#gtb").innerHTML = gs.map((g) => {
     const n = Math.max(1, g.cameras);
@@ -1250,16 +1672,16 @@ function drawGroups() {
     // Hududsiz kameralar alohida guruh — ular xaritada ham, hisobotda
     // ham yo'qoladi, shuning uchun qizil bilan belgilanadi.
     const orphan = g.key === "belgilanmagan";
-    return `<tr data-k="${esc(g.key)}">
-      <td class="name" style="color:${orphan ? "var(--fail)" : "var(--text)"}">${esc(g.key)}</td>
+    return `<tr class="click" data-k="${esc(g.key)}">
+      <td class="name" style="color:${orphan ? "var(--red)" : "var(--ink)"}">${esc(g.key)}</td>
       <td class="meta">${g.cameras}</td>
       <td><div class="bar">
-        <i style="width:${w(g.online)};background:var(--ok)"></i>
-        <i style="width:${w(g.offline)};background:var(--fail)"></i>
-        <i style="width:${w(g.unknown + g.disabled)};background:var(--idle)"></i>
+        <i style="width:${w(g.online)};background:var(--d-on)"></i>
+        <i style="width:${w(g.offline)};background:var(--d-off)"></i>
+        <i style="width:${w(g.unknown + g.disabled)};background:var(--d-unk)"></i>
       </div></td>
       <td class="meta" style="color:${upColor(g.uptime_pct)}">${g.uptime_pct}%</td>
-      <td class="meta" style="color:${g.outages ? "var(--warn)" : "var(--faint)"}">${g.outages || "—"}</td>
+      <td class="meta" style="color:${g.outages ? "var(--amber)" : "var(--mute)"}">${g.outages || "—"}</td>
       <td class="meta">${durHM(g.offline_seconds)}</td>
     </tr>`;
   }).join("");
@@ -1271,37 +1693,68 @@ function drawGroups() {
       const key = tr.dataset.k;
       $("#csearch").value = key === "belgilanmagan" ? "" : key;
       S.filt = "prob";
-      $$("#cfilt .chip").forEach((b) => b.classList.toggle("sel", b.dataset.f === "prob"));
+      $$("#cfilt .pill").forEach((b) => b.classList.toggle("sel", b.dataset.f === "prob"));
       go("cams");
-      drawCams();
     };
   });
   $("#gempty").innerHTML = gs.length ? "" :
-    `<div class="empty">Bu davrda ma'lumot yo'q.<br>Hodisalar 30 kun saqlanadi.</div>`;
+    `<div class="empty" style="margin-top:12px">Bu davrda ma'lumot yo'q.<br>Hodisalar 30 kun saqlanadi.</div>`;
 }
+
+$$("#gby .pill").forEach((b) => (b.onclick = () => {
+  S.gBy = b.dataset.g;
+  $$("#gby .pill").forEach((x) => x.classList.toggle("sel", x === b));
+  S.groups = null; drawGroups(); loadGroups();
+}));
+$$("#ghours .pill").forEach((b) => (b.onclick = () => {
+  S.gHours = +b.dataset.h;
+  $$("#ghours .pill").forEach((x) => x.classList.toggle("sel", x === b));
+  S.groups = null; drawGroups(); loadGroups();
+}));
+
+/* ═════════ uzilishlar ═════════
+   Sutka bo'ylab taqsimot, sabab kesimi (hodisa turlari bo'yicha) va
+   eng ishonchsiz kameralar. Sabab kesimi hodisalar jurnalidan
+   hisoblanadi: offline — registrator/kamera javob bermadi, stalled —
+   oqim muzladi, mediamtx — tugun qayta ko'tarildi.                   */
+const CAUSE = [
+  ["offline", "Registrator / kamera javob bermadi (offline)", "var(--d-off)"],
+  ["stalled", "Oqim muzladi (stalled · bayt yo'q)", "var(--d-stall)"],
+  ["mediamtx", "MediaMTX qayta ko'tarildi", "var(--d-unk)"],
+];
 
 async function loadStat() {
   // Zona mijozdan boradi: hodisalar bazada UTC'da, "cho'qqi 08:00 da"
   // degan xulosa esa faqat mahalliy vaqtda ma'noga ega.
   const tz = -new Date().getTimezoneOffset();
   try {
-    const [hist, worst] = await Promise.all([
+    const [hist, worst, ev] = await Promise.all([
       api(`/api/v1/admin/outages/hourly?hours=${S.tHours}&tz_offset_minutes=${tz}`),
-      api(`/api/v1/admin/uptime?hours=${S.tHours}&limit=25`),
+      api(`/api/v1/admin/uptime?hours=${S.tHours}&limit=8`),
+      api("/api/v1/admin/events?limit=500"),
     ]);
     S.stat = hist;
     S.worst = worst.cameras || [];
-  } catch (e) { S.stat = null; toast("Tahlil olinmadi", e.message, "bad"); }
+    const since = Date.now() - S.tHours * 3600 * 1000;
+    const evs = (ev.events || []);
+    const inWin = evs.filter((e) => utc(e.ts).getTime() >= since);
+    const counts = {};
+    inWin.forEach((e) => { counts[e.kind] = (counts[e.kind] || 0) + 1; });
+    S.causes = {counts, n: inWin.length,
+                // 500 ta yozuv davrga sig'magan bo'lsa — kesim to'liq emas.
+                truncated: evs.length >= 500 && inWin.length === evs.length};
+  } catch (e) { S.stat = null; toast("Uzilishlar olinmadi", e.message, "bad"); }
   drawStat();
+  drawNav();
 }
 
 function drawStat() {
-  if (S.page !== "stat") return;
+  if (S.page !== "out") return;
   const st = S.stat;
-  if (!st) { $("#tsum").textContent = "ma'lumot yo'q"; return; }
-  $("#tsum").textContent = `${st.total} uzilish · ${HOURS_LBL[S.tHours]}`;
-  $("#nt").textContent = st.total || "✓";
-  $("#nt").className = "ct" + (st.total ? " alert" : "");
+  $("#tsum").textContent = st
+    ? `${st.total} uzilish · ${HOURS_LBL[S.tHours]} · hodisalar jadvalidan` : "ma'lumot yo'q";
+  if (!st) { $("#thist").innerHTML = ""; return; }
+  $("#ttotal").textContent = `${st.total} uzilish · ${S.cams.length} kamera`;
 
   const max = Math.max(1, ...st.hourly);
   const peak = st.peak || {from_hour: 0, to_hour: 0, outages: 0};
@@ -1311,50 +1764,54 @@ function drawStat() {
     return (h - peak.from_hour + 24) % 24 < span;
   };
   $("#thist").innerHTML = st.hourly.map((v, h) => `<i class="hbar"
-    style="height:${Math.max(2, Math.round(v / max * 100))}%;
-           background:${inPeak(h) ? "var(--fail)" : v > max * 0.6 ? "var(--warn)" : "var(--signal)"}"
+    style="height:${v ? Math.max(3, Math.round(v / max * 100)) : 2}%;
+           background:${!v ? "var(--line-2)" : v === max ? "var(--d-stall)" : inPeak(h) && peak.outages ? "#E8C46A" : "#E0DACC"}"
     title="${pad2(h)}:00 — ${v} uzilish"></i>`).join("");
-  $("#thistx").innerHTML = st.hourly.map((_, h) =>
-    `<span>${h % 3 === 0 ? pad2(h) : ""}</span>`).join("");
   $("#tpeak").textContent = peak.outages
-    ? `cho'qqi ${pad2(peak.from_hour)}:00–${pad2(peak.to_hour)}:00 · ${peak.outages} uzilish`
+    ? `eng band oyna ${pad2(peak.from_hour)}:00–${pad2(peak.to_hour)}:00 · ${peak.outages} uzilish`
     : "cho'qqi yo'q";
 
+  const cz = S.causes;
+  if (cz && cz.n) {
+    const other = cz.n - CAUSE.reduce((a, [k]) => a + (cz.counts[k] || 0), 0);
+    const rows = CAUSE.map(([k, l, col]) => [l, cz.counts[k] || 0, col]);
+    if (other > 0) rows.push(["Boshqa (online/resumed va h.k.)", other, "var(--line)"]);
+    $("#tcausen").textContent = `${cz.n} hodisa` + (cz.truncated ? " · oxirgi 500 tasi" : "");
+    $("#tcauses").innerHTML = rows.map(([l, n, col]) => `<div class="cause">
+      <div class="ln"><b>${esc(l)}</b><span>${n} · ${Math.round(n / cz.n * 100)}%</span></div>
+      <div class="bar-h"><i style="width:${Math.round(n / cz.n * 100)}%;background:${col}"></i></div></div>`).join("");
+  } else {
+    $("#tcausen").textContent = "";
+    $("#tcauses").innerHTML = `<div class="meta" style="padding:8px 0">Bu davrda hodisa yo'q.</div>`;
+  }
+
   const rows = S.worst || [];
-  $("#ttb").innerHTML = rows.map((c) => `<tr data-id="${c.id}">
-    <td class="name">${esc(c.name)}</td>
-    <td class="meta">${esc(c.region || "—")}</td>
-    <td><span class="st"><i class="dot s-${c.state}"></i>${LBL[c.state] || c.state}</span></td>
-    <td class="meta" style="color:${upColor(c.uptime_pct)}">${c.uptime_pct}%</td>
-    <td class="meta" style="color:${c.outages ? "var(--warn)" : "var(--faint)"}">${c.outages || "—"}</td>
-    <td class="meta">${durHM(c.offline_seconds)}</td>
-    <td class="meta">${esc((c.last_offline_at || "").slice(5, 16).replace("T", " ") || "—")}</td>
-  </tr>`).join("");
-  $$("#ttb tr").forEach((tr) => (tr.onclick = () => openDiag(+tr.dataset.id)));
+  $("#tworst").innerHTML = rows.map((c) => `<button class="worst" data-id="${c.id}">
+    <i class="dot" style="background:${DOT[c.state] || DOT.unknown}"></i>
+    <span class="cnt"><b>${esc(c.name)}</b>
+      <span class="m">${c.outages} uzilish · ${esc(c.region || "hududsiz")}${
+        c.last_offline_at ? " · oxirgi " + esc(localDM(c.last_offline_at) + " " + localHM(c.last_offline_at)) : ""}</span></span>
+    <span class="rt"><span style="color:${upColor(c.uptime_pct)};font-size:12px">${c.uptime_pct}%</span>
+      <span>o'chiq ${durHM(c.offline_seconds)}</span></span>
+  </button>`).join("");
+  $$("#tworst .worst").forEach((b) => (b.onclick = () => { S.sel = +b.dataset.id; go("verdict"); }));
   $("#tempty").innerHTML = rows.length ? "" :
-    `<div class="empty">Bu davrda uzilish qayd etilmagan.</div>`;
+    `<div class="empty" style="margin-top:8px">Bu davrda uzilish qayd etilmagan.</div>`;
 }
 
-const pad2 = (n) => (n < 10 ? "0" : "") + n;
-
-$$("#gby .chip").forEach((b) => (b.onclick = () => {
-  S.gBy = b.dataset.g;
-  $$("#gby .chip").forEach((x) => x.classList.toggle("sel", x === b));
-  S.groups = null; drawGroups(); loadGroups();
-}));
-$$("#ghours .chip").forEach((b) => (b.onclick = () => {
-  S.gHours = +b.dataset.h;
-  $$("#ghours .chip").forEach((x) => x.classList.toggle("sel", x === b));
-  S.groups = null; drawGroups(); loadGroups();
-}));
-$$("#thours .chip").forEach((b) => (b.onclick = () => {
+$$("#thours .pill").forEach((b) => (b.onclick = () => {
   S.tHours = +b.dataset.h;
-  $$("#thours .chip").forEach((x) => x.classList.toggle("sel", x === b));
+  $$("#thours .pill").forEach((x) => x.classList.toggle("sel", x === b));
   loadStat();
 }));
 
-/* ═════════ devor ═════════ */
-let wallPlayers = [];
+/* ═════════ devor ═════════
+   Video BOSILGANDA ochiladi — devor ochilishi bilan hamma oqim birdan
+   tortilmasin (kamera va tarmoqqa ortiqcha yuk bo'lardi). "Hammasini
+   jonli ochish" — ataylab, bir bosishda.                              */
+/* Pleyerlar kamera id bo'yicha: devor qayta chizilganda qaysi katak
+   qaysi pleyerga tegishli ekani shu yerdan topiladi. */
+const wallPlayers = new Map();
 $$("[data-w]").forEach((b) => (b.onclick = () => {
   S.wallN = +b.dataset.w;
   $$("[data-w]").forEach((x) => x.classList.toggle("sel", x === b));
@@ -1362,6 +1819,13 @@ $$("[data-w]").forEach((b) => (b.onclick = () => {
 }));
 $("#wprob").onclick = () => { S.wallMode = S.wallMode === "prob" ? "all" : "prob"; drawWall(true); };
 $("#wsel").onclick = () => { S.wallMode = S.wallMode === "sel" ? "all" : "sel"; drawWall(true); };
+$("#wclear").onclick = () => { S.picked.clear(); if (S.wallMode === "sel") S.wallMode = "all"; drawWall(true); drawNav(); };
+$("#wlive").onclick = () => {
+  const closed = $$("#wall .tile:not(.playing)").filter((t) => t.querySelector("video"));
+  if (closed.length) closed.forEach((t) => t.click());
+  else $$("#wall .tile.playing").forEach((t) => t.click());
+  updateWallFoot();
+};
 
 function wallCams() {
   let l = S.cams.filter((c) => c.enabled);
@@ -1371,53 +1835,95 @@ function wallCams() {
 }
 function stopWall() {
   wallPlayers.forEach((p) => p.stop());
-  wallPlayers = [];
+  wallPlayers.clear();
 }
+/* Katak turi: video bo'ladimi yoki "ulanish yo'q" yozuvi. Tur o'zgarsa
+   katak qayta quriladi, o'zgarmasa pleyer tegilmaydi. */
+const tileKind = (c) => c.state === "offline" || c.state === "unknown" ? "off" : "video";
+function tileHtml(c) {
+  return `${tileKind(c) === "off"
+      ? `<div class="tile-off ${c.state === "unknown" ? "idle" : ""}"><span>${
+          c.state === "offline" ? "ulanish yo'q" : "tekshirilmagan"}</span></div>`
+      : `<video muted playsinline ${c.snapshot_at ? `poster="/api/v1/cameras/${c.id}/snapshot?stale=1"` : ""}></video>
+         <div class="tile-msg"></div><div class="tile-play">▶</div>`}
+    <div class="tile-h"><i class="dot" style="background:${DOT[c.state]}"></i>${esc(c.name)}</div>
+    ${S.wallMode === "sel" ? `<button class="tile-x" title="Devordan olib tashlash">✕</button>` : ""}
+    <div class="tile-f"><span>${esc(c.region || "")}</span><span>${esc(c.sub_codec || c.codec || "—")}</span>
+      <span class="r">—</span></div>`;
+}
+function bindTile(t, c) {
+  const id = c.id;
+  t.querySelector(".tile-h").onclick = (e) => { e.stopPropagation(); openDiag(id); };
+  const x = t.querySelector(".tile-x");
+  if (x) x.onclick = (e) => { e.stopPropagation(); S.picked.delete(id); drawWall(true); drawNav(); };
+  const video = t.querySelector("video");
+  if (!video) { t.onclick = () => openDiag(id); return; }
+  // Video BOSILGANDA ochiladi — devor ochilishi bilan hamma oqim birdan
+  // tortilmasin (kamera va tarmoqqa ortiqcha yuk bo'lardi). "Hammasini
+  // jonli ochish" tugmasi — ataylab, bir bosishda.
+  t.onclick = () => {
+    const overlay = t.querySelector(".tile-play");
+    let player = wallPlayers.get(id);
+    if (!player) {
+      player = createPlayer(video, t.querySelector(".tile-msg"));
+      wallPlayers.set(id, player);
+    }
+    if (t.classList.contains("playing")) {
+      player.stop();
+      t.classList.remove("playing");
+      if (overlay) overlay.style.display = "";
+    } else {
+      player.open(S.byId.get(id), "sub");
+      t.classList.add("playing");
+      if (overlay) overlay.style.display = "none";
+    }
+    updateWallFoot();
+  };
+}
+
+/* restart=true — devor butunlay qayta quriladi (setka yoki rejim
+   o'zgardi). restart=false — fon yangilanishi (loadCams har 15 s, SSE
+   hodisasi): kameralar to'plami o'sha bo'lsa kataklar va ularning
+   pleyerlari SAQLANADI, faqat holat nuqtasi yangilanadi. Ilgari bu
+   farq yo'q edi va har 15 soniyada hamma pleyer to'xtatilib qayta
+   yaratilardi — tomoshabin uchun "bir necha soniya ko'rsatib uzilib
+   qolish" aynan shu edi. */
 function drawWall(restart) {
   if (S.page !== "wall") return;
   $("#wprob").classList.toggle("sel", S.wallMode === "prob");
   $("#wsel").classList.toggle("sel", S.wallMode === "sel");
-  stopWall();
-  const l = wallCams(), cols = Math.ceil(Math.sqrt(Math.min(S.wallN, Math.max(l.length, 1))));
-  $("#wall").style.gridTemplateColumns = `repeat(${cols},1fr)`;
-  $("#wall").innerHTML = l.map((c) => `<div class="tile" data-id="${c.id}">
-    ${c.state === "offline" || c.state === "unknown"
-      ? `<div class="tile-off ${c.state === "unknown" ? "idle" : ""}"><span>${
-          c.state === "offline" ? "O'CHGAN" : "TEKSHIRILMAGAN"}</span></div>`
-      : `<video muted playsinline poster="/api/v1/cameras/${c.id}/snapshot"></video>
-         <div class="tile-msg"></div><div class="tile-play">▶</div>`}
-    <div class="tile-h"><i class="dot s-${c.state}"></i>${esc(c.name)}</div>
-    <div class="tile-f"><span>${esc(c.region)}</span><span>${esc(c.sub_codec || c.codec || "—")}</span>
-      <span class="r">—</span></div></div>`).join("");
-  // Video BOSILGANDA ochiladi — devor ochilishi bilan hamma oqim birdan
-  // tortilmasin (kamera va tarmoqqa ortiqcha yuk bo'lardi).
-  $$("#wall .tile").forEach((t) => {
-    const id = +t.dataset.id;
-    t.querySelector(".tile-h").onclick = (e) => { e.stopPropagation(); openDiag(id); };
-    const video = t.querySelector("video");
-    if (!video) { t.onclick = () => openDiag(id); return; }
-    let player = null;
-    t.onclick = () => {
-      const overlay = t.querySelector(".tile-play");
-      if (!player) {
-        player = createPlayer(video, t.querySelector(".tile-msg"));
-        player.camId = id;
-        wallPlayers.push(player);
-      }
-      if (t.classList.contains("playing")) {
-        player.stop();
-        t.classList.remove("playing");
-        if (overlay) overlay.style.display = "";
+  const l = wallCams();
+  const cur = $$("#wall .tile");
+  const same = !restart && cur.length === l.length &&
+    cur.every((t, i) => +t.dataset.id === l[i].id);
+  if (same) {
+    cur.forEach((t) => {
+      const c = S.byId.get(+t.dataset.id);
+      if (t.dataset.kind !== tileKind(c)) {
+        // offline bo'ldi yoki qaytdi — faqat shu katak qayta quriladi
+        const p = wallPlayers.get(c.id);
+        if (p) { p.stop(); wallPlayers.delete(c.id); }
+        t.className = "tile";
+        t.dataset.kind = tileKind(c);
+        t.innerHTML = tileHtml(c);
+        bindTile(t, c);
       } else {
-        player.open(S.byId.get(id), "sub");
-        t.classList.add("playing");
-        if (overlay) overlay.style.display = "none";
+        t.querySelector(".tile-h .dot").style.background = DOT[c.state];
       }
-    };
-  });
+    });
+  } else {
+    stopWall();
+    const cols = Math.ceil(Math.sqrt(Math.min(S.wallN, Math.max(l.length, 1))));
+    $("#wall").style.gridTemplateColumns = `repeat(${cols},minmax(0,1fr))`;
+    $("#wall").innerHTML = l.map((c) =>
+      `<div class="tile" data-id="${c.id}" data-kind="${tileKind(c)}">${tileHtml(c)}</div>`).join("");
+    $$("#wall .tile").forEach((t) => bindTile(t, S.byId.get(+t.dataset.id)));
+  }
   updateWallFoot();
-  $("#wempty").innerHTML = l.length ? "" : `<div class="empty">
-    Ko'rsatiladigan kamera yo'q.<br>Filtrni o'chiring yoki jadvaldan tanlang.</div>`;
+  $("#wempty").innerHTML = l.length ? "" : `<span class="wall-empty">${
+    S.wallMode === "sel"
+      ? "Devor bo'sh — Kameralar jadvalidagi katakchani belgilang yoki kamera sahifasida «Devorga qo'shish» ni bosing."
+      : S.wallMode === "prob" ? "Muammoli kamera yo'q — hammasi ishlayapti." : "Ko'rsatiladigan kamera yo'q."}</span>`;
 }
 function updateWallFoot() {
   let total = 0;
@@ -1428,82 +1934,21 @@ function updateWallFoot() {
     total += mb;
     t.querySelector(".tile-f .r").textContent = mb ? mb.toFixed(1) + " Mb/s" : "—";
   });
+  const playing = $$("#wall .tile.playing").length;
+  $("#wlive").textContent = playing ? "Oqimlarni yopish" : "Hammasini jonli ochish";
   const eg = S.health ? ` · egress ${Math.round(S.health.egress_mbps)}/${
     S.health.egress_capacity_mbps} Mbit/s` : "";
-  $("#wsum").textContent = `${$$("#wall .tile").length} katak · kirish ${
-    total.toFixed(1)} Mbit/s · sub oqim${eg}`;
+  const mode = S.wallMode === "sel" ? `${S.picked.size} kamera tanlangan` : S.wallMode === "prob" ? "faqat muammolilar" : "hammasi";
+  $("#wsum").textContent = `${mode} · ${$$("#wall .tile").length} katak · ${playing} jonli · sub oqim · kirish ${
+    total.toFixed(1)} Mbit/s${eg}`;
 }
 
-/* ═════════ diagnostika ═════════ */
-const ICONS = {
-  cam: '<path d="M2 5h11v9H2z"/><path d="M13 8l4-2v7l-4-2"/>',
-  rtsp: '<path d="M3 10h3l2-5 3 9 2-4h3"/>',
-  mtx: '<path d="M3 4h13v11H3z"/><path d="M3 8h13"/><circle cx="6" cy="6" r=".7"/>',
-  key: '<circle cx="7" cy="10" r="3.5"/><path d="M10 9l6-3M14 7l1 2M16 6l1 2"/>',
-  br: '<rect x="2" y="4" width="15" height="11" rx="1.5"/><path d="M2 8h15"/>',
-};
-
-function stages(c) {
-  const rt = camRt(c), a = snapAge(c);
-  const F = (t, v, s, i) => ({t, v, s, i});
-  if (c.state === "unknown") return [
-    F("Kamera", "tekshirilmadi", "idle", "cam"), F("RTSP", "—", "idle", "rtsp"),
-    F("MediaMTX", "yo'l yo'q", "idle", "mtx"), F("Chipta", "—", "idle", "key"),
-    F("Surat", "—", "idle", "br")];
-  if (c.state === "offline" || c.state === "disabled") return [
-    F("Kamera", c.state === "disabled" ? "o'chirilgan" : "javob yo'q", "fail", "cam"),
-    F("RTSP", "ulanish yo'q", "fail", "rtsp"),
-    F("MediaMTX", rt.ready ? "yo'l qotgan" : "yo'l yo'q", "idle", "mtx"),
-    F("Chipta", "berilmaydi", "idle", "key"),
-    F("Surat", "404 · to'silgan", "idle", "br")];
-  if (c.state === "stalled") return [
-    F("Kamera", c.ip, "ok", "cam"), F("RTSP", "ulangan", "ok", "rtsp"),
-    F("MediaMTX", "bayt kelmayapti", "warn", "mtx"),
-    F("Chipta", rt.readers + " tomoshabin", "ok", "key"),
-    F("Surat", a >= 0 ? age(a) + " oldin" : "yo'q", a >= 0 && a < 120 ? "ok" : "warn", "br")];
-  const snapBad = a < 0 || a > 600;
-  return [
-    F("Kamera", c.ip || "tayyor oqim", "ok", "cam"),
-    F("RTSP", c.codec ? c.codec + (c.resolution ? " · " + c.resolution : "") : "ulangan", "ok", "rtsp"),
-    F("MediaMTX", rt.ready ? (rt.inMbps ? rt.inMbps.toFixed(1) + " Mb/s" : "tayyor")
-                           : "talab kutilmoqda", rt.ready ? "ok" : "idle", "mtx"),
-    F("Chipta", rt.readers + " tomoshabin", "ok", "key"),
-    F("Surat", a >= 0 ? age(a) + " oldin" : "hali yo'q", snapBad ? "warn" : "ok", "br")];
-}
-
-function verdict(c, probe) {
-  if (probe) {
-    if (probe.ok) return ["ok", "✓", "Probe muvaffaqiyatli", esc(probe.message)];
-    return ["bad", "!", "Probe to'xtadi: " + esc(probe.stage), esc(probe.message)];
-  }
-  const rt = camRt(c), a = snapAge(c);
-  if (c.state === "unknown") return ["mid", "?", "Hali tekshirilmagan",
-    "Kamera qo'shilgan, lekin birinchi tekshiruv o'tmagan. Bir daqiqada holat aniqlanadi — " +
-    "yoki \"Qayta tekshirish\" tugmasini bosing."];
-  if (c.state === "disabled") return ["mid", "—", "Admin o'chirib qo'ygan",
-    "Kamera ataylab o'chirilgan — oqim ham, surat ham berilmaydi."];
-  if (c.state === "offline") return ["bad", "!", "Kamera tarmoqdan javob bermayapti",
-    "TCP tekshiruv o'tmadi. Kabel/kommutatorni ko'ring; sabab aniq bo'lmasa " +
-    "\"Qayta tekshirish\" bosqichma-bosqich aytadi (tarmoq / parol / yo'l). " +
-    "Surat ataylab to'silgan — eski kadr jonli bo'lib ko'rinmasin."];
-  if (c.state === "stalled") return ["mid", "~", "Yo'l tayyor, lekin bayt kelmayapti",
-    "MediaMTX ulanishni ushlab turibdi, ma'lumot oqimi to'xtagan. Odatda kamera qayta " +
-    "yuklanayotganda yoki tarmoq uzilganda bo'ladi — reconciler o'zi tiklaydi, " +
-    "surat esa HTTP orqali kelishi mumkin."];
-  if (a >= 0 && a > 600 && c.ip) return ["mid", "~", "Video ishlayapti, surat eskirgan",
-    "Oqim normal, lekin oxirgi surat " + age(a) + " oldin olingan — snapshot manbai " +
-    "javob bermayotgan bo'lishi mumkin. \"Suratni yangilash\"ni sinang."];
-  return ["ok", "✓", "Zanjir to'liq",
-    "Kameradan iste'molchigacha uzilish ko'rinmaydi." +
-    (rt.warm ? " Yo'l issiq to'plamda — qayta ochilish bir soniyagacha." : "")];
-}
-
+/* ═════════ kamera sahifasi ═════════ */
 let probeResult = null;
 function openDiag(id) {
   const c = S.byId.get(id);
   if (!c) return;
-  if (S.curId !== id) { probeResult = null; closeLive(); }
-  if (S.curId !== id) S.diagDay = 0;   // boshqa kamera — bugundan boshlaymiz
+  if (S.curId !== id) { probeResult = null; closeLive(); S.diagDay = 0; S.hist = null; }
   S.curId = id;
   go("diag");
   drawDiag();
@@ -1511,212 +1956,234 @@ function openDiag(id) {
   warmStream(c);          // play bosilguncha oqim tayyor bo'lib tursin
 }
 
-/* ═════════ diag: jonli ko'rish (kerak paytda, bir bosishda) ═════════ */
+/* ── jonli ko'rish: panel doim ko'rinadi, video bir bosishda ── */
 let diagPlayer = null, diagQ = "";
+function canLive(c) { return c && c.state !== "offline" && c.state !== "disabled" && c.enabled !== false; }
 function openLive(c) {
-  $("#dlive").style.display = "";
-  const video = $("#dvideo");
+  if (!canLive(c)) return;
+  const box = $("#dlive"), video = $("#dvideo");
+  box.classList.add("playing");
   // Surat hech qachon olinmagan bo'lsa so'ramaymiz ham: endpoint
-  // ataylab 404 qaytaradi (offline kamerada eski kadr jonli bo'lib
-  // ko'rinmasin) va har so'rov konsolda xato bo'lib chiqadi.
+  // ataylab 404 qaytaradi va har so'rov konsolda xato bo'lib chiqadi.
   if (c.snapshot_at) video.poster = `/api/v1/cameras/${c.id}/snapshot`;
   else video.removeAttribute("poster");
   if (!diagPlayer) diagPlayer = createPlayer(video, $("#dlivemsg"));
   diagPlayer.open(c, diagQ);
+  drawLiveBadge(c);
 }
 function closeLive() {
   if (diagPlayer) diagPlayer.stop();
   const box = $("#dlive");
-  if (box) { box.style.display = "none"; $("#dlivemsg").textContent = ""; }
+  if (box) { box.classList.remove("playing"); $("#dlivemsg").textContent = ""; }
+  const c = S.byId.get(S.curId);
+  if (c && S.page === "diag") drawLiveBadge(c);
 }
 function setLiveQ(q) {
   diagQ = q;
   $("#dlq").classList.toggle("sel", !q);
   $("#dlqsub").classList.toggle("sel", q === "sub");
   const c = S.byId.get(S.curId);
-  if (c && $("#dlive").style.display !== "none") openLive(c);
+  if (c && $("#dlive").classList.contains("playing")) openLive(c);
 }
-$("#dlstop").onclick = closeLive;
-$("#dlq").onclick = () => setLiveQ("");
-$("#dlqsub").onclick = () => setLiveQ("sub");
+$("#dlq").onclick = (e) => { e.stopPropagation(); setLiveQ(""); };
+$("#dlqsub").onclick = (e) => { e.stopPropagation(); setLiveQ("sub"); };
+$("#dlive").onclick = () => {
+  const c = S.byId.get(S.curId);
+  if (!c) return;
+  if ($("#dlive").classList.contains("playing")) closeLive(); else openLive(c);
+};
+function drawLiveBadge(c) {
+  const box = $("#dlive"), playing = box.classList.contains("playing");
+  const video = $("#dvideo");
+  if (!playing) {
+    if (c.snapshot_at && c.state !== "offline") video.poster = `/api/v1/cameras/${c.id}/snapshot?stale=1`;
+    else video.removeAttribute("poster");
+    $("#dlivemsg").textContent = c.state === "online"
+      ? (c.snapshot_at ? "surat · bosib jonli oqimni oching" : "surat hali yo'q · bosib jonli oqimni oching")
+      : c.state === "offline" ? `ulanish yo'q${sinceSec(c.last_seen) >= 0 ? " — oxirgi javob " + age(sinceSec(c.last_seen)) + " oldin" : ""}`
+      : c.state === "stalled" ? "kadr kelmayapti — oqim muzlagan · bosib sinab ko'ring"
+      : c.state === "disabled" || c.enabled === false ? "o'chirib qo'yilgan" : "hali tekshirilmagan";
+    $("#dlivemsg").style.color = c.state === "online" ? "var(--dark-ink)" : DOT[c.state] || "var(--dark-ink)";
+  } else $("#dlivemsg").style.color = "#fff";
+  $("#dlivebadge").innerHTML = canLive(c)
+    ? (playing ? `<i></i>JONLI · yopish uchun bosing` : `▶ Jonli ochish`) : "";
+  $("#dlivebadge").style.display = canLive(c) ? "" : "none";
+}
+
 function drawDiag() {
   const c = S.byId.get(S.curId);
   if (!c) return;
-  $("#chainwrap").style.display = "";
+  const k = stateKind(c.state);
+  $("#ddot").style.background = DOT[c.state];
   $("#dname").textContent = c.name;
-  $("#dsub").innerHTML = `<span class="st"><i class="dot s-${c.state}"></i>${LBL[c.state]}</span>
-    &nbsp;·&nbsp; ${esc(c.external_id || "tashqi id yo'q")} &nbsp;·&nbsp; ${esc(c.region)}
-    &nbsp;·&nbsp; ${c.node_id === 1 ? "lokal tugun" : "tugun #" + c.node_id}`;
-  const canLive = c.state !== "offline" && c.state !== "disabled";
+  const stp = $("#dstate");
+  stp.textContent = LBL[c.state] || c.state;
+  stp.className = "stp tint-" + k;
+  stp.style.color = KINK[k];
+  $("#dsub").textContent = [c.ip ? `${c.ip}:${c.port || 554}` : "tayyor oqim", c.codec || null,
+    c.region || "hududsiz", nodeName(c), c.external_id ? "id " + c.external_id : null,
+    ipGroup(c).length > 1 ? `registratorda ${ipGroup(c).length} kanal` : null].filter(Boolean).join(" · ");
   $("#dacts").innerHTML = `
-    ${canLive ? '<button class="btn" data-a="live">▶ Jonli ko\'rish</button>' : ""}
+    <button class="btn dark" data-a="verdict">Xato qayerda? →</button>
+    ${canLive(c) ? '<button class="btn ghost" data-a="live">▶ Jonli</button>' : ""}
     <button class="btn ghost" data-a="probe">Qayta tekshirish</button>
-    <button class="btn ghost" data-a="kf">Keyframe so'rash</button>
+    <button class="btn ghost" data-a="kf">Keyframe</button>
     <button class="btn ghost" data-a="snap">Suratni yangilash</button>
     <button class="btn ghost" data-a="stale">Oxirgi kadr</button>
-    <button class="btn ghost" data-a="wall">Devorda ochish</button>
+    <button class="btn ghost" data-a="wall">Devorga qo'shish</button>
     <button class="btn ghost" data-a="toggle">${c.enabled ? "O'chirib qo'yish" : "Yoqish"}</button>
-    <button class="btn ghost danger" data-a="del">O'chirish</button>`;
+    <button class="btn danger" data-a="del">O'chirish</button>`;
   $$("#dacts [data-a]").forEach((b) => (b.onclick = () => act(b.dataset.a, c)));
-
-  const st = stages(c);
-  $("#chain").innerHTML = st.map((s, i) => {
-    const link = i < st.length - 1 ? `<div class="link ${
-      s.s === "ok" && st[i + 1].s !== "idle" ? "live" : s.s === "fail" ? "cut" : ""}"></div>` : "";
-    return `<div class="stage ${s.s}"><div class="node">
-      <svg viewBox="0 0 19 19">${ICONS[s.i]}</svg></div>
-      <div class="stage-t">${s.t}</div><div class="stage-v">${esc(s.v)}</div></div>${link}`;
-  }).join("");
-  const [k, ic, ttl, txt] = verdict(c, probeResult);
-  $("#verdict").className = "verdict " + k;
-  $("#verdict").innerHTML =
-    `<div class="verdict-i">${ic}</div><div><b>${esc(ttl)}</b><p>${txt}</p></div>`;
+  drawLiveBadge(c);
+  drawSince();
+  drawDiagHistory();
   drawDiagCards();
   loadHistory(c);
 }
 
-/* Ish vaqti statistikasi — 3 soniyalik poll'da qayta so'ralmasin deb
-   keshda turadi (60 s). */
-const fmtDur = (s) => s < 60 ? Math.round(s) + " s"
-  : s < 3600 ? Math.round(s / 60) + " daqiqa"
-  : s < 86400 ? (s / 3600).toFixed(1) + " soat" : (s / 86400).toFixed(1) + " kun";
+/* "Hozir" kartasi: uzilgan bo'lsa qachondan beri, ishlayotgan bo'lsa
+   oxirgi kadr va tomoshabin. Runtime bilan 3 soniyada yangilanadi. */
+function drawSince() {
+  const c = S.byId.get(S.curId);
+  if (!c || S.page !== "diag") return;
+  const rt = camRt(c), a = snapAge(c);
+  let kind, title, label, note;
+  if (c.state === "offline") {
+    const s = sinceSec(c.last_seen);
+    kind = "bad"; title = "hozir uzilgan";
+    label = s >= 0 ? age(s) + " dan beri" : "uzilgan";
+    const nvr = nvrInfo(c);
+    note = (s >= 0 ? `oxirgi javob ${localDM(c.last_seen)} ${localHM(c.last_seen)} · ` : "") +
+      (nvr.allDown ? "registrator javob bermayapti" : "TCP 554 javob yo'q");
+  } else if (c.state === "stalled") {
+    kind = "warn"; title = "hozir muzlagan";
+    label = a >= 0 ? age(a) + " dan beri" : "kadr yo'q";
+    note = `ulanish bor, bayt kelmayapti · kirish ${rt.inMbps.toFixed(1)} Mbit/s`;
+  } else if (c.state === "unknown") {
+    kind = "idle"; title = "hozir"; label = "tekshirilmagan"; note = "birinchi tekshiruv navbatda · health 60 s";
+  } else if (c.state === "disabled" || c.enabled === false) {
+    kind = "idle"; title = "hozir"; label = "o'chirilgan"; note = "admin o'chirib qo'ygan";
+  } else {
+    kind = "ok"; title = "hozir"; label = "efirda";
+    note = `oxirgi kadr ${a >= 0 ? age(a) + " oldin" : "yo'q"} · tomoshabin ${rt.readers}` +
+      (rt.ready ? ` · ${rt.inMbps.toFixed(1)} Mbit/s` : " · yo'l kutmoqda");
+  }
+  $("#dsince").className = "since tint-" + kind;
+  $("#dsince").innerHTML = `<div class="l"><span class="t" style="color:${KINK[kind]}">${title}</span>
+    <b style="color:${KINK[kind]}">${esc(label)}</b></div><span class="n">${esc(note)}</span>`;
+  // Tomoshabin KPI'si runtime bilan yangilanadi — qolganlari history'dan.
+  const kv = $("#dkpi .k-live");
+  if (kv) kv.textContent = rt.readers;
+}
 
 /* ═════════ kamera tahlili: uzilish tarixi ═════════
 
    Bitta so'rov — /admin/cameras/{id}/history — sahifadagi hamma narsani
-   beradi: KPI, soatlik profil, 30 kunlik kalendar va uzilishlar jurnali.
+   beradi: KPI, 30 kunlik ustunlar, kun kartasi va uzilishlar jurnali.
    Bo'lak-bo'lak so'ralsa ular bir-biriga mos kelmay qolardi, chunki har
-   oraliq "hozir" ga bog'langan: kalendar bir narsani, jurnal boshqa
-   narsani ko'rsatardi.                                                */
-
-const dd = (n) => (n < 10 ? "0" : "") + n;
-/* Server UTC beradi, operator mahalliy vaqtni ko'radi. */
-const localHM = (iso) => { const d = new Date(iso); return dd(d.getHours()) + ":" + dd(d.getMinutes()); };
-const localDM = (iso) => { const d = new Date(iso); return dd(d.getDate()) + "." + dd(d.getMonth() + 1); };
-
+   oraliq "hozir" ga bog'langan.                                        */
 async function loadDiagHistory(c) {
   const tz = -new Date().getTimezoneOffset();
-  S.hist = null;
-  drawDiagHistory();
   try {
-    S.hist = await api(`/api/v1/admin/cameras/${c.id}/history`
+    const h = await api(`/api/v1/admin/cameras/${c.id}/history`
       + `?days=30&day=${S.diagDay}&tz_offset_minutes=${tz}`);
-  } catch (e) { S.hist = null; }
+    if (S.curId === c.id) S.hist = h;
+  } catch (e) { if (S.curId === c.id) S.hist = null; }
   if (S.page === "diag" && S.curId === c.id) drawDiagHistory();
 }
 
 function drawDiagHistory() {
-  const h = S.hist;
+  const h = S.hist, c = S.byId.get(S.curId);
   const show = (id, on) => { const el = $(id); if (el) el.style.display = on ? "" : "none"; };
-  if (!h) {
-    $("#dkpi").innerHTML = "";
-    ["#dprofwrap", "#dcalwrap", "#dojwrap"].forEach((id) => show(id, false));
+  if (!h || !c) {
+    $("#dkpi").innerHTML = ["mavjudlik 30k", "uzilish 30k", "o'chiq 30k", "bugun o'chiq", "mttr", "tomoshabin"]
+      .map((l) => `<div class="k"><div class="k-l">${l}</div><div class="k-v" style="color:var(--mute)">${h === null && c ? "…" : "—"}</div></div>`).join("");
+    ["#dcalwrap", "#dojwrap"].forEach((id) => show(id, false));
     return;
   }
-  ["#dprofwrap", "#dcalwrap", "#dojwrap"].forEach((id) => show(id, true));
+  ["#dcalwrap", "#dojwrap"].forEach((id) => show(id, true));
   const s = h.summary;
+  const today = (h.daily || []).find((d) => d.days_back === 0) || {offline_seconds: 0};
 
-  /* ── KPI ── */
-  const tile = (lbl, val, sub, color) => `<div class="k">
-    <div class="k-l">${lbl}</div>
-    <div class="k-v" ${color ? `style="color:${color}"` : ""}>${val}</div>
-    <div class="k-s">${sub}</div></div>`;
-  const peakLbl = s.outages_period
-    ? `${dd(h.peak.from_hour)}:00–${dd(h.peak.to_hour)}:00` : "—";
+  /* ── KPI (3×2) ── */
+  const tile = (lbl, val, color, cls = "") => `<div class="k"><div class="k-l">${lbl}</div>
+    <div class="k-v ${cls}" ${color ? `style="color:${color}"` : ""}>${val}</div></div>`;
   $("#dkpi").innerHTML =
-    tile("Mavjudlik · " + esc(h.selected_date.slice(5)), s.uptime_pct_day + "<u>%</u>",
-         `30 kun: ${s.uptime_pct_period}%`, upColor(s.uptime_pct_day)) +
-    tile("Uzilish (kun)", s.outages_day || "0", `30 kun: ${s.outages_period}`,
-         s.outages_day ? "var(--warn)" : null) +
-    tile("O'chiq vaqt", durHM(s.offline_seconds_day),
-         `30 kun: ${durHM(s.offline_seconds_period)}`,
-         s.offline_seconds_day ? "var(--fail)" : null) +
-    tile("Pik oyna", peakLbl,
-         h.peak.offline_seconds ? `shu oynada ${durHM(h.peak.offline_seconds)}` : "uzilish yo'q") +
-    tile("MTTR", durHM(s.mttr_seconds), "o'rtacha tiklanish") +
-    tile("MTBF", durHM(s.mtbf_seconds), "uzilishlar orasi") +
-    tile("Eng uzun uzilish", durHM(s.longest_outage_seconds),
-         s.longest_outage_at ? localDM(s.longest_outage_at) + " · "
-           + localHM(s.longest_outage_at) : "—") +
-    tile("Tomoshabin", camRt(S.byId.get(S.curId) || {}).readers || "0",
-         "ayni damda");
+    tile("mavjudlik 30k", s.uptime_pct_period + "<u>%</u>", upColor(s.uptime_pct_period)) +
+    tile("uzilish 30k", s.outages_period || "0", s.outages_period ? null : "var(--green)") +
+    tile("o'chiq 30k", durHM(s.offline_seconds_period), s.offline_seconds_period > 36000 ? "var(--red)" : null) +
+    tile("bugun o'chiq", today.offline_seconds ? durHM(today.offline_seconds) : "0m",
+         today.offline_seconds ? "var(--amber)" : "var(--green)") +
+    tile("mttr", durHM(s.mttr_seconds), null) +
+    tile("tomoshabin", camRt(c).readers, null, "k-live");
 
-  /* ── soatlik profil ── */
-  $("#dprofday").textContent = h.selected_date;
-  const hs = h.hourly_offline_seconds, max = Math.max(1, ...hs);
-  const span = (h.peak.to_hour - h.peak.from_hour + 24) % 24 || 3;
-  const inPeak = (i) => hs.some((v) => v > 0) &&
-    (i - h.peak.from_hour + 24) % 24 < span;
-  $("#dhours").innerHTML = hs.map((v, i) => `<i class="hbar"
-    style="height:${v ? Math.max(4, Math.round(v / max * 100)) : 2}%;
-      background:${!v ? "var(--line)" : inPeak(i) ? "var(--fail)"
-        : v > max * 0.6 ? "var(--warn)" : "var(--signal)"}"
-    title="${dd(i)}:00 — ${v ? durHM(v) + " o'chiq" : "uzilishsiz"}"></i>`).join("");
-  $("#dhoursx").innerHTML = hs.map((_, i) =>
-    `<span>${i % 3 === 0 ? dd(i) : ""}</span>`).join("");
-  const quiet = hs.indexOf(Math.min(...hs));
-  $("#dproffoot").innerHTML = h.outages.length
-    ? `eng ko'p uzilish <b style="color:var(--fail)">${peakLbl}</b>
-       · eng tinch <b>${dd(quiet)}:00</b>
-       · kunlik o'chiq <b>${durHM(s.offline_seconds_day)}</b>
-       · uzilishlar <b>${s.outages_day} ta</b>`
-    : `bu kunda uzilish qayd etilmagan`;
-  $("#dpeak").textContent = h.peak.offline_seconds
-    ? `pik ${peakLbl} · ${durHM(h.peak.offline_seconds)}` : "";
-
-  /* ── 30 kunlik kalendar ── */
-  $("#dcal").innerHTML = h.daily.map((d) => `<button class="cal-c${
-      d.days_back === h.day ? " sel" : ""}" data-d="${d.days_back}">
-    <div class="cal-d">${esc(d.date.slice(5).replace("-", "."))}</div>
-    <div class="cal-v" style="color:${d.offline_seconds ? upColor(d.uptime_pct) : "var(--faint)"}">${
-      d.offline_seconds ? durHM(d.offline_seconds) : "0"}</div>
-    <div class="cal-s">${d.outages ? d.outages + " uzilish" : "toza"}</div>
-  </button>`).join("");
-  $$("#dcal .cal-c").forEach((b) => (b.onclick = () => {
+  /* ── 30 kunlik ustunlar: bosilsa kun tanlanadi ── */
+  const daily = (h.daily || []).slice().sort((a, b) => b.days_back - a.days_back);   // eskidan yangiga
+  const maxD = Math.max(1, ...daily.map((d) => d.offline_seconds));
+  $("#dcal").innerHTML = daily.map((d) => {
+    const on = d.days_back === h.day;
+    const col = !d.offline_seconds ? (on ? "var(--blue)" : "#DCEFE8") : d.offline_seconds > 3600 ? "var(--d-off)" : "var(--d-stall)";
+    return `<button class="${on ? "sel" : ""}" data-d="${d.days_back}"
+      title="${esc(d.date)} — ${d.outages ? d.outages + " uzilish · " + durHM(d.offline_seconds) : "toza"}">
+      <i style="height:${Math.max(4, Math.round(d.offline_seconds / maxD * 100))}%;background:${col}"></i></button>`;
+  }).join("");
+  $("#dcalx").innerHTML = daily.map((d, i) => {
+    const on = d.days_back === h.day;
+    const t = on || i % 5 === 0 || i === daily.length - 1 ? d.date.slice(8, 10) : "";
+    return `<span class="${on ? "sel" : ""}">${t}</span>`;
+  }).join("");
+  $$("#dcal button").forEach((b) => (b.onclick = () => {
     S.diagDay = +b.dataset.d;
     const cam = S.byId.get(S.curId);
     if (cam) loadDiagHistory(cam);
   }));
-  const worst = h.daily.reduce((a, d) => d.offline_seconds > a.offline_seconds ? d : a,
-                               h.daily[0]);
-  $("#dcalfoot").innerHTML =
-    `30 kunlik o'chiq vaqt <b>${durHM(s.offline_seconds_period)}</b>
-     · uzilish <b>${s.outages_period} ta</b>
-     · eng yomon kun <b>${esc(worst.date.slice(5))}</b> · ${durHM(worst.offline_seconds)}
-     · mavjudlik (30k) <b style="color:${upColor(s.uptime_pct_period)}">${s.uptime_pct_period}%</b>`;
 
-  /* ── daqiqalik chiziq ──
-     Soatlik ustunlar "qachon" ni aytadi, bu chiziq "qanday" ni: uzilish
-     bir marta uzoq bo'lganmi yoki kun bo'yi uzuq-yuluqmi. */
-  const cellSec = (h.strip_minutes || 15) * 60;
+  /* ── kun kartasi ── */
+  const dayName = h.day === 0 ? "bugun" : h.day === 1 ? "kecha" : `${h.day} kun oldin`;
+  $("#ddaytitle").textContent = `${dayName} · ${h.selected_date.slice(8, 10)}.${h.selected_date.slice(5, 7)}`;
+  $("#ddaynote").textContent = h.outages.length
+    ? `${h.outages.length} uzilish · ${durHM(s.offline_seconds_day)} o'chiq` : "uzilish yo'q";
+  $("#dtoday").style.display = h.day ? "" : "none";
+  $("#dtoday").onclick = () => { S.diagDay = 0; loadDiagHistory(c); };
+  const longest = h.outages.length ? Math.max(...h.outages.map((o) => o.seconds)) : 0;
+  const peakLbl = h.peak && h.peak.offline_seconds
+    ? `${dd(h.peak.from_hour)}:00–${dd(h.peak.to_hour)}:00` : "—";
+  const dstat = (l, v, color) => `<div><span class="l">${l}</span><span class="v" style="color:${color || "var(--ink)"}">${v}</span></div>`;
+  $("#ddaystats").innerHTML =
+    dstat("mavjudlik", s.uptime_pct_day + "%", upColor(s.uptime_pct_day)) +
+    dstat("uzilish", h.outages.length, h.outages.length ? null : "var(--green)") +
+    dstat("o'chiq", s.offline_seconds_day ? durHM(s.offline_seconds_day) : "0m",
+          s.offline_seconds_day ? "var(--amber)" : "var(--green)") +
+    dstat("eng uzuni · pik", (longest ? durHM(longest) : "—") + (peakLbl !== "—" ? ` · ${peakLbl}` : ""), null);
+
+  /* ── daqiqalik chiziq: 96 katak × 15 daq ──
+     Ustunlar "qachon" ni aytadi, bu chiziq "qanday" ni: bir marta uzoq
+     bo'lganmi yoki kun bo'yi uzuq-yuluqmi. */
+  const stripMin = h.strip_minutes || 15, cellSec = stripMin * 60;
   $("#dstrip").innerHTML = h.strip.map((v, i) => {
     if (i >= h.strip_elapsed) return `<i class="sc future"></i>`;   // hali kelmagan
     const ratio = v / cellSec;
     const cls = !v ? "ok" : ratio >= 0.5 ? "bad" : "warn";
-    return `<i class="sc ${cls}" title="${dd(Math.floor(i * (h.strip_minutes || 15) / 60))}:${
-      dd((i * (h.strip_minutes || 15)) % 60)} — ${v ? durHM(v) + " o'chiq" : "uzilishsiz"}"></i>`;
+    return `<i class="sc ${cls}" title="${dd(Math.floor(i * stripMin / 60))}:${
+      dd((i * stripMin) % 60)} — ${v ? durHM(v) + " o'chiq" : "uzilishsiz"}"></i>`;
   }).join("");
 
   /* ── uzilishlar jurnali ── */
-  $("#dojday").textContent = `${h.selected_date} · ${h.outages.length} uzilish`;
   $("#doj").innerHTML = h.outages.map((o) => `<tr>
-    <td class="meta">${localHM(o.from)}</td>
-    <td class="meta">${o.recovered ? localHM(o.to) : "—"}</td>
-    <td class="meta" style="color:var(--warn)">${durHM(o.seconds)}</td>
+    <td class="meta" style="color:var(--ink)">${localHM(o.from)}</td>
+    <td class="meta" style="color:var(--ink)">${o.recovered ? localHM(o.to) : "davom etyapti"}</td>
+    <td class="meta" style="color:${o.recovered ? (o.seconds > 1800 ? "var(--amber)" : "var(--ink-3)") : "var(--red)"};text-align:right">${durHM(o.seconds)}</td>
     <td>${o.recovered ? `<span class="tag good">tiklandi</span>`
       : `<span class="tag bad">davom etyapti</span>`}</td>
   </tr>`).join("");
   $("#dojempty").innerHTML = h.outages.length ? "" :
-    `<div class="empty">Bu kunda uzilish yo'q.</div>`;
+    `<span class="log-ok">Bu kunda uzilish qayd etilmagan — kamera kun bo'yi efirda bo'lgan.</span>`;
 
-  /* ── harakatlar tahlili ──
+  /* ── tizim harakatlari ──
      Uzilishlar jurnali "tarmoq nima qildi" ni aytadi, bu esa "tizim
-     nima qildi" ni: oqim muzladimi, MediaMTX qayta ko'tarildimi.
-     Ikkovini yonma-yon qo'yish sababni topishni tezlashtiradi. */
+     nima qildi" ni: oqim muzladimi, MediaMTX qayta ko'tarildimi. */
   const acts = h.actions || [];
-  const KIND = {online: "good", offline: "bad", stalled: "mid",
-                resumed: "good", mediamtx: "mid"};
-  $("#dactmeta").textContent = `${h.selected_date} · ${acts.length} yozuv`;
+  const KIND = {online: "good", offline: "bad", stalled: "mid", resumed: "good", mediamtx: "mid"};
   $("#dact").innerHTML = acts.map((a) => `<tr>
     <td class="meta">${localHM(a.ts)}</td>
     <td><span class="tag ${KIND[a.kind] || ""}">${esc(a.kind)}</span></td>
@@ -1724,7 +2191,7 @@ function drawDiagHistory() {
     <td class="meta">${esc(a.detail || "—")}</td>
   </tr>`).join("");
   $("#dactempty").innerHTML = acts.length ? "" :
-    `<div class="empty">Bu kunda yozuv yo'q.</div>`;
+    `<span class="log-ok" style="color:var(--mute)">Bu kunda tizim yozuvi yo'q.</span>`;
 }
 
 function drawDiagCards() {
@@ -1733,22 +2200,25 @@ function drawDiagCards() {
   const rt = camRt(c), a = snapAge(c);
   const gb = rt.bytes > 1e9 ? (rt.bytes / 1e9).toFixed(1) + " GB"
     : rt.bytes ? Math.round(rt.bytes / 1e6) + " MB" : "—";
-  const card = (h, kv, extra = "") => `<div class="card"><h3>${h}</h3><dl class="kv">${
-    kv.map(([x, y]) => `<dt>${x}</dt><dd>${y}</dd>`).join("")}</dl>${extra}</div>`;
+  const card = (h, kv, extra = "") => `<div class="card"><h3>${h}</h3><div class="kv">${
+    kv.map(([x, y]) => `<div class="r"><span class="kk">${x}</span><span class="v">${y}</span></div>`).join("")}</div>${extra}</div>`;
   const snapUrl = `/api/v1/cameras/${c.id}/snapshot`;
-  const showSnap = c.state !== "offline" && c.state !== "disabled";
+  const showSnap = c.state !== "offline" && c.state !== "disabled" && c.snapshot_at;
   $("#dcards").innerHTML =
     card("Ulanish", [
       ["IP", esc(c.ip || "—")], ["Port", c.port || "—"],
       ["Ishlab chiqaruvchi", esc(c.vendor || "—")],
       ["RTSP yo'l", esc(c.rtsp_path || "—")],
-      ["Model", esc(c.model || "—")], ["Firmware", esc(c.firmware || "—")]]) +
+      ["Model", esc(c.model || "—")], ["Firmware", esc(c.firmware || "—")],
+      ["Registrator", ipGroup(c).length > 1 ? `${ipGroup(c).length} kanal · ${nvrInfo(c).sessions} sessiya` : "yakka kamera"]]) +
     card("Kodeklar", [
       ["Asosiy", esc(c.codec || "—")], ["Sub", esc(c.sub_codec || "topilmadi")],
       ["Sub yo'l", esc(c.sub_path || "—")],
-      ["O'girish", c.transcode ? "H.265 → H.264" : "kerak emas"],
-      ["O'lcham", esc(c.resolution || "—")]]) +
+      ["O'lcham", esc(c.resolution || "—")], ["Kadr tezligi", c.fps ? c.fps + " fps" : "—"],
+      ["O'girish", c.transcode ? "H.265 → H.264 (kerak bo'lsa)" : "kerak emas"],
+      ["Tez ochilish", c.always_on ? "yoqilgan" : "yo'q"]]) +
     card("MediaMTX", [
+      ["Tugun", esc(nodeName(c))],
       ["Yo'l", rt.ready ? "tayyor" : "kutmoqda"],
       ["Kirish", rt.inMbps ? rt.inMbps.toFixed(1) + " Mbit/s" : "—"],
       ["Tomoshabin", rt.readers], ["Baytlar", gb],
@@ -1756,11 +2226,11 @@ function drawDiagCards() {
       ["Slug", esc(c.slug || "—")]]) +
     card("Surat", [
       ["Yoshi", c.state === "offline" ? "berilmaydi (404)" : esc(age(a))],
-      ["Oxirgi", esc(c.snapshot_at || "—")]],
+      ["Oxirgi", c.snapshot_at ? esc(localDM(c.snapshot_at) + " " + localHM(c.snapshot_at)) : "—"]],
       showSnap ? `<img class="snap-img" id="dsnap" alt=""
-        src="${snapUrl}?t=${Date.now()}" onerror="this.style.display='none'">` : "") +
-    `<div class="card" style="grid-column:1/-1"><h3>Holat tarixi (jurnal)</h3>
-      <div id="dhist" style="font-size:12.5px;color:var(--faint)">yuklanmoqda…</div></div>`;
+        src="${snapUrl}?stale=1&t=${Math.floor(Date.now() / 30000)}" onerror="this.style.display='none'">` : "") +
+    `<div class="card" style="grid-column:1/-1"><h3>Holat tarixi <span class="h3-sub">so'nggi hodisalar · shu kamera</span></h3>
+      <div id="dhist" class="meta">yuklanmoqda…</div></div>`;
 }
 async function loadHistory(c) {
   try {
@@ -1771,17 +2241,18 @@ async function loadHistory(c) {
     const el = $("#dhist");
     if (!el) return;
     el.innerHTML = mine.length ? mine.map((e) => `<div class="hist-r">
-      <span class="hist-t">${esc((e.ts || "").slice(5, 16))}</span>
-      <i class="dot s-${e.kind === "online" ? "online" : e.kind === "offline"
-        ? "offline" : e.kind === "stalled" ? "stalled" : "unknown"}"></i>
-      <span>${esc(e.kind)}</span>
-      <span style="color:var(--faint);margin-left:6px">${esc(e.detail || "")}</span>
+      <span class="hist-t">${esc(localDM(e.ts) + " " + localHM(e.ts))}</span>
+      <i class="dot" style="background:${e.kind === "online" || e.kind === "resumed" ? DOT.online
+        : e.kind === "offline" ? DOT.offline : e.kind === "stalled" ? DOT.stalled : DOT.unknown}"></i>
+      <span style="font-family:var(--mono);font-size:11px">${esc(e.kind)}</span>
+      <span style="color:var(--mute)">${esc(e.detail || "")}</span>
     </div>`).join("") : "Bu kamera bo'yicha yozuv yo'q.";
   } catch (e) {}
 }
 async function act(a, c) {
+  if (a === "verdict") { S.sel = c.id; go("verdict"); return; }
   if (a === "live") { openLive(c); return; }
-  if (a === "wall") { S.picked = new Set([c.id]); S.wallMode = "sel"; go("wall"); return; }
+  if (a === "wall") { S.picked.add(c.id); S.wallMode = "sel"; drawNav(); go("wall"); return; }
   if (a === "toggle") {
     try {
       const r = await api(`/api/v1/admin/cameras/${c.id}/enabled`,
@@ -1814,9 +2285,13 @@ async function act(a, c) {
       probeResult = await api("/api/v1/admin/probe", {method: "POST", body: {
         ip: c.ip, port: c.port || 554, username: c.username || "",
         rtsp_path: c.rtsp_path || "/", camera_id: c.id}});
+      probeResult.camera = c.id;
+      S.note[c.id] = probeResult.ok ? `Probe o'tdi: ${probeResult.message}`
+        : `Probe to'xtadi (${probeResult.stage}): ${probeResult.message}`;
       pushEv(probeResult.ok ? "amal" : "xato",
         `<b>${esc(c.name)}</b> probe · ${esc(probeResult.message)}`, c.id);
-      drawDiag();
+      toast(c.name, S.note[c.id], probeResult.ok ? "" : "bad");
+      loadCams();
     } else if (a === "kf") {
       const r = await api(`/api/v1/admin/cameras/${c.id}/keyframe`, {method: "POST"});
       toast("Keyframe", r.sent ? "Kamera qabul qildi" : "Qo'llamaydi yoki 2 s ichida takror",
@@ -1836,7 +2311,9 @@ async function act(a, c) {
   } catch (e) { toast("Xato", e.message, "bad"); }
 }
 
-/* ═════════ tizim ═════════ */
+/* ═════════ resurs ═════════
+   Sarf kamera soniga emas, ko'rilayotgan oqimlarga bog'liq — "managed"
+   tomoshabinlarga qarab o'sishi kerak, kameralarga qarab emas.        */
 const hEg = [], hIn = [];
 function spark(arr, col) {
   if (arr.length < 2) return "";
@@ -1848,76 +2325,78 @@ function spark(arr, col) {
       vector-effect="non-scaling-stroke"/></svg>`;
 }
 function drawSys() {
-  if (!S.health) return;
-  const h = S.health, st = S.status || {};
+  if (S.page !== "res") return;
+  const h = S.health;
+  if (!h) { $("#sstats").innerHTML = `<span class="dstat"><span class="note">yuklanmoqda…</span></span>`; return; }
+  const st = S.status || {};
   const ing = Object.entries(S.rates)
     .filter(([slug]) => !slug.endsWith("_h264"))     // o'girish ichki aylanish
     .reduce((s, [, v]) => s + v, 0);
-  hEg.push(h.egress_mbps); hIn.push(ing);
+  if (S.page === "res") { hEg.push(h.egress_mbps); hIn.push(ing); }
   if (hEg.length > 40) { hEg.shift(); hIn.shift(); }
   const cap = h.egress_capacity_mbps || 1000;
   const pct = h.egress_mbps / cap * 100;
-  const cls = pct > 95 ? "crit" : pct > 80 ? "warn" : "";
-  const on = S.cams.filter((c) => c.state === "online").length;
-  const fan = ing > 0.1 ? h.egress_mbps / ing : 0;
-  $("#sstats").innerHTML = `
-    <div class="stat"><div class="lbl">Kirish</div>
-      <div class="val">${ing.toFixed(0)}<u> Mbit/s</u></div>
-      <div class="sub">kameralardan</div>${spark(hIn, "var(--warm)")}</div>
-    <div class="stat"><div class="lbl">Chiqish</div>
-      <div class="val">${h.egress_mbps.toFixed(0)}<u> Mbit/s</u></div>
-      <div class="sub">${cap} dan · ${pct.toFixed(0)}%</div>
-      <div class="bar solo ${cls}"><i style="width:${Math.min(100, pct)}%"></i></div></div>
-    <div class="stat"><div class="lbl">Fanout</div>
-      <div class="val">${fan ? fan.toFixed(1) : "—"}<u>${fan ? "×" : ""}</u></div>
-      <div class="sub">${fan > 3 ? "chegara chiqishda" : "chegara kirishda"}</div></div>
-    <div class="stat"><div class="lbl">Faol oqimlar</div><div class="val">${h.streams}</div>
-      <div class="sub">${h.readers} tomoshabin</div></div>
-    <div class="stat"><div class="lbl">Issiq yo'llar</div>
-      <div class="val">${h.warm}<u> / 256</u></div>
-      <div class="sub">sub · 10 daq</div></div>
-    <div class="stat"><div class="lbl">Kameralar</div>
-      <div class="val">${on}<u> / ${S.cams.length}</u></div>
-      <div class="sub">ishlayapti · SSE ${h.sse_subscribers}</div></div>`;
+  const transcodes = Object.keys(S.rt).filter((s) => s.endsWith("_h264")).length;
+  const foreign = Array.isArray(h.mediamtx_foreign) ? h.mediamtx_foreign.length : (h.mediamtx_foreign ? 1 : 0);
+  const p95 = apiP95();
+  $("#resratio").textContent = `${h.managed} yo'l · ${h.readers} tomoshabin · ${S.cams.length} kamera bazada`;
+  const ds = (lbl, val, note, cls = "") => `<div class="dstat"><span class="lbl">${lbl}</span>
+    <b class="val ${cls}">${val}</b><span class="note">${note}</span></div>`;
+  $("#sstats").innerHTML =
+    ds("managed yo'l", h.managed, "kamera soniga emas, tomoshabinga bog'liq", "mint") +
+    ds("tomoshabin", h.readers, `faol sessiya · ${h.streams} oqim`) +
+    ds("egress", `${h.egress_mbps.toFixed(0)}<u>Mbit/s</u>`, `${cap} dan · ${pct.toFixed(0)}%`,
+       pct > 95 ? "rose" : pct > 80 ? "gold" : "") +
+    ds("kirish", `${ing.toFixed(0)}<u>Mbit/s</u>`, "kameralardan · runtime farqidan") +
+    ds("o'girish", transcodes, "FFmpeg jarayoni · 8 NVENC limiti", transcodes ? "gold" : "mint") +
+    ds("begona yo'l", foreign, "mediamtx_foreign · 0 bo'lishi shart", foreign ? "rose" : "mint") +
+    ds("issiq yo'l", `${h.warm}<u>/256</u>`, "sub · 10 daqiqa saqlanadi") +
+    ds("p95 API", p95 === null ? "—" : `${p95}<u>ms</u>`, "shu brauzerning so'rovlari", p95 > 1000 ? "gold" : "");
+
+  const kv = (rows) => rows.map(([k, v, col]) =>
+    `<div class="r"><span class="kk">${k}</span><span class="v" ${col ? `style="color:${col}"` : ""}>${v}</span></div>`).join("");
   const sw = (st.health || h.health || {});
   const sn = h.snapshots || {};
-  $("#sjobs").innerHTML =
-    `<dt>Health sweep</dt><dd>${sw.checked || 0} manzil · ${
-      ((sw.duration_ms || 0) / 1000).toFixed(1)} s</dd>
-    <dt>Snapshot tsikli</dt><dd>${sn.total ? `${sn.total} ta · ${
-      ((sn.duration_ms || 0) / 1000).toFixed(1)} s` : "hali yo'q"}</dd>
-    <dt>MediaMTX</dt><dd>${h.mediamtx
-      ? '<span class="tag good">tirik</span>' : '<span class="tag bad">yiqilgan</span>'}</dd>`;
-  $("#snodes").innerHTML = (S.nodes || []).map((n) =>
-    `<dt>${esc(n.name)}</dt><dd><span class="tag ${n.status === "online" ? "good"
-      : n.status === "degraded" ? "mid" : "bad"}">${n.status}</span> ${
-      n.ready || 0} oqim · ${n.cameras || 0} kamera</dd>`).join("") || "<dt>—</dt><dd>—</dd>";
+  $("#sjobs").innerHTML = kv([
+    ["health · 60 s", `${sw.checked || 0} manzil · ${sw.online || 0} tirik · ${((sw.duration_ms || 0) / 1000).toFixed(1)} s`,
+     sw.duration_ms > 45000 ? "var(--amber)" : "var(--green)"],
+    ["snapshot tsikli", sn.total ? `${sn.total} ta · ${((sn.duration_ms || 0) / 1000).toFixed(1)} s` : "hali yo'q"],
+    ["MediaMTX", h.mediamtx ? "tirik" : "yiqilgan", h.mediamtx ? "var(--green)" : "var(--red)"],
+    ["SSE obunachi", h.sse_subscribers],
+    ["egress tarixi", spark(hEg, "var(--blue)") || "—"],
+  ]);
+  $("#snodes").innerHTML = (S.nodes || []).length ? kv((S.nodes || []).map((n) => [
+    esc(n.name), `${n.status} · ${(n.runtime || {}).ready ?? n.ready ?? 0} yo'l · ${n.cameras || 0} kamera` +
+      (n.pending_paths ? ` · ${n.pending_paths} ortiqcha` : ""),
+    n.status === "online" ? "var(--green)" : n.status === "degraded" ? "var(--amber)" : "var(--red)"]))
+    : kv([["—", "tugun yo'q"]]);
   const d = st.disk || {};
-  $("#sdisk").innerHTML =
-    `<dt>Suratlar</dt><dd>${d.snapshots_mb ?? "—"} MB · ${d.snapshots_files ?? "—"} fayl</dd>
-    <dt>Baza</dt><dd>${d.db_mb ?? "—"} MB</dd>
-    <dt>Log</dt><dd>${d.log_mb ?? "—"} MB · aylanma 5 MB×3</dd>`;
+  $("#sdisk").innerHTML = kv([
+    ["suratlar", `${d.snapshots_mb ?? "—"} MB · ${d.snapshots_files ?? "—"} fayl`],
+    ["cameras.db", `${d.db_mb ?? "—"} MB`],
+    ["jurnal", `${d.log_mb ?? "—"} MB · aylanma 5 MB×3`],
+    ["hodisalar", "30 kun saqlanadi"],
+  ]);
   const g = {};
   S.cams.forEach((c) => {
     if (!c.ip || c.state === "offline") return;
-    const rt = camRt(c);
-    const n = (rt.ready ? 1 : 0) + (S.rt[c.slug + "_sub"] ? 1 : 0);
+    const n = camRt(c).sessions;
     if (n) g[c.ip] = (g[c.ip] || 0) + n;
   });
-  $("#sconn").innerHTML = Object.entries(g).sort((a, b) => b[1] - a[1]).slice(0, 12)
-    .map(([ip, n]) => `<dt>${esc(ip)}</dt><dd>${n} ulanish ${
-      n > 6 ? '<span class="tag mid">DVR chegarasi</span>' : ""}</dd>`).join("")
-    || "<dt>—</dt><dd>faol ulanish yo'q</dd>";
+  const conn = Object.entries(g).sort((a, b) => b[1] - a[1]).slice(0, 12);
+  $("#sconn").innerHTML = conn.length ? kv(conn.map(([ip, n]) => [esc(ip),
+      `${n} sessiya${n > 6 ? " · DVR chegarasi" : ""}`, n > 6 ? "var(--amber)" : null]))
+    : kv([["—", "faol ulanish yo'q"]]);
   $("#sstall").innerHTML = (st.stalled || []).length
-    ? st.stalled.map((s) => `<div class="hist-r"><i class="dot s-stalled"></i>
+    ? st.stalled.map((s) => `<div class="hist-r"><i class="dot" style="background:${DOT.stalled}"></i>
         <span class="mono" style="font-size:12px">${esc(s)}</span></div>`).join("")
-    : `<div style="color:var(--faint);font-size:13px">Muzlagan oqim yo'q.</div>`;
+    : `<div class="meta" style="padding:6px 0">Muzlagan oqim yo'q.</div>`;
 }
 
 /* ═════════ hodisalar (SSE) ═════════ */
-$$("#efilt .chip[data-e]").forEach((b) => (b.onclick = () => {
+$$("#efilt .pill[data-e]").forEach((b) => (b.onclick = () => {
   S.evFilt = b.dataset.e;
-  $$("#efilt .chip[data-e]").forEach((x) => x.classList.toggle("sel", x === b));
+  $$("#efilt .pill[data-e]").forEach((x) => x.classList.toggle("sel", x === b));
   renderFeed();
 }));
 $("#epause").onclick = () => {
@@ -1957,6 +2436,8 @@ function startSSE() {
     if (d.state === "stalled") toast(nom, "Oqim to'xtadi — bayt kelmayapti", "mid");
     // Poster darhol yo'qoladi — surat so'rovini kutmaymiz (INTEGRATION.md).
     if (S.page === "wall") drawWall(false);
+    if (S.page === "verdict") drawVerdict();
+    if (S.page === "topo") drawTopo();
     else if (S.page === "cams") drawCams();
     if (S.curId === d.id && S.page === "diag") drawDiag();
     drawNav();
@@ -1971,9 +2452,10 @@ function startSSE() {
 }
 
 /* ═════════ buyruq paneli ═════════ */
-const PAGES = [["home", "Holat"], ["cams", "Kameralar"],
-  ["groups", "Guruhlar"], ["stat", "Tahlil"], ["wall", "Devor"],
-  ["sys", "Tizim"], ["ev", "Hodisalar"], ["scan", "Qurilma qo'shish"]];
+const PAGES = [["verdict", "Xato qayerda?"], ["speed", "Ochilish tezligi"],
+  ["topo", "Topologiya"], ["cams", "Kameralar"], ["res", "Resurs"],
+  ["out", "Uzilishlar"], ["wall", "Devor"], ["ev", "Hodisalar"],
+  ["scan", "Qurilma qo'shish"]];
 let palI = 0, palR = [];
 function openPal() { $("#pal").classList.add("on"); $("#palq").value = ""; $("#palq").focus(); palFill(); }
 function closePal() { $("#pal").classList.remove("on"); }
@@ -1992,7 +2474,7 @@ function palFill() {
   palR = [...S.cams.filter((c) => !q || (c.name || "").toLowerCase().includes(q) ||
       (c.ip || "").includes(q) || (c.external_id || "").includes(q) ||
       (c.region || "").toLowerCase().includes(q))
-    .map((c) => ({h: `<i class="dot s-${c.state}"></i>${esc(c.name)}`,
+    .map((c) => ({h: `<i class="dot" style="background:${DOT[c.state]}"></i>${esc(c.name)}`,
       s: `${esc(c.region)} · ${esc(c.ip || "")}`, go: () => openDiag(c.id)})),
     ...PAGES.filter(([, n]) => !q || n.toLowerCase().includes(q))
       .map(([p, n]) => ({h: esc(n), s: "sahifa", go: () => go(p)}))].slice(0, 9);

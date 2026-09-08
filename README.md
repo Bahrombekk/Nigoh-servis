@@ -81,18 +81,21 @@ U bitta savolga javob beradi: **"backend'da xatomi yoki kamerada?"**
 
 | Bo'lim | Nima bor |
 |---|---|
-| Holat | muammoli kameralar birinchi, tizim ko'rsatkichlari |
-| Kameralar | jadval: holat/hudud/kodek filtrlari, ustun saralash |
-| Guruhlar | hudud / registrator / tugun kesimida uzilishlar reytingi |
-| Tahlil | uzilishlar sutka bo'ylab, cho'qqi oyna, eng yomon kameralar |
-| Devor | 2×2–4×4 setka, sub-oqimda, talab bo'yicha |
-| Diagnostika | bitta kamera: KPI, signal zanjiri, 30 kunlik kalendar, uzilishlar va harakatlar jurnali |
-| Tizim | MediaMTX tugunlari, fon vazifalari, disk |
+| Xato qayerda? | bosh sahifa: muammoli kameralar, tanlangani bo'yicha hukm (kamera / registrator / tugun / chipta / brauzer) va zanjir bo'ylab dalillar; amal tugmasi (probe, yo'lni qayta yaratish) |
+| Ochilish tezligi | `open_ms` budjeti transport kesimida: stream / signal / frame, p50 va p95, nimani tuzatish kerakligi |
+| Topologiya | tugun → registrator (bitta IP ortidagi kanallar): faol sessiyalar, holat; pastda hudud / registrator / tugun kesimida uzilishlar reytingi |
+| Kameralar | jadval: park chizig'i, holat filtrlari, izlash, 7 kunlik mavjudlik, devorga tanlash |
+| Resurs | managed yo'llar, tomoshabin, egress, o'girish, begona yo'l, fon xizmatlari, tugunlar, disk |
+| Uzilishlar | sutka bo'ylab taqsimot, sabab kesimi (hodisa turlari), eng ishonchsiz kameralar |
+| Devor | 2×2–6×6 setka, sub-oqimda, talab bo'yicha yoki hammasi bir bosishda |
+| Kamera sahifasi | jonli panel, «hozir» kartasi, KPI, 30 kunlik ustunlar → kun kartasi (chiziq, uzilishlar, tizim harakatlari), pasport |
 | Hodisalar | SSE oqimi jonli |
 | Qurilma qo'shish | IP + parol → skaner qolganini topadi |
 
-Konsol o'zi yetarli: shriftlar `debug-ui/vendor/fonts/` da, CDN'ga
-chiqmaydi — kameralar bilan bitta yopiq tarmoqda ham ishlaydi.
+Yorug' maket (`Nigoh Diagnostika` dizayni): Manrope va Bricolage
+Grotesque shriftlari Google Fonts'dan keladi; internetsiz tarmoqda
+`debug-ui/vendor/fonts/` dagi IBM Plex Sans va JetBrains Mono ishlaydi —
+shakl bir oz farq qiladi, joylashuv buzilmaydi.
 
 ## Tizim qanday ishlaydi
 
