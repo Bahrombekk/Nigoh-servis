@@ -1206,6 +1206,26 @@ const RENEW_MARGIN = 5 * 60000;   // chipta muddatidan shuncha oldin yangilanadi
 const REOPEN_BACKOFF = [1000, 1500, 2000, 3000, 5000, 8000];
 const REOPEN_MAX_WAIT = 8000;
 
+/* MANBA UZILISHI (401/404) — pleyer yopilmaydi, master qayta so'raladi.
+
+   Ishlab chiqarishda o'lchandi (negoh.das-uty.uz, tcpdump): kamera
+   SETUP javobida `Session: ...;timeout=60` beradi va shu muddat
+   tugashi bilan RTSP ulanishini O'ZI uzadi (FIN kameradan keladi).
+   Ya'ni har ~60 soniyada manba uziladi va MediaMTX 0,3-1 soniyada
+   qayta ulanadi. Manba yo'qolgan zahoti MediaMTX HLS muxerini yo'q
+   qiladi va shu oraliqda AYNAN shunday javob beradi:
+
+       index.m3u8          -> 404
+       video1_stream.m3u8  -> 401 {"error":"authentication error"}
+
+   Shuning uchun 401 "chipta o'ldi" degani emas. Kutish oralig'i
+   qisqa (manba bir soniyada qaytadi), chegara esa uzun — bir daqiqada
+   bir marta takrorlanadigan uzilishda pleyerni yopib ochish tomoshabin
+   uchun bir necha soniyalik qora ekran degani. */
+const OUTAGE_RETRY = 700;      // ms — master qayta so'rovlari orasi
+const OUTAGE_QUIET = 2500;     // ms — shundan keyin xabar ko'rsatiladi
+const OUTAGE_MAX = 40000;      // ms — shundan keyin pleyer qayta ochiladi
+
 /* WebRTC bu muhitda umuman ishlamasa (UDP yopiq), har ochilishda 3,5 soniya
    bekorga kutmaslik uchun yiqilish eslab qolinadi va keyingi ochilishlar
    to'g'ridan HLS'dan boshlanadi.
@@ -1308,11 +1328,18 @@ function wallQuality(cam) {
 function createPlayer(video, msgEl) {
   const p = {video, msgEl, hls: null, pc: null, token: 0, mode: "",
              cam: null, quality: "", watch: null, retries: 0, lastRetry: 0,
-             renew: null, reopens: 0, reopenTimer: null, snapTimer: null};
+             renew: null, reopens: 0, reopenTimer: null, snapTimer: null,
+             // Manba yo'qolgan payt (401/404 boshlangan vaqt) va kutayotgan
+             // master so'rovi. Nolga qaytishi — oqim tiklandi degani.
+             outage: 0, outageTimer: null};
 
   p.stopWatch = () => { if (p.watch) { clearInterval(p.watch); p.watch = null; } };
   p.stopRenew = () => { if (p.renew) { clearTimeout(p.renew); p.renew = null; } };
   p.stopSnap = () => { if (p.snapTimer) { clearInterval(p.snapTimer); p.snapTimer = null; } };
+  p.stopOutage = () => {
+    p.outage = 0;
+    if (p.outageTimer) { clearTimeout(p.outageTimer); p.outageTimer = null; }
+  };
 
   /* Jonli ko'rinishdan surat: video ochiq va kadr yurayotgan bo'lsa,
      dekodlangan kadrni serverga yuboramiz — ochiq kamera uchun server
@@ -1357,6 +1384,7 @@ function createPlayer(video, msgEl) {
     if (p.pc) { p.pc.close(); p.pc = null; }
     p.stopWatch();
     p.stopRenew();
+    p.stopOutage();
     if (p.reopenTimer) clearTimeout(p.reopenTimer);
     p.reopenTimer = setTimeout(() => {
       p.reopenTimer = null;
@@ -1382,6 +1410,7 @@ function createPlayer(video, msgEl) {
     p.stopWatch();
     p.stopRenew();
     p.stopSnap();
+    p.stopOutage();
     if (p.reopenTimer) { clearTimeout(p.reopenTimer); p.reopenTimer = null; }
     if (p.hls) { p.hls.destroy(); p.hls = null; }
     if (p.pc) { p.pc.close(); p.pc = null; }
@@ -1653,6 +1682,12 @@ function createPlayer(video, msgEl) {
       p.watch = setInterval(() => {
         if (staleFn()) { p.stopWatch(); return; }
         if (video.paused || video.currentTime <= 0) return;
+        // Manba yo'qligi ALLAQACHON aniqlangan bo'lsa (401/404) tiklanishni
+        // xato ishlovchisi olib boradi — o'z chegarasi bilan (OUTAGE_MAX).
+        // Kuzatuvchi ham aralashsa ikki mexanizm bir-birini uzadi: u 12
+        // soniyada pleyerni butunlay yopib ochardi, ya'ni bir daqiqada bir
+        // marta uziladigan kamerada tomoshabin doim qora ekran ko'rardi.
+        if (p.outage) { still = 0; prev = -1; return; }
         const now = video.currentTime;
         if (Math.abs(now - prev) < 0.05) still++; else { still = 0; prev = now; }
         if (still >= WATCH_DEAD) { p.stopWatch(); p.retry("HLS qotdi"); }
@@ -1738,7 +1773,7 @@ function createPlayer(video, msgEl) {
         // marta to'xtaganda ham oqim butunlay o'lardi. Faqat tiklash ikki
         // marta natija bermagandan keyin boshqa yo'l (sub -> asosiy yoki
         // xato xabari) qidiriladi.
-        let netFails = 0, mediaFails = 0, authReloads = 0, authJump = false;
+        let netFails = 0, mediaFails = 0, authJump = false;
         let stalls = 0;
 
         /* Buferning holatini jurnal uchun matnga aylantiradi. Qotib
@@ -1817,7 +1852,10 @@ function createPlayer(video, msgEl) {
         // NOLdan boshlanadi, shuning uchun birinchi segment kelganda
         // jonli chekkaga sakraymiz va ijroni qayta boshlaymiz.
         hls.on(Hls.Events.FRAG_BUFFERED, () => {
-          authReloads = 0;
+          if (p.outage) {              // manba qaytdi — kutish tugadi
+            p.stopOutage();
+            msgEl.textContent = "";
+          }
           stalls = 0;
           if (!authJump) return;
           authJump = false;
@@ -1874,67 +1912,71 @@ function createPlayer(video, msgEl) {
             hls.startLoad(-1);              // -1 = jonli chekkadan
             return;
           }
-          /* 401/403 — chipta o'lgan; 404 — yo'l MediaMTX'da yo'q.
-             Uchalasida ham o'sha manzilni qayta yuklash befoyda, chunki
-             muammo manzilning ichida. Yagona yechim — /stream ni qayta
-             chaqirish: u yangi chipta beradi VA yo'lni qayta yaratadi
-             (ensure_path).
-
-             Ikkalasi ham normal holat, nosozlik emas:
-               * chipta backend qayta ishga tushganda o'ladi (oqim
-                 sessiyalari xotirada yashaydi);
-               * yo'l MediaMTX qayta ko'tarilganda yo'qoladi — yo'llar
-                 talab bo'yicha yaratiladi va faylda saqlanmaydi. */
           const code = d.response && d.response.code;
-          /* 401/403 — bu chipta o'lgani EMAS. MediaMTX HLS uchun ruxsatni
-             sessiya darajasida eslab qoladi va har segment uchun backend'ni
-             qayta so'ramaydi; o'sha sessiya eskirganda esa 401 qaytaradi.
-             Ishlab chiqarishda o'lchandi (negoh.das-uty.uz, manbasi
-             mutlaqo barqaror kamerada ham ~60 soniyada takrorlanadi):
+          /* 401/403/404 — bu CHIPTA muammosi EMAS, manba hozir yo'q.
 
-                 aynan shu variant manzili qayta   -> 401
-                 YANGI chipta bilan o'sha manzil   -> 401
-                 master pleylist qayta olindi      -> 200
+             Ishlab chiqarishda o'lchandi (negoh.das-uty.uz, tcpdump +
+             MediaMTX jurnali): kamera SETUP javobida
+             `Session: ...;timeout=60` beradi va shu muddat tugashi bilan
+             RTSP ulanishini O'ZI uzadi (FIN kameradan keladi, hamma
+             kamerada ~59 soniyada). MediaMTX manbani 0,3-1 soniyada
+             qayta ulaydi, lekin manba yo'qolgan zahoti HLS muxerini
+             yo'q qiladi va shu oraliqda javoblar shunday bo'ladi:
 
-             Ya'ni yangi chipta so'rashning foydasi yo'q — master'ni qayta
-             yuklash kerak, u MediaMTX'da sessiyani qaytadan ochadi.
-             Pleyerni butunlay yopib ochish esa qimmat: yangi chipta,
-             avval WebRTC urinishi (u yiqilsa 404 va kutish), keyin HLS —
-             tomoshabin uchun bu bir necha soniyalik qora ekran va
-             kengayib boradigan kutish (1 s, 2 s, ... 15 s). */
-          if ((code === 401 || code === 403) && ++authReloads <= 3) {
-            // Birinchi urinish arzon: o'sha chipta bilan master qayta
-            // o'qiladi. Agar yetmasa — YANGI chipta so'raladi: MediaMTX
-            // bola pleylistiga chiptani so'rovdan ko'chiradi, ya'ni eski
-            // chipta bilan master har safar AYNAN O'SHA bola manzilini
-            // qaytaradi va bir xil so'rov bekorga takrorlanadi (o'lchov:
-            // v1.20.0 da 401 shu bilan yo'qolmaydi).
-            console.log(`[hls] ${code} — ruxsat sessiyasi eskirgan, `
-                        + `${authReloads === 1 ? "master qayta yuklanmoqda"
-                                               : "yangi chipta olinmoqda"} `
-                        + `(${authReloads}/3)`);
-            authJump = true;
-            if (authReloads === 1) {
-              hls.loadSource(url);
-              hls.startLoad(-1);          // -1 = jonli chekkadan
+                 index.m3u8          -> 404
+                 video1_stream.m3u8  -> 401 {"error":"authentication error"}
+
+             Chipta esa butunlay joyida — o'sha chipta bilan bir soniya
+             keyin o'sha manzil 200 beradi. Shuning uchun yangi chipta
+             so'rashning ham, pleyerni yopib ochishning ham foydasi yo'q:
+             kerak bo'lgani — masterni SABR bilan qayta so'rash. Master
+             so'rovi MediaMTX'da yo'lni talab bo'yicha qayta ko'taradi va
+             muxerni tiklaydi.
+
+             Master so'rovi haqiqatan MediaMTX'ga yetishi uchun nginx
+             pleylistlarga `no-store` qo'yadi (scripts/nginx_conf.py) — MediaMTX
+             masterga `max-age=30` beradi va usiz brauzer 30 soniyagacha
+             keshdagi eski masterni qaytarardi, ya'ni tiklanish qadami
+             umuman ishlamasdi. */
+          if (code === 401 || code === 403 || code === 404) {
+            // Bitta istisno: chipta HAQIQATAN muddati tugagan bo'lsa
+            // (masalan, ilova uzoq to'xtab turgan va `scheduleRenew`
+            // taymeri o'z vaqtida ishlamagan) kutishning ma'nosi yo'q —
+            // yangi chipta faqat /stream dan keladi. Muddat manzilning
+            // o'zida: token = "<epoch>.<imzo>".
+            const exp = /[?&]token=(\d{9,})\./.exec(url);
+            if (exp && +exp[1] * 1000 <= Date.now()) {
+              console.log(`[hls] ${code} — chipta muddati tugagan, `
+                          + `yangi chipta olinadi`);
+              p.stopOutage();
+              hls.destroy(); p.hls = null; p.stopWatch();
+              if (!staleFn()) p.reopen("chipta muddati tugagan");
               return;
             }
-            api(`/api/v1/cameras/${cam.id}/stream?hevc=${HEVC_OK ? 1 : 0}`
-                + (p.quality ? `&quality=${p.quality}` : ""))
-              .then((u) => {
-                if (staleFn() || !u.stream_url) return;
-                p.scheduleRenew(u.stream_url);
-                hls.loadSource(u.stream_url);
-                hls.startLoad(-1);        // -1 = jonli chekkadan
-              })
-              .catch(() => { if (!staleFn()) p.reopen("chipta yangilandi"); });
-            return;
-          }
-          if (code === 401 || code === 403 || code === 404) {
-            console.log(`[hls] ${code} — oqim hozir mavjud emas `
-                        + `(chipta eskirgan yoki manba uzilgan)`);
-            hls.destroy(); p.hls = null; p.stopWatch();
-            if (!staleFn()) p.reopen("chipta yangilandi");
+            const gone = p.outage ? Date.now() - p.outage : 0;
+            if (!p.outage) p.outage = Date.now();
+            if (gone > OUTAGE_MAX) {
+              console.log(`[hls] ${code} — manba ${Math.round(gone / 1000)} s `
+                          + `qaytmadi, pleyer qayta ochiladi`);
+              p.stopOutage();
+              hls.destroy(); p.hls = null; p.stopWatch();
+              if (!staleFn()) p.reopen("manba qaytmadi");
+              return;
+            }
+            // Xabar darhol chiqarilmaydi: bir soniyalik uzilishda ekranda
+            // "qayta ulanmoqda" chaqnab o'tishi tomoshabinni bekorga
+            // cho'chitadi (bufer bu oraliqni yutib yuboradi).
+            if (gone > OUTAGE_QUIET) msgEl.textContent = "manba kutilmoqda…";
+            console.log(`[hls] ${code} — manba hozir yo'q (${gone} ms), `
+                        + `master qayta so'ralmoqda`);
+            authJump = true;
+            if (p.outageTimer) clearTimeout(p.outageTimer);
+            p.outageTimer = setTimeout(() => {
+              p.outageTimer = null;
+              if (staleFn() || p.hls !== hls) return;
+              hls.loadSource(url);
+              hls.startLoad(-1);          // -1 = jonli chekkadan
+            }, OUTAGE_RETRY);
             return;
           }
           if (!d.fatal) return;

@@ -84,6 +84,28 @@ def media_locations(domain: str, api_port: int, hls_port: int,
         proxy_pass http://127.0.0.1:{hls_port}/;
         proxy_set_header X-Forwarded-For $remote_addr;
         proxy_buffering off;
+
+        # KESH O'CHIRILADI. MediaMTX master pleylistga
+        # `Cache-Control: public, max-age=30` qo'yadi. Manba uzilganda
+        # (kameralar RTSP sessiyasini har ~60 soniyada o'zlari uzadi)
+        # muxer yo'q bo'ladi va o'lchov shuni ko'rsatdi:
+        #
+        #     video1_stream.m3u8  -> 401 (muxer yo'q)
+        #     index.m3u8          -> 200, LEKIN BRAUZER KESHIDAN
+        #
+        # Ya'ni pleyerning "masterni qayta yuklab muxerni tiklash" qadami
+        # MediaMTX'ga umuman yetmasdi — 30 soniya davomida keshdagi eski
+        # javob qaytarilardi va tomoshabin o'sha 30 soniya qora ekran
+        # ko'rardi. Segmentni keshlashning ham foydasi yo'q: jonli HLS'da
+        # har segment bir marta so'raladi.
+        #
+        # Faqat Cache-Control almashtiriladi: MediaMTX'ning
+        # `Access-Control-Allow-Origin` sarlavhasi o'z holida o'tadi
+        # (uni `add_header` bilan takrorlash brauzerda "multiple values"
+        # xatosini berardi).
+        proxy_hide_header Cache-Control;
+        add_header Cache-Control "no-store" always;
+
         # MediaMTX redirect'lari prefikssiz yoki http:// bilan kelishi
         # mumkin — doim to'liq manzilga keltiramiz, aks holda brauzer
         # Mixed Content deb bloklaydi.
