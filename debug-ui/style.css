@@ -164,6 +164,7 @@ a{color:var(--blue-2);text-decoration:none}
 .field input:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(27,77,255,.12)}
 .gate-card .btn{padding:13px 16px;font-size:14px;border-radius:11px}
 .gate-err{color:var(--red);font-size:12px;min-height:19px;margin-bottom:4px}
+.gate-wait{min-height:18px;margin-top:8px;font:400 12px var(--mono);color:var(--amber);text-wrap:pretty}
 .gate-note{margin-top:14px;font:400 12px var(--mono);color:var(--mute);text-wrap:pretty}
 @media(max-width:700px){
   #gate{grid-template-columns:1fr}

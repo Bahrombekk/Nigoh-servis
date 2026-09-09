@@ -227,26 +227,84 @@ function nvrInfo(c) {
 /* ═════════ kirish ═════════ */
 function showGate() { $("#gate").classList.remove("hidden"); $("#app").classList.remove("on"); }
 
-$("#glogin").onclick = async () => {
+/* Kirish so'rovi api() orqali KETMAYDI. api() 401 ni "sessiya yo'q" deb
+   tushunib showGate() qiladi va serverning "Login yoki parol noto'g'ri"
+   xabari yo'qolardi. Ustiga server brute-force himoyasi bor: bitta IP
+   dan 5 xatodan keyin javob 1, 2, 4 … 30 soniya kechiktiriladi
+   (api/auth.py). O'sha kutish davomida tugma hech narsa ko'rsatmasdi —
+   "so'rov ketmadi" degan taassurot aynan shu edi. Nginx ortida
+   X-Forwarded-For bo'lmasa hamma foydalanuvchi bitta IP hisoblanadi va
+   birovning xatosi hammaga kutish bo'ladi.
+
+   Shuning uchun: bir vaqtda bitta so'rov, tugma bloklanadi, 1,5 s dan
+   keyin "server tekshiryapti" izohi, 40 s da taym-aut, xato bo'lsa
+   serverning o'z xabari. Forma — Enter ikkala maydonda ham ishlaydi,
+   parol menejerlari to'g'ri to'ldiradi. */
+let loginBusy = false;
+async function doLogin() {
+  if (loginBusy) return;
+  const u = $("#u").value.trim(), p = $("#p").value;
   $("#gerr").textContent = "";
+  if (!u || !p) {
+    $("#gerr").textContent = "Login va parolni kiriting";
+    (!u ? $("#u") : $("#p")).focus();
+    return;
+  }
+  loginBusy = true;
+  const btn = $("#glogin");
+  btn.disabled = true; btn.textContent = "Kirilyapti…";
+  const slow = setTimeout(() => {
+    $("#gwait").textContent = "Server tekshiryapti… Ko'p xato urinishdan keyin javob 30 soniyagacha kechikadi.";
+  }, 1500);
+  const ctl = new AbortController();
+  const tmo = setTimeout(() => ctl.abort(), 40000);
+  const t0 = performance.now();
   try {
-    await api("/api/v1/auth/login", {method: "POST",
-      body: {username: $("#u").value.trim(), password: $("#p").value}});
+    const res = await fetch("/api/v1/auth/login", {
+      method: "POST", cache: "no-store", signal: ctl.signal,
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({username: u, password: p}),
+    });
+    noteApi(performance.now() - t0);
+    if (!res.ok) {
+      let detail = res.status + "-xato";
+      try { detail = (await res.json()).detail || detail; } catch (e) {}
+      if (res.status === 404) detail = "Kirish yuzasi yopiq — serverda ENABLE_UI=1 o'rnatilmagan";
+      if (res.status >= 500) detail = `Server xatosi (${res.status}) — servis jurnalini ko'ring`;
+      throw new Error(detail);
+    }
     enter();
-  } catch (e) { $("#gerr").textContent = e.message; }
-};
-$("#p").addEventListener("keydown", (e) => { if (e.key === "Enter") $("#glogin").click(); });
+  } catch (e) {
+    $("#gerr").textContent = e.name === "AbortError"
+      ? "Server 40 soniya ichida javob bermadi — tarmoq yoki servis to'xtagan"
+      : e.message === "Failed to fetch" ? "Serverga ulanib bo'lmadi — tarmoq yoki servis to'xtagan"
+      : e.message;
+    $("#p").focus(); $("#p").select();
+  } finally {
+    clearTimeout(slow); clearTimeout(tmo);
+    $("#gwait").textContent = "";
+    btn.disabled = false; btn.textContent = "Kirish";
+    loginBusy = false;
+  }
+}
+$("#gform").addEventListener("submit", (e) => { e.preventDefault(); doLogin(); });
 $("#out").onclick = async () => {
   try { await api("/api/v1/auth/logout", {method: "POST"}); } catch (e) {}
   location.reload();
 };
 
 let entered = false;
+/* Qayta kirish ham shu yerdan o'tadi: sessiya (12 soat) tugasa api() 401
+   olib showGate() qiladi, foydalanuvchi parolni qayta kiritadi. Ilgari
+   bu funksiya `entered` bo'lsa darhol qaytardi — kirish 200 bilan
+   o'tsa ham oyna yopilmasdi, "so'rov ketmadi" degandek turardi. Endi
+   oyna har safar yopiladi, fon tsikllari esa bir marta ishga tushadi. */
 function enter() {
-  if (entered) return;
-  entered = true;
   $("#gate").classList.add("hidden");
   $("#app").classList.add("on");
+  $("#p").value = "";
+  if (entered) { loadCams(); loadStatus(); return; }
+  entered = true;
   loadCams(); pollRuntime(); loadStatus(); loadStat(); startSSE();
   setInterval(loadCams, 15000);
   setInterval(pollRuntime, 3000);

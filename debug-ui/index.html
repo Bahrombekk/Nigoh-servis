@@ -29,15 +29,16 @@
       <div><b>30 kun</b><span>hodisalar tarixi</span></div>
     </div>
   </aside>
-  <div class="gate-form"><div class="gate-card">
+  <div class="gate-form"><form class="gate-card" id="gform" novalidate autocomplete="on">
     <h2>Servis konsoli</h2>
     <p class="gate-sub">Kirish texnik xodimlar uchun. Kamera parollari bu panelda ko'rinmaydi.</p>
-    <div class="gate-err" id="gerr"></div>
-    <div class="field"><label for="u">Login</label><input id="u" autocomplete="username" placeholder="operator"></div>
-    <div class="field"><label for="p">Parol</label><input id="p" type="password" autocomplete="current-password" placeholder="••••••••"></div>
-    <button class="btn wide" id="glogin">Kirish</button>
+    <div class="gate-err" id="gerr" role="alert"></div>
+    <div class="field"><label for="u">Login</label><input id="u" name="username" autocomplete="username" placeholder="operator" autocapitalize="off" spellcheck="false"></div>
+    <div class="field"><label for="p">Parol</label><input id="p" name="password" type="password" autocomplete="current-password" placeholder="••••••••"></div>
+    <button class="btn wide" id="glogin" type="submit">Kirish</button>
+    <div class="gate-wait" id="gwait"></div>
     <p class="gate-note">rollar asosiy tizimda · bu panel diagnostika uchun</p>
-  </div></div>
+  </form></div>
 </div>
 
 <!-- ═══ ILOVA ═══ -->
