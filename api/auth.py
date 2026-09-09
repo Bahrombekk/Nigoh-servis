@@ -1,4 +1,7 @@
 """Nigoh — autentifikatsiya endpointlari."""
+import ipaddress
+import math
+import os
 import threading
 import time
 from urllib.parse import parse_qs
@@ -23,30 +26,85 @@ ui_router = APIRouter(prefix="/auth", tags=["auth"])
 
 # ---------- login brute-force himoyasi ----------
 #
-# IP bo'yicha eksponensial kechikish: dastlabki 5 xato jazosiz (barmoq
-# xatosi uchun), keyin har xato kutishni ikki baravar oshiradi
-# (1s, 2s, 4s ... eng ko'pi 30s). So'rov javob olishdan oldin shu yerda
-# kutib turadi — parol terish qurollari sekinlashadi. Har xato jurnalga
-# `login_failed` bo'lib yoziladi — fail2ban shu satr bo'yicha ip'ni
-# butunlay bloklashi mumkin.
+# IP bo'yicha eksponensial KUTISH MUDDATI: dastlabki 5 xato jazosiz
+# (barmoq xatosi uchun), keyin har xato keyingi urinishgacha bo'lgan
+# muddatni ikki baravar oshiradi (1s, 2s, 4s ... eng ko'pi 30s). Muddat
+# tugamasdan kelgan so'rov 429 bilan qaytariladi — parol umuman
+# tekshirilmaydi. Har xato jurnalga `login_failed` bo'lib yoziladi —
+# fail2ban shu satr bo'yicha ip'ni butunlay bloklashi mumkin.
+#
+# Nima uchun uxlash EMAS: ilgari bu yerda `time.sleep(delay)` turardi va
+# izohda "sync endpoint threadpool'da — boshqalarni bloklamaydi" deb
+# yozilgandi. Bu noto'g'ri: Starlette'ning threadpool'i 40 ta ip va uni
+# barcha `def` endpointlar bo'lishadi (bu servisda deyarli hammasi).
+# 40 ta parallel xato kirish har biri 30 s uxlab pool'ni to'ldirardi va
+# kameralar ro'yxati ham, admin ham javob bermay qolardi. Kutish
+# muddatini mijozga aytish bir xil himoyani beradi, lekin serverda
+# birorta resurs egallamaydi.
 
-_FAIL_FREE = 5           # shu songacha kechikish yo'q
+_FAIL_FREE = 5           # shu songacha kutish yo'q
 _FAIL_MAX_DELAY = 30.0   # soniya
 _FAIL_TTL = 3600.0       # soniya — shuncha tinch turgan ip hisobi unutiladi
 _fails: dict[str, tuple[int, float]] = {}    # ip -> (xato soni, oxirgi vaqt)
 _fails_lock = threading.Lock()
 
+# `X-Forwarded-For` faqat ishonchli proksidan kelganda hisobga olinadi.
+# Aks holda cheklovni aylanib o'tish arzon: har so'rovda boshqa soxta
+# sarlavha yuborilsa har safar yangi "ip" hisobi ochiladi va eksponensial
+# kutish umuman ishlamaydi. MediaMTX konfiguratsiyasida shu tamoyil
+# allaqachon bor (`hlsTrustedProxies`), bu yerda yetishmasdi.
+#
+# Standart — loopback va ichki tarmoqlar: nginx shu mashinada turadi
+# (`network_mode: host`, proksi 127.0.0.1 ga), lekin uni alohida hostga
+# ko'chirsa ham sozlamasiz ishlayversin. Internetdan to'g'ridan kelgan
+# so'rovning sarlavhasiga hech qachon ishonilmaydi. `TRUSTED_PROXIES`
+# (vergul bilan) berilsa — faqat o'sha manzillar.
+_TRUSTED_ENV = os.environ.get("TRUSTED_PROXIES", "").strip()
+TRUSTED_PROXIES = {p.strip() for p in _TRUSTED_ENV.split(",") if p.strip()}
+
+
+def _ishonchli_proksi(peer: str) -> bool:
+    if TRUSTED_PROXIES:
+        return peer in TRUSTED_PROXIES
+    try:
+        manzil = ipaddress.ip_address(peer)
+    except ValueError:
+        return False
+    return manzil.is_loopback or manzil.is_private
+
 
 def _client_ip(request: Request) -> str:
-    # Nginx ortida haqiqiy manzil X-Forwarded-For'da (DEPLOY.md namunasi
-    # uni har doim qo'yadi); to'g'ridan ulanishda socket manzili.
-    fwd = request.headers.get("x-forwarded-for", "")
-    if fwd:
-        return fwd.split(",")[0].strip()
-    return request.client.host if request.client else ""
+    """So'rov kelgan haqiqiy manzil.
+
+    Nginx ortida u `X-Forwarded-For` da bo'ladi, lekin sarlavhaga faqat
+    ulanish IShONChLI proksidan kelgandagina ishonamiz — aks holda uni
+    har kim o'zi yozib yuboradi.
+    """
+    peer = request.client.host if request.client else ""
+    if _ishonchli_proksi(peer):
+        fwd = request.headers.get("x-forwarded-for", "")
+        if fwd:
+            return fwd.split(",")[0].strip()
+    return peer
 
 
-def _fail_delay(ip: str) -> float:
+def _https_dami(request: Request) -> bool:
+    """So'rov tomoshabingacha HTTPS bo'lganmi.
+
+    Nginx ortida ilova o'zi http'da tinglaydi, shuning uchun sxema
+    `X-Forwarded-Proto` dan olinadi — va u ham faqat ishonchli proksidan
+    hisobga olinadi (soxta sarlavha cookie'ni noto'g'ri belgilamasin).
+    """
+    peer = request.client.host if request.client else ""
+    if _ishonchli_proksi(peer):
+        proto = request.headers.get("x-forwarded-proto", "").split(",")[0].strip()
+        if proto:
+            return proto.lower() == "https"
+    return request.url.scheme == "https"
+
+
+def _retry_after(ip: str) -> float:
+    """Shu ip yana urinishi uchun necha soniya qolgani (0 — hoziroq mumkin)."""
     now = time.monotonic()
     with _fails_lock:
         if len(_fails) > 1000:               # xotira cheksiz o'smasin
@@ -54,11 +112,10 @@ def _fail_delay(ip: str) -> float:
                 if now - t > _FAIL_TTL:
                     _fails.pop(k, None)
         count, last = _fails.get(ip, (0, 0.0))
-        if now - last > _FAIL_TTL:
-            count = 0
-        if count < _FAIL_FREE:
+        if now - last > _FAIL_TTL or count < _FAIL_FREE:
             return 0.0
-        return min(2.0 ** (count - _FAIL_FREE), _FAIL_MAX_DELAY)
+        wait = min(2.0 ** (count - _FAIL_FREE), _FAIL_MAX_DELAY)
+        return max(0.0, last + wait - now)
 
 
 def _note_fail(ip: str) -> None:
@@ -142,7 +199,10 @@ def hls_auth(request: Request):
         path = "/".join(bolaklar[2:])
     else:
         path = "/".join(bolaklar)
-    token = (parse_qs(query).get("token") or [""])[0]
+    params = parse_qs(query)
+    token = (params.get("token") or [""])[0]
+    if "session" in params:
+        _bearer_yoq_ogohlantir(path)
 
     if security.internal_token_ok(token):
         return Response(status_code=204)
@@ -150,6 +210,38 @@ def hls_auth(request: Request):
         return Response(status_code=204)
     _log_denial(ip, "read", path, token)
     raise HTTPException(401, "Oqimga ruxsat yo'q")
+
+
+_BEARER_WARN_EVERY = 300.0
+_bearer_warned: list[float] = [0.0]
+
+
+def _bearer_yoq_ogohlantir(path: str) -> None:
+    """Manzilda `session=` bor — demak nginx Bearer sarlavhasini qo'ymayapti.
+
+    Sessiyasiz (CDN) rejimda MediaMTX manzillarga hech qanday parametr
+    qo'shmaydi. `session=` ko'rinishi bitta narsani anglatadi: shu so'rov
+    kelgan nginx blokida
+
+        proxy_set_header Authorization "Bearer <kalit>";
+
+    yo'q yoki kaliti mos emas. Bu jimgina o'tib ketadigan nosozlik emas:
+    sessiyali rejimda manba har uzilganda tomoshabin DOIMIY 401 oladi.
+    Ishlab chiqarishda aynan shu bo'ldi — HTTPS (443) bloki eski namunadan
+    ko'chirilgan edi, 80-portdagi blok esa to'g'ri. Shuning uchun muammo
+    faqat https'da ko'rinardi.
+    """
+    now = time.monotonic()
+    with _fails_lock:
+        if now - _bearer_warned[0] < _BEARER_WARN_EVERY:
+            return
+        _bearer_warned[0] = now
+    log("auth", "hls_bearer_yoq", level="warning", path=path,
+        sabab="nginx /media/hls/ blokida Authorization: Bearer yo'q yoki "
+              "kalit mos emas — MediaMTX sessiyali rejimda ishlayapti va "
+              "manba uzilganda tomoshabin doimiy 401 oladi",
+        yechim="python scripts/nginx_conf.py > /etc/nginx/sites-available/"
+               "negoh.conf && nginx -t && systemctl reload nginx")
 
 
 _DENY_EVERY = 60.0
@@ -177,9 +269,15 @@ def _log_denial(ip: str, action: str, path: str, token: str) -> None:
 @ui_router.post("/login")
 def login(body: LoginIn, request: Request, response: Response):
     ip = _client_ip(request)
-    delay = _fail_delay(ip)
-    if delay:
-        time.sleep(delay)   # sync endpoint threadpool'da — boshqalarni bloklamaydi
+    kutish = _retry_after(ip)
+    if kutish:
+        # Parol tekshirilmaydi — hisob ham oshmaydi, aks holda tinmay
+        # urinayotgan hujumchi shu ip'ni cheksiz qulflab qo'yardi.
+        soniya = max(1, math.ceil(kutish))
+        log("auth", "login_throttled", level="warning", ip=ip, kutish=soniya)
+        raise HTTPException(
+            429, f"Juda ko'p urinish — {soniya} soniyadan keyin qayta urining",
+            headers={"Retry-After": str(soniya)})
 
     with get_db() as db:
         security.purge_expired_sessions(db)
@@ -202,6 +300,11 @@ def login(body: LoginIn, request: Request, response: Response):
     response.set_cookie(
         security.SESSION_COOKIE, token, httponly=True, samesite="lax",
         max_age=security.SESSION_HOURS * 3600, path="/",
+        # HTTPS orqali kelgan bo'lsa cookie faqat HTTPS'da yuborilsin —
+        # 80-portdagi blok (yoki http'ga tushib qolgan havola) sessiyani
+        # ochiq tarmoqqa chiqarib yubormasin. Lokal http bilan ishlaganda
+        # bayroq qo'yilmaydi, aks holda debug UI umuman kira olmasdi.
+        secure=_https_dami(request),
     )
     return {"username": username, "role": role}
 
