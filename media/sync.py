@@ -24,6 +24,7 @@ Kodek haqida: ko'p kamera H.265 (HEVC) beradi, brauzerlar buni o'qiy
 olmaydi. Bunday kameralar FFmpeg orqali H.264 ga o'giriladi; NVIDIA
 karta bo'lsa butun jarayon GPU'da ketadi.
 """
+import ctypes
 import json
 import os
 import shutil
@@ -289,8 +290,46 @@ def ffmpeg_path() -> str:
 
 
 @lru_cache(maxsize=1)
+def cuda_usable() -> bool:
+    """NVIDIA drayveri shu jarayondan haqiqatan ochiladimi.
+
+    `cuInit` — CUDA'ning eng birinchi qadami; FFmpeg ham `-hwaccel cuda`
+    da aynan shuni chaqiradi. Kutubxona topilmasa yoki qurilma
+    berilmagan bo'lsa shu yerda bilinadi, FFmpeg ishga tushishini
+    kutmasdan.
+    """
+    for name in ("libcuda.so.1", "nvcuda.dll"):
+        try:
+            driver = ctypes.CDLL(name)
+        except OSError:
+            continue
+        try:
+            return driver.cuInit(0) == 0
+        except (AttributeError, OSError):
+            return False
+    return False
+
+
+@lru_cache(maxsize=1)
 def has_nvenc() -> bool:
-    """NVIDIA GPU orqali H.264 kodlash mumkinmi."""
+    """NVIDIA GPU orqali H.264 kodlash mumkinmi.
+
+    Ikki shart bor va ikkalasi ham tekshiriladi: FFmpeg nvenc bilan
+    yig'ilgan bo'lsin VA NVIDIA drayveri ochilsin.
+
+    Ikkinchisi nega muhim: konteynerga GPU berilmagan bo'lsa
+    `ffmpeg -encoders` ro'yxatida `h264_nvenc` baribir ko'rinadi (u
+    build vaqtida qo'shilgan), lekin o'girish boshlanishi bilan
+    "Cannot load libcuda.so.1" deb yiqiladi. Faqat ro'yxatga qaralsa
+    H.265 kamera hech qachon ochilmaydi — har urinishda GPU yo'li
+    tanlanib, har safar o'sha xato qaytadi. Drayver ochilmasa CPU
+    (`libx264`) yo'liga tushamiz: sekinroq, lekin oqim ishlaydi.
+
+    Yon foyda: GPU yo'q mashinada endi FFmpeg umuman chaqirilmaydi,
+    ya'ni har bir o'girish jarayoni shuncha tez boshlanadi.
+    """
+    if not cuda_usable():
+        return False
     exe = ffmpeg_path()
     if not exe:
         return False

@@ -20,3 +20,17 @@ services:
       # Baza, shifrlash kaliti, loglar — konteyner yangilansa ham qoladi.
       # BU PAPKANI ZAXIRALANG: ichida kamera parollari kaliti bor.
       - ./data:/data
+    # NVIDIA GPU — H.265 kameralarni H.264 ga o'girish uchun.
+    #
+    # GPU berilmasa servis o'zi CPU (`libx264`) ga tushadi va oqim
+    # baribir ishlaydi (`media/sync.py:has_nvenc`), lekin bitta H.265
+    # kamera bir yadroni to'liq egallaydi. GPU'da o'sha ish deyarli
+    # tekin va dekod-kodlash zanjiri xotiraga nusxa olmaydi.
+    #
+    # Talab: hostda NVIDIA drayveri va nvidia-container-toolkit
+    # (`nvidia-ctk --version` javob bersin). Yo'q bo'lsa shu ikki
+    # kalitni izohga oling — servis GPU'siz ham ko'tariladi.
+    runtime: nvidia
+    environment:
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,video,utility
