@@ -7,6 +7,7 @@ from core.log import log
 from media import reconciler
 from media import sync as mediamtx_sync
 
+from .config import ENABLE_UI
 from .helpers import cameras_for_mediamtx
 
 
@@ -74,6 +75,34 @@ def bootstrap() -> None:
     reconciler.start(_load_cameras)
 
     log("app", "started")
+
+    # Diagnostika konsoli — kuchli vosita: login yuzasi, Swagger va butun
+    # API bitta manzilda. Yoqilgani JIM qolmasin. `.env.example` da u
+    # o'chiq turibdi, lekin ishlab chiqarishda yoqib qo'yish va unutish
+    # oson — aynan shunday bo'ldi, konsol ochiq internetda turardi.
+    # WebRTC tashqaridan ishlashi uchun MediaMTX ICE nomzodida brauzer
+    # YETA OLADIGAN manzilni e'lon qilishi kerak. Sozlanmasa u faqat
+    # o'z interfeyslarini beradi (127.0.0.1, ichki LAN, docker0) va
+    # tashqi tomoshabinda signalizatsiya o'tadi, kadr esa kelmaydi.
+    #
+    # Bu eng qimmat jim nosozliklardan biri: har ochilish 6 soniya
+    # behuda kutib HLS'ga tushadi, HLS'ning sovuq starti esa 15-65
+    # soniya — foydalanuvchi buni "sekin" va "ochilmayapti" deb ko'radi.
+    # O'lchov: 5 kameradan 5 tasi 12 soniyada bitta kadr bermadi.
+    if not mediamtx_sync.WEBRTC_HOSTS:
+        log("app", "webrtc_tashqi_manzil_yoq", level="warning",
+            sabab="WEBRTC_HOSTS/MEDIA_HOST/MEDIA_BASE bo'sh — MediaMTX ICE "
+                  "nomzodlarida faqat ichki manzillar bo'ladi, tashqi "
+                  "tomoshabinga WebRTC kadr bermaydi",
+            yechim="`.env` ga WEBRTC_HOSTS=<domen yoki tashqi IP> yozing "
+                   "va ICE portini (UDP/TCP) firewallda oching")
+
+    if ENABLE_UI:
+        log("app", "ui_yoqilgan", level="warning",
+            sabab="ENABLE_UI=1 — /static (konsol), /docs va /auth/login "
+                  "ochiq turibdi",
+            yechim="ishlab chiqarishda ENABLE_UI=0 qiling yoki nginx "
+                   "darajasida IP bo'yicha cheklang")
 
     with get_db() as db:
         generated = security.ensure_admin(db)

@@ -67,6 +67,14 @@ def service_health():
         # ham bu son o'nlarcha bo'lib qolishi kerak.
         "managed": mediamtx_sync.managed_count(),
         "sse_subscribers": bus.subscriber_count(),
+        # WebRTC tashqi tomoshabin uchun ishlaydimi. Bo'sh ro'yxat —
+        # MediaMTX ICE nomzodlari sifatida faqat o'z interfeys manzillarini
+        # (127.0.0.1, ichki LAN, docker0) e'lon qiladi: signalizatsiya
+        # o'tadi, kadr esa hech qachon kelmaydi va har ochilish 6 soniya
+        # behuda kutib HLS'ga tushadi. Sozlash: WEBRTC_HOSTS / MEDIA_HOST /
+        # MEDIA_BASE. Maydon aynan shu nosozlikni UZOQDAN ko'rish uchun —
+        # ichkarida u faqat jurnaldagi bitta ogohlantirish bo'lib qolardi.
+        "webrtc_public_hosts": mediamtx_sync.WEBRTC_HOSTS,
         "snapshots": snapshots.cycle_stats(),
         # Ochilish vaqti — pleyer o'lchaydi (POST /metrics/open), bu yerda
         # transport kesimida p50/p95. Qaysi bosqich sekinligi ko'rinadi:

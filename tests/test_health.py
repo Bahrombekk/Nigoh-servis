@@ -12,13 +12,15 @@ def test_health_kalitsiz_va_shakli():
         assert set(body) == {"ok", "mediamtx", "mediamtx_foreign", "health",
                              "egress_mbps", "egress_capacity_mbps", "streams",
                              "readers", "warm", "managed", "sse_subscribers",
-                             "snapshots", "open_ms"}
+                             "snapshots", "open_ms", "webrtc_public_hosts"}
         # Muhitga bog'lanmaymiz: test mashinasida MediaMTX ishlayotgan
         # bo'lishi ham mumkin — shakl va turlargina tekshiriladi.
         assert isinstance(body["mediamtx"], bool)
         assert body["ok"] == body["mediamtx"]
         assert body["egress_mbps"] >= 0.0
         assert body["egress_capacity_mbps"] > 0
+        # Tashqi WebRTC manzillari — sozlanmagani UZOQDAN ko'rinishi kerak.
+        assert isinstance(body["webrtc_public_hosts"], list)
 
 
 def test_egress_tezligi_farqdan():
