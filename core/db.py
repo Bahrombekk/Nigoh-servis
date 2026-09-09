@@ -73,6 +73,17 @@ INDEXES = [
     # Bo'sh/NULL qiymatlar cheklovga tushmaydi — external_id ixtiyoriy.
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_cameras_external "
     "ON cameras(external_id) WHERE external_id IS NOT NULL AND external_id != ''",
+    # BITTA IP+PORT+RTSP YO'L — BITTA KAMERA.
+    #
+    # Cheklov aynan bazada turishi kerak: qo'shishdan oldingi tekshiruv
+    # yetmaydi, chunki tekshiruv bilan yozuv orasida RTSP probe'lari bir
+    # necha soniya ketadi. Shu oraliqda kelgan ikkinchi so'rov (tashqi
+    # tizimning takror urinishi, dev va prod muhitlari, tugmani ikki
+    # bosish) ham tekshiruvdan o'tib ketardi va ikkinchi nusxa
+    # yaratilardi — ishlab chiqarishda 195 kameradan 30 tasi shunday
+    # ikkilangan. Manual kameralar (ip bo'sh) cheklovga tushmaydi.
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_cameras_rtsp "
+    "ON cameras(ip, port, rtsp_path) WHERE ip IS NOT NULL AND ip != ''",
 ]
 
 
@@ -250,9 +261,72 @@ def _m2_demo_tozalash(db) -> None:
     )
 
 
+def _m3_takror_kamera(db) -> None:
+    """Ikkilangan kameralarni tozalaydi — `idx_cameras_rtsp` shundan
+    keyin quriladi (takror qolsa indeks umuman yaratilmaydi).
+
+    Bitta IP+port+RTSP yo'lga bir nechta yozuv bo'lsa, eng birinchisi
+    (kichik id) qoladi: MediaMTX yo'li, suratlar va uzilishlar tarixi
+    o'shanikida. Keyingilari o'chiriladi — ular o'sha kameraning
+    nusxasi, o'z ma'lumoti yo'q.
+    """
+    dups = db.execute(
+        "SELECT COUNT(*) FROM cameras WHERE ip IS NOT NULL AND ip != '' "
+        "AND id NOT IN (SELECT MIN(id) FROM cameras "
+        "WHERE ip IS NOT NULL AND ip != '' GROUP BY ip, port, rtsp_path)"
+    ).fetchone()[0]
+    if not dups:
+        return
+    db.execute(
+        "DELETE FROM cameras WHERE ip IS NOT NULL AND ip != '' "
+        "AND id NOT IN (SELECT MIN(id) FROM cameras "
+        "WHERE ip IS NOT NULL AND ip != '' GROUP BY ip, port, rtsp_path)")
+    # Ichkarida import: core.log DATA_DIR uchun shu modulni import
+    # qiladi — yuqorida yozilsa aylanma bo'ladi.
+    from core.log import log
+    log("db", "takror_kamera_ochirildi", removed=dups,
+        detail="bir xil IP+port+RTSP yo'lli nusxalar, birinchisi qoldirildi")
+
+
+def _m4_yolsiz_takror(db) -> None:
+    """RTSP yo'li ko'rsatilmagan takror kameralarni olib tashlaydi.
+
+    Tashqi tizim kamerani faqat IP bilan yuborganda yo'l standart
+    `/stream1` bo'lib qolgan, holbuki o'sha kamera Nigoh'da allaqachon
+    o'zining haqiqiy yo'li bilan turgan (dahua'da
+    `/cam/realmonitor?channel=1&subtype=0`). Yo'llar farq qilgani uchun
+    `idx_cameras_rtsp` bunday nusxani ushlamaydi — ro'yxatda bitta
+    kamera ikkita bo'lib ko'rinardi (ikkinchisi "yo'l: yo'q" bilan).
+
+    Faqat aniq o'lik nusxalar ketadi: yo'li standart `/stream1`, kodegi
+    hech qachon aniqlanmagan (ya'ni bu yo'ldan oqim kelmagan) va o'sha
+    IP+port'da kodegi aniqlangan, ishlayotgan boshqa kamera bor.
+    Registratorning haqiqiy `/stream1` kanaliga tegilmaydi — unda kodek
+    bor. Yangi nusxalar esa qo'shishning o'zida to'xtatiladi
+    (`api/admin.py:_path_given`).
+    """
+    shart = (
+        "FROM cameras WHERE ip IS NOT NULL AND ip != '' "
+        "AND rtsp_path = '/stream1' AND (codec IS NULL OR codec = '') "
+        "AND EXISTS (SELECT 1 FROM cameras o WHERE o.ip = cameras.ip "
+        "AND o.port = cameras.port AND o.id != cameras.id "
+        "AND o.rtsp_path != cameras.rtsp_path "
+        "AND o.codec IS NOT NULL AND o.codec != '')"
+    )
+    dups = db.execute(f"SELECT COUNT(*) {shart}").fetchone()[0]
+    if not dups:
+        return
+    db.execute(f"DELETE {shart}")
+    from core.log import log
+    log("db", "yolsiz_takror_ochirildi", removed=dups,
+        detail="IP bo'yicha takror, standart /stream1 yo'li ishlamagan")
+
+
 MIGRATIONS = [
     (1, _m1_kesish),
     (2, _m2_demo_tozalash),
+    (3, _m3_takror_kamera),
+    (4, _m4_yolsiz_takror),
 ]
 
 

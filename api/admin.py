@@ -6,12 +6,13 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
 from core import device_info as devinfo
 from core import fast_start, health, security
 from core.db import get_db, unique_slug
-from core.fast_start import channel_from_path
+from core.fast_start import channel_from_path, channel_marked
+from core.log import log
 from core.rtsp_probe import probe
 from media import reconciler
 from media import sync as mediamtx_sync
@@ -66,6 +67,114 @@ def _enrich_new_camera(camera_ids: list[int], ip: str, port: int,
     ).start()
 
 
+def _adopt_external_id(db, row, external_id: str):
+    """Takror so'rovdagi tashqi ID'ni mavjud kameraga biriktiradi.
+
+    Kamera ilgari external_id'siz qo'shilgan bo'lsa (qo'lda yoki NVR
+    importi bilan), takrordan keyin chaqiruvchi `ext:<id>` bilan murojaat
+    qila olsin. Kameraning o'z ID'si bor yoki so'ralgani boshqasiga band
+    bo'lsa — tegilmaydi (bitta external_id — bitta kamera).
+    """
+    if not external_id or (row["external_id"] or ""):
+        return row
+    taken = db.execute(
+        "SELECT 1 FROM cameras WHERE external_id = ? AND id != ?",
+        (external_id, row["id"])).fetchone()
+    if taken:
+        return row
+    db.execute("UPDATE cameras SET external_id = ? WHERE id = ?",
+               (external_id, row["id"]))
+    return db.execute("SELECT * FROM cameras WHERE id = ?",
+                      (row["id"],)).fetchone()
+
+
+# `CameraIn.rtsp_path` ning standart qiymati. Tanada yo'l bo'lmasa
+# Pydantic shuni qo'yadi, ba'zi mijozlar esa aynan shu satrni ataylab
+# yuboradi — ikkisi ham "kanal tanlanmagan" degani.
+DEFAULT_RTSP_PATH = "/stream1"
+
+
+def _path_given(cam) -> bool:
+    """So'rovda aynan qaysi kanal kerakligi ko'rsatilganmi.
+
+    Ko'rsatilmagan hisoblanadi: `rtsp_path` tanada yo'q (Pydantic
+    standart qiymatni qo'yadi), bo'sh, yoki aynan standart `/stream1` —
+    bu satr mijoz kodidagi standart qiymatdan kelgan bo'lishi mumkin va
+    hech qanday kanalni ko'rsatmaydi (`channel_marked` unda kanal
+    topmaydi).
+
+    Ko'rsatilgan bo'lsa (`/Streaming/Channels/201`,
+    `/cam/realmonitor?channel=2&subtype=0`) chaqiruvchi registratorning
+    aynan bir kanalini so'rayapti — bunday so'rov boshqa kanal bilan
+    qorishtirilmaydi.
+    """
+    if "rtsp_path" not in cam.model_fields_set:
+        return False
+    yol = cam.rtsp_path.strip()
+    return bool(yol) and yol != DEFAULT_RTSP_PATH
+
+
+def _rtsp_twin(db, cam, any_path: bool = False):
+    """Shu kamera allaqachon qo'shilganmi — o'sha yozuv yoki None.
+
+    Uch bosqich, qat'iydan yumshoqqa:
+
+    1. Aynan bir xil IP+port+yo'l — bazadagi `idx_cameras_rtsp` shu
+       kalitda turadi.
+    2. Bir xil IP+port va bir xil KANAL: `/stream1` bilan qo'shilgan
+       so'rov o'sha kameraning haqiqiy yo'liga
+       (`/cam/realmonitor?channel=1&subtype=0`) mos kelmaydi, holbuki
+       kamera bitta. Kanal ikkala yo'lda ham ataylab ko'rsatilgan
+       bo'lishi shart (`channel_marked`), aks holda `/stream1` va
+       `/stream2` bitta kamera deb qolardi.
+    3. `any_path` — kanal umuman ko'rsatilmagan so'rov (`_path_given`
+       yolg'on): tashqi tizim faqat IP yuboradi, yo'lni Nigoh o'zi topib
+       qo'ygan bo'ladi. U holda shu IP+port'dagi birinchi kamera "o'sha
+       kamera" hisoblanadi.
+
+    Shu yumshatishlarsiz bitta kamera ro'yxatda ikkita bo'lib ko'rinardi
+    — ikkinchisi `/stream1` bilan, oqim bermaydigan nusxa.
+    """
+    if cam.source_type != "rtsp":
+        return None
+    ip, port = cam.ip.strip(), cam.port
+    row = db.execute(
+        "SELECT * FROM cameras WHERE ip = ? AND port = ? AND rtsp_path = ?",
+        (ip, port, cam.rtsp_path.strip()),
+    ).fetchone()
+    if row is not None:
+        return row
+
+    rows = db.execute(
+        "SELECT * FROM cameras WHERE ip = ? AND port = ? ORDER BY id",
+        (ip, port)).fetchall()
+    if not rows:
+        return None
+    if any_path:
+        return rows[0]
+    kanal = channel_marked(cam.rtsp_path)
+    if kanal is None:
+        return None
+    for row in rows:
+        if channel_marked(row["rtsp_path"]) == kanal:
+            return row
+    return None
+
+
+def _existing_reply(row, cam, request, response):
+    """Takror so'rovga javob: yangi qo'shilgandagidek, lekin nusxasiz.
+
+    Tana yangi yaratilgandagidan farq qilmaydi — chaqiruvchi ajratmoqchi
+    bo'lsa, sarlavhada belgisi bor.
+    """
+    response.headers["X-Nigoh-Existing"] = "1"
+    log("app", "camera_duplicate_ignored", id=row["id"],
+        ip=cam.ip.strip(), port=cam.port,
+        rtsp_path=cam.rtsp_path.strip(),
+        external_id=cam.external_id or "")
+    return admin_camera(row, request)
+
+
 # ---------- kameralar CRUD ----------
 
 @router.get("/cameras")
@@ -97,22 +206,30 @@ def admin_list(request: Request, q: str = "", limit: int = 100, offset: int = 0)
 
 
 @router.post("/cameras", status_code=201)
-def admin_create(cam: CameraIn, request: Request):
+def admin_create(cam: CameraIn, request: Request, response: Response):
     cam.validate_complete()
-    # Takror qo'shishdan himoya: bitta IP+port+yo'l — bitta kamera.
-    # (Skan sahifasida "Qo'shish" ikki bosilsa jimgina nusxa paydo
-    # bo'lardi.) Xohlagan takror ataylab bo'lsa, yo'lni o'zgartiring.
+    # Takror qo'shish — xato emas: bitta IP+port+yo'l bitta kameraga
+    # tegishli, shuning uchun ikkinchi so'rov ham yangi qo'shilgandek
+    # javob oladi (201 + o'sha kameraning o'zi), lekin nusxa
+    # yaratilmaydi. Tashqi tizimning dev va prod muhitlari bitta
+    # Nigoh'ga ulanganda ikkinchisi 409 ga urilib ishlamay qolmasin;
+    # skan sahifasida "Qo'shish" ikki bosilishi ham shunday o'tadi.
+    # Ataylab ikkinchi nusxa kerak bo'lsa — RTSP yo'lni o'zgartiring.
+    #
+    # Kanal ko'rsatilmagan so'rovda IP+port yetadi (`_path_given`,
+    # `_rtsp_twin`): tashqi tizim faqat IP yuboradi, yo'lni esa Nigoh
+    # o'zi topgan bo'ladi — aks holda o'sha kameraning `/stream1` li,
+    # oqim bermaydigan ikkinchi nusxasi qo'shilardi.
+    aniq_yol = _path_given(cam)
+    if not cam.rtsp_path.strip():          # bo'sh yuborilgan — standartga
+        cam.rtsp_path = DEFAULT_RTSP_PATH
     if cam.source_type == "rtsp":
         with get_db() as db:
-            dup = db.execute(
-                "SELECT name FROM cameras WHERE ip = ? AND port = ? "
-                "AND rtsp_path = ?",
-                (cam.ip.strip(), cam.port, cam.rtsp_path.strip()),
-            ).fetchone()
-        if dup:
-            raise HTTPException(
-                409, f"Bu kamera allaqachon qo'shilgan: «{dup['name']}» "
-                     "(o'sha IP, port va RTSP yo'l)")
+            dup = _rtsp_twin(db, cam, any_path=not aniq_yol)
+            if dup is not None:
+                dup = _adopt_external_id(db, dup, cam.external_id)
+        if dup is not None:
+            return _existing_reply(dup, cam, request, response)
     codec, transcode, resolution, fps = detect_codec(cam, cam.password or "")
     sub_path, sub_codec = detect_sub_path(cam, cam.password or "")
     with get_db() as db:
@@ -138,7 +255,19 @@ def admin_create(cam: CameraIn, request: Request):
                 ),
             )
         except sqlite3.IntegrityError:
-            raise HTTPException(409, f"external_id band: {cam.external_id}")
+            # POYGA. Yuqoridagi tekshiruvdan keyin RTSP probe'lari bir
+            # necha soniya ketdi va shu oraliqda o'sha kamera boshqa
+            # so'rovda qo'shilgan bo'lishi mumkin — tashqi tizim javobni
+            # kutmay takror yuborsa, dev va prod muhitlari bir vaqtda
+            # ulansa, tugma ikki bosilsa. Tekshiruvning o'zi buni ushlay
+            # olmaydi, shuning uchun oxirgi so'z bazada:
+            # `idx_cameras_rtsp` nusxani yozdirmaydi. Javob esa
+            # tekshiruv ushlagandagidek — chaqiruvchi uchun farqi yo'q.
+            dup = _rtsp_twin(db, cam, any_path=not aniq_yol)
+            if dup is None:            # RTSP takrori emas — external_id band
+                raise HTTPException(409, f"external_id band: {cam.external_id}")
+            dup = _adopt_external_id(db, dup, cam.external_id)
+            return _existing_reply(dup, cam, request, response)
         row = db.execute("SELECT * FROM cameras WHERE slug = ?", (slug,)).fetchone()
     # Javob "Tekshirilmagan" bo'lib ketmasin: holat hozir aniqlanadi,
     # model/firmware fonda to'ladi.
@@ -204,6 +333,20 @@ def admin_update(ref: str, cam: CameraIn, request: Request):
                 ),
             )
         except sqlite3.IntegrityError:
+            # Ikki cheklov bor — sababini aytib beramiz. external_id
+            # avval tekshiriladi: `_rtsp_twin` kanal bo'yicha ham
+            # izlaydi, ya'ni bandligi external_id'dan bo'lsa ham shu
+            # IP'dagi qo'shnini topib, xato sababini almashtirib
+            # qo'yishi mumkin edi.
+            if cam.external_id and db.execute(
+                    "SELECT 1 FROM cameras WHERE external_id = ? AND id != ?",
+                    (cam.external_id, camera_id)).fetchone():
+                raise HTTPException(409, f"external_id band: {cam.external_id}")
+            twin = _rtsp_twin(db, cam)
+            if twin is not None and twin["id"] != camera_id:
+                raise HTTPException(
+                    409, f"Bu manzil boshqa kameraga tegishli: "
+                         f"«{twin['name']}» (o'sha IP, port va RTSP yo'l)")
             raise HTTPException(409, f"external_id band: {cam.external_id}")
         row = db.execute("SELECT * FROM cameras WHERE id = ?", (camera_id,)).fetchone()
     # Manzil/parol o'zgargan bo'lishi mumkin — holat va pasport yangilanadi.
@@ -477,20 +620,29 @@ def admin_nvr_import(body: NvrIn):
                 item["message"] = "allaqachon qo'shilgan — o'tkazib yuborildi"
                 continue
             slug = unique_slug(db, f"{body.region}_{item['name']}")
-            cur = db.execute(
-                "INSERT INTO cameras (name, region, lat, lng, stream_url, slug, ip, "
-                "port, username, password_enc, rtsp_path, sub_path, sub_codec, "
-                "vendor, enabled, "
-                "note, codec, resolution, transcode, always_on, node_id) "
-                "VALUES (?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)",
-                (item["name"], body.region.strip(), item["lat"], item["lng"], slug,
-                 body.ip.strip(), body.port, body.username.strip(), password_enc,
-                 item["rtsp_path"], item["sub_path"], item["sub_codec"],
-                 body.vendor, int(body.enabled),
-                 f"{body.ip} · {item['channel']}-kanal",
-                 item["codec"], item["resolution"], int(item["transcode"]),
-                 body.node_id),
-            )
+            try:
+                cur = db.execute(
+                    "INSERT INTO cameras (name, region, lat, lng, stream_url, slug, "
+                    "ip, port, username, password_enc, rtsp_path, sub_path, "
+                    "sub_codec, vendor, enabled, "
+                    "note, codec, resolution, transcode, always_on, node_id) "
+                    "VALUES (?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
+                    "?, ?, 0, ?)",
+                    (item["name"], body.region.strip(), item["lat"], item["lng"],
+                     slug, body.ip.strip(), body.port, body.username.strip(),
+                     password_enc,
+                     item["rtsp_path"], item["sub_path"], item["sub_codec"],
+                     body.vendor, int(body.enabled),
+                     f"{body.ip} · {item['channel']}-kanal",
+                     item["codec"], item["resolution"], int(item["transcode"]),
+                     body.node_id),
+                )
+            except sqlite3.IntegrityError:
+                # Kanal shu orada boshqa so'rovda qo'shilgan — cheklov
+                # bazada (`idx_cameras_rtsp`). Bitta kanal butun importni
+                # yiqitmaydi: qolganlari saqlanaveradi.
+                item["message"] = "allaqachon qo'shilgan — o'tkazib yuborildi"
+                continue
             created_ids.append(cur.lastrowid)
             created += 1
 

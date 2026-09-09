@@ -229,3 +229,85 @@ def test_tcp_faqat_timeoutdan_keyin_qayta_urinadi(monkeypatch):
     monkeypatch.setattr(health, "_connect", slow_then_ok)
     assert health._tcp_ok(("10.0.0.2", 554)) is True
     assert calls == [health.TIMEOUT, health.RETRY_TIMEOUT], "timeout'da bir marta qayta urinadi"
+
+
+# ---------- ikkilangan kameralar ----------
+
+def test_migratsiya_takror_kameralarni_tozalaydi(tmp_path):
+    """`_m3_takror_kamera` nusxalarni olib tashlaydi va indeks quriladi.
+
+    Cheklov eski bazaga qo'shilyapti — unda allaqachon ikkilangan
+    yozuvlar bor (ishlab chiqarishda 195 dan 30 tasi). Ular tozalanmasa
+    `CREATE UNIQUE INDEX` yiqiladi va indeks umuman paydo bo'lmaydi,
+    ya'ni tuzatish ishlamaydi.
+    """
+    import sqlite3
+
+    from core.db import INDEXES, _m3_takror_kamera
+
+    db = sqlite3.connect(tmp_path / "t.db")
+    db.row_factory = sqlite3.Row
+    db.execute("CREATE TABLE cameras (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+               "name TEXT, ip TEXT, port INTEGER, rtsp_path TEXT)")
+    db.executemany(
+        "INSERT INTO cameras (id, name, ip, port, rtsp_path) VALUES (?,?,?,?,?)",
+        [(1, "Birinchi", "10.0.0.1", 554, "/s1"),
+         (2, "Nusxa", "10.0.0.1", 554, "/s1"),
+         (3, "Yana nusxa", "10.0.0.1", 554, "/s1"),
+         (4, "Boshqa yo'l", "10.0.0.1", 554, "/s2"),
+         (5, "Boshqa IP", "10.0.0.2", 554, "/s1"),
+         # Manual kameralar (IP'siz) cheklovga tushmaydi — ikkitasi ham qoladi.
+         (6, "Manual", "", 554, ""),
+         (7, "Manual 2", "", 554, "")])
+
+    _m3_takror_kamera(db)
+
+    qolgan = [r["id"] for r in db.execute("SELECT id FROM cameras ORDER BY id")]
+    assert qolgan == [1, 4, 5, 6, 7]        # birinchisi qoldi, nusxalar ketdi
+
+    rtsp_index = [s for s in INDEXES if "idx_cameras_rtsp" in s]
+    assert rtsp_index, "indeks INDEXES ro'yxatida bo'lishi kerak"
+    db.execute(rtsp_index[0])               # takror qolganda shu yerda yiqilardi
+
+    with pytest.raises(sqlite3.IntegrityError):
+        db.execute("INSERT INTO cameras (name, ip, port, rtsp_path) "
+                   "VALUES ('Yangi nusxa', '10.0.0.1', 554, '/s1')")
+    db.close()
+
+
+def test_migratsiya_yolsiz_takrorni_tozalaydi(tmp_path):
+    """`_m4_yolsiz_takror` — IP bo'yicha takror, o'lik `/stream1` yozuvlari.
+
+    Tashqi tizim faqat IP yuborganda yo'l standart `/stream1` bo'lib
+    qolgan, kamera esa bazada o'zining haqiqiy yo'li bilan turgan —
+    yo'llar farq qilgani uchun `idx_cameras_rtsp` bunday nusxani
+    ushlamaydi. Registratorning haqiqiy `/stream1` kanaliga (kodegi bor)
+    tegilmasligi shu testda qulflanadi.
+    """
+    import sqlite3
+
+    from core.db import _m4_yolsiz_takror
+
+    db = sqlite3.connect(tmp_path / "t4.db")
+    db.row_factory = sqlite3.Row
+    db.execute("CREATE TABLE cameras (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+               "name TEXT, ip TEXT, port INTEGER, rtsp_path TEXT, codec TEXT)")
+    db.executemany(
+        "INSERT INTO cameras (id, name, ip, port, rtsp_path, codec) "
+        "VALUES (?,?,?,?,?,?)",
+        [(1, "Dahua 1-kanal", "10.0.0.1", 554, "/cam/realmonitor", "H264"),
+         (2, "IP bilan qo'shilgan nusxa", "10.0.0.1", 554, "/stream1", ""),
+         # Haqiqiy /stream1 kamerasi — kodegi bor, o'chirilmaydi.
+         (3, "Ishlayotgan stream1", "10.0.0.2", 554, "/stream1", "H264"),
+         (4, "Boshqa yo'l", "10.0.0.2", 554, "/cam/realmonitor", "H264"),
+         # Yolg'iz o'zi — takror emas, tekshirilmagan bo'lsa ham qoladi.
+         (5, "Yolg'iz", "10.0.0.3", 554, "/stream1", ""),
+         # O'sha IP'da ishlaydigan kamera yo'q — hukm chiqarilmaydi.
+         (6, "Ikkisi ham o'lik A", "10.0.0.4", 554, "/cam/realmonitor", ""),
+         (7, "Ikkisi ham o'lik B", "10.0.0.4", 554, "/stream1", "")])
+
+    _m4_yolsiz_takror(db)
+
+    qolgan = [r["id"] for r in db.execute("SELECT id FROM cameras ORDER BY id")]
+    assert qolgan == [1, 3, 4, 5, 6, 7], "faqat 2-yozuv — o'lik IP takrori"
+    db.close()

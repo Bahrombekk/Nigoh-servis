@@ -39,8 +39,41 @@ curl -X POST http://SERVER:8010/api/v1/admin/cameras \
 
 `external_id` — sizning tizimingizdagi ID. Keyin hamma joyda `12`
 o'rniga `ext:cam-toshkent-014` deb murojaat qilasiz — mapping jadval
-kerak emas. Takror `external_id` → `409`. Takror kamera (bir xil
-IP+port+RTSP yo'l) ham → `409` — bexosdan ikki nusxa yaratilmaydi.
+kerak emas. Takror `external_id` (boshqa kameraga band) → `409`.
+
+**Takror kamera (bir xil IP+port+RTSP yo'l) — xato emas:** so'rov
+yangi qo'shilgandagidek `201` va o'sha kameraning ma'lumotini oladi,
+lekin ikkinchi nusxa yaratilmaydi. Ya'ni qo'shish **idempotent**: bitta
+kamerani qayta-qayta yuborsangiz ham (dev va prod muhitlari bitta
+Nigoh'ga ulangan, so'rov qayta yuborilgan, tugma ikki bosilgan) javob
+har doim bir xil. Bunday javobda `X-Nigoh-Existing: 1` sarlavhasi
+bo'ladi — ajratmoqchi bo'lsangiz shu bilan biling; tanasi esa
+farq qilmaydi. Kamerada `external_id` bo'lmagan bo'lsa, takror
+so'rovdagi ID unga biriktiriladi (band bo'lmasa) — shundan keyin
+`ext:...` bilan ishlaydi.
+
+Bu kafolat bazadagi cheklovga tayanadi (`idx_cameras_rtsp`), shuning
+uchun ikkita so'rov **bir vaqtda** kelganda ham (javobni kutmay takror
+yuborish, dev va prod bir vaqtda) ikkinchi nusxa yaratilmaydi — qo'shish
+bir necha soniya davom etadi, chunki kamera RTSP orqali tekshiriladi.
+
+**`rtsp_path` yuborilmasa — IP+port yetadi.** Ya'ni "shu IP'dagi
+kamera" degan so'rov o'sha IP+port'da turgan kamerani qaytaradi, yo'li
+qanday bo'lishidan qat'i nazar. Bu muhim: kamerani bir marta skan
+orqali qo'shsangiz Nigoh yo'lni o'zi topib qo'yadi
+(`/cam/realmonitor?channel=1&subtype=0`), keyin siz faqat IP bilan
+yuborsangiz esa yo'l standart `/stream1` bo'lib qolardi — yo'llar
+farq qilgani uchun bu takror deb tanilmasdi va ro'yxatda bitta kamera
+ikkita bo'lib ko'rinardi (ikkinchisi oqim bermaydigan nusxa).
+
+> Bitta registratorning **ikkinchi kanalini** qo'shayotgan bo'lsangiz
+> `rtsp_path` ni ataylab yuboring (skan natijasidan oling) — aynan shu
+> maydon kanallarni ajratadi. Yo'l ko'rsatilgan so'rov faqat o'sha
+> IP+port+yo'l bilan solishtiriladi.
+
+Diqqat: takror so'rovda yuborilgan boshqa maydonlar (nom, region,
+parol, koordinata) mavjud kameraga **yozilmaydi** — o'zgartirish uchun
+`PUT /api/v1/admin/cameras/{ref}` ishlatiladi.
 
 Yaratish javobida holat (`state`) darhol tekshirilgan bo'ladi
 ("unknown" kutish yo'q); `model`/`firmware` fonda ONVIF/ISAPI'dan
@@ -397,7 +430,7 @@ ishga tushsa hisob noldan boshlanadi.
 | GET | `/api/v1/devices/scan/{job}/events` | SSE — kanallar kelgan sari |
 | GET | `/api/v1/devices/scan/{job}/snapshot/{ch}` | topilgan kanal surati |
 | GET | `/api/v1/devices/info` | model, firmware, seriya |
-| POST | `/api/v1/admin/cameras` | saqlash → `id`; takror IP+yo'l → `409` |
+| POST | `/api/v1/admin/cameras` | saqlash → `id`; takror IP+yo'l → o'sha `id` (`201`, nusxa yaratilmaydi) |
 | PUT / DELETE | `/api/v1/admin/cameras/{ref}` | `ref` = id yoki `ext:...` |
 | POST | `/api/v1/admin/cameras/{ref}/enabled` | yoqish/o'chirib qo'yish |
 | GET | `/api/v1/admin/cameras/{ref}/uptime` | uptime %, uzilishlar, segmentlar |

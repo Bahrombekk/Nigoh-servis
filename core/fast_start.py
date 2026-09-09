@@ -46,8 +46,16 @@ _CHANNEL_PATTERNS = (
 )
 
 
-def channel_from_path(rtsp_path: str) -> int:
-    """NVR'dagi kanal raqami — snapshot va ONVIF profilini tanlash uchun."""
+def channel_marked(rtsp_path: str) -> int | None:
+    """Yo'lda kanal ATAYLAB ko'rsatilgan bo'lsa — o'sha raqam, aks holda None.
+
+    `channel_from_path` topmaganda 1 qaytaradi (snapshot va ONVIF uchun
+    shunday qulay), lekin takror kamerani aniqlashda "1-kanal deb
+    yozilgan" bilan "kanal umuman ko'rsatilmagan" ni ajratish kerak:
+    `/stream1` da kanal yo'q, `/cam/realmonitor?channel=1&subtype=0` da
+    esa bor. Ikki xil yozuvni bitta kamera deb tanish uchun mezon aynan
+    shu — ular bir xil kanalni ataylab ko'rsatgani.
+    """
     path = rtsp_path or ""
     for pattern in _CHANNEL_PATTERNS:
         match = re.search(pattern, path, re.IGNORECASE)
@@ -56,7 +64,13 @@ def channel_from_path(rtsp_path: str) -> int:
             if pattern is _CHANNEL_PATTERNS[0] and n >= 100:
                 n //= 100        # 101 -> 1-kanal, 1602 -> 16-kanal
             return max(1, n)
-    return 1
+    return None
+
+
+def channel_from_path(rtsp_path: str) -> int:
+    """NVR'dagi kanal raqami — snapshot va ONVIF profilini tanlash uchun."""
+    marked = channel_marked(rtsp_path)
+    return marked if marked is not None else 1
 
 
 # ---------- ONVIF: darhol keyframe so'rash ----------
