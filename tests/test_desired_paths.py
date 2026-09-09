@@ -3,6 +3,7 @@ from media.sync import (
     TRANSCODE_SUFFIX,
     _managed,
     _warm,
+    camera_paths,
     desired_paths,
     mark_warm,
     note_managed,
@@ -47,15 +48,25 @@ def test_doim_tayyor_kamera_har_doim_royxatda():
     assert wanted["k1"]["sourceOnDemand"] is False
 
 
-def test_besh_ming_kamera_royxatni_shishirmaydi():
-    """5000 kamera bo'lsa ham doimiy ro'yxat kichik qoladi — MediaMTX'ga
-    yuboriladigan amallar soni kameralar soniga bog'liq emas."""
-    cams = [_cam(slug=f"k{i}", sub_path="/s2") for i in range(5000)]
-    cams[7]["always_on"] = True
-    wanted = desired_paths(cams)
-    # shablon + always_on kameraning asosiy va sub yo'li
-    assert len(wanted) == 3
-    assert "k7" in wanted and "k7" + SUB_SUFFIX in wanted
+def test_royxat_kameralar_soniga_qarab_osmaydi():
+    """Doimiy ro'yxat kameralar soniga bog'liq EMAS — 50 ta kamerada ham,
+    5000 tasida ham bir xil uzunlikda qoladi.
+
+    Aniq son bilan tekshirilmaydi: shablonlar soni o'zgaradi (o'girish,
+    devor mozaikasi va h.k.), lekin tamoyil o'zgarmasligi kerak — aks
+    holda MediaMTX'ga yuboriladigan amallar soni kameralar soniga
+    chiziqli o'sadi va `paths/add` narxi (2400 yo'lda 297 ms) portlaydi.
+    """
+    def royxat(soni: int) -> dict:
+        cams = [_cam(slug=f"k{i}", sub_path="/s2") for i in range(soni)]
+        cams[7]["always_on"] = True
+        return desired_paths(cams)
+
+    kichik, katta = royxat(50), royxat(5000)
+    assert len(katta) == len(kichik)
+    # Doimiy ro'yxatga tushgani faqat always_on kamera: shablonlar + 2 yo'l.
+    assert len(katta) == len(camera_paths([])) + 2
+    assert "k7" in katta and "k7" + SUB_SUFFIX in katta
 
 
 def test_desired_paths_sub_va_transcode():
@@ -190,7 +201,8 @@ def test_korilayotgan_sub_yol_issiq_bolib_qoladi(monkeypatch):
     yangilanishi kerak, aks holda sourceOnDemand qayta yoqilib manba
     qayta ochiladi."""
     from media import sync
-    sync._sent.clear(); sync._warm.clear()
+    sync._sent.clear()
+    sync._warm.clear()
     cam = _cam(sub_path="/s2", always_on=True)
     sent = {"v": 500}
 
@@ -211,11 +223,13 @@ def test_korilayotgan_sub_yol_issiq_bolib_qoladi(monkeypatch):
         sync.push_to_api([cam])
         assert sync.is_warm("k1" + SUB_SUFFIX), "ko'rilayotgan sub yo'l issiq qolishi kerak"
     finally:
-        sync._sent.clear(); sync._warm.clear()
+        sync._sent.clear()
+    sync._warm.clear()
 def test_issiq_muddat_qisqartirilmaydi():
     """Sub yo'l 10 daqiqaga issiq bo'lsa, asosiy yo'lning qisqa muddati
     uni qisqartirib yubormasligi kerak."""
-    from media.sync import WARM_MAIN_TTL, _warm as W
+    from media.sync import WARM_MAIN_TTL
+    from media.sync import _warm as W
     try:
         mark_warm("k1")                      # uzun muddat (sub)
         uzun = W["k1"]

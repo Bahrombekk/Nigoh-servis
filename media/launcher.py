@@ -21,8 +21,14 @@ from core.db import get_db
 from core.rtsp_probe import build_rtsp_url
 
 from . import sync
-from .sync import (RTSP_PORT, SUB_SUFFIX, ffmpeg_path, has_nvenc,
-                   relay_args, transcode_args)
+from .sync import (
+    RTSP_PORT,
+    SUB_SUFFIX,
+    ffmpeg_path,
+    has_nvenc,
+    relay_args,
+    transcode_args,
+)
 
 # Ikki vazifa bor:
 #

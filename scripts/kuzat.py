@@ -13,7 +13,14 @@ ochib qo'ying va qaysi ustun birinchi bo'lib o'zgarishini kuzating:
     python scripts/kuzat.py 8
     python scripts/kuzat.py 8 --base http://SERVER:8010 --key KALIT
 """
-import argparse, json, os, socket, sys, time, urllib.error, urllib.request
+import argparse
+import json
+import os
+import socket
+import sys
+import time
+import urllib.error
+import urllib.request
 
 p = argparse.ArgumentParser()
 p.add_argument("ref", help="kamera id yoki ext:...")

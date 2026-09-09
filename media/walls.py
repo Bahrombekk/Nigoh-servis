@@ -37,6 +37,15 @@ def wall_key(camera_ids: list[int], cols: int, rows: int) -> str:
     return hashlib.sha1(raw.encode()).hexdigest()[:12]
 
 
+# Registrda saqlanadigan eng ko'p devor soni. Har xil tanlov — alohida
+# kalit, ya'ni operatorlar erkin tanlaganda kombinatsiyalar cheksiz
+# (154 kamerada amalda chegara yo'q). Jadval o'sishi bilan bog'liq
+# birorta funksiya yo'q — shuning uchun eng eskilari olib tashlanadi.
+# Devor har ochilishida `POST /walls` uni qaytadan yozadi, ya'ni
+# ishlatilayotgani hech qachon eskirmaydi.
+WALL_LIMIT = 200
+
+
 def save_wall(camera_ids: list[int], cols: int, rows: int) -> str:
     ensure_table()
     key = wall_key(camera_ids, cols, rows)
@@ -45,6 +54,16 @@ def save_wall(camera_ids: list[int], cols: int, rows: int) -> str:
             "INSERT OR REPLACE INTO walls (key, camera_ids, cols, rows, created_at) "
             "VALUES (?, ?, ?, ?, datetime('now'))",
             (key, json.dumps(camera_ids), cols, rows),
+        )
+        # Tartib `rowid` bo'yicha, `created_at` bo'yicha EMAS: vaqt bir
+        # soniya aniqligida yoziladi va bir soniyada tug'ilgan devorlar
+        # teng chiqib, aynan ishlatilayotgani o'chib ketishi mumkin edi.
+        # `INSERT OR REPLACE` esa qatorni o'chirib qaytadan qo'yadi, ya'ni
+        # rowid har yozuvda o'sadi — bu aniq "oxirgi ishlatilgan" tartibi.
+        db.execute(
+            "DELETE FROM walls WHERE rowid NOT IN ("
+            "  SELECT rowid FROM walls ORDER BY rowid DESC LIMIT ?)",
+            (WALL_LIMIT,),
         )
     return key
 

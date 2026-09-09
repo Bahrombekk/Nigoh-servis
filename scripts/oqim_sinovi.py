@@ -24,9 +24,9 @@ import time
 
 sys.path.insert(0, "/app" if __import__("os").path.isdir("/app/core") else ".")
 
-from core import security                       # noqa: E402
-from core.db import get_db                      # noqa: E402
-from core.rtsp_probe import build_rtsp_url      # noqa: E402
+from core import security  # noqa: E402
+from core.db import get_db  # noqa: E402
+from core.rtsp_probe import build_rtsp_url  # noqa: E402
 
 ap = argparse.ArgumentParser()
 ap.add_argument("camera_id", type=int)
@@ -72,7 +72,7 @@ print("--- ffmpeg chiqishi (oxirgi 12 qator) ---")
 for ln in tail:
     print("  " + ln)
 
-print(f"\n--- natija ---")
+print("\n--- natija ---")
 print(f"  chidadi: {elapsed:.0f} / {a.sekund} soniya   (ffmpeg kodi {proc.returncode})")
 if elapsed >= a.sekund - 3 and proc.returncode == 0:
     print("  XULOSA: kamera ulanishni uzmadi. Muammo kamerada EMAS —")
