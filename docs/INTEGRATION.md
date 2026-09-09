@@ -433,10 +433,11 @@ barchasi haqiqiy ishga tushirishda uchragan muammolar:
    yig'ishni boshlaydi, play bosilganda 2-3 s da ochiladi.
 5. **Barqarorlik uchun**: `liveSyncDurationCount: 2`, bufer ~12 s,
    `maxLiveSyncPlaybackRate: 1.1` — titroq tarmoqda qotmaydi.
-6. Nigoh oldida qo'shimcha proxy bo'lsa: MediaMTX redirect'lari va
-   cookie yo'llari prefiksga qayta yozilishi shart — tayyor namuna
-   `deploy/negoh.das-uty.uz.conf` da (`proxy_redirect`,
-   `proxy_cookie_path`).
+6. Nigoh oldida qo'shimcha proxy bo'lsa: MediaMTX redirect'lari
+   prefiksga qayta yozilishi shart (`proxy_redirect`). Tayyor
+   konfiguratsiyani `python scripts/nginx_conf.py` chiqarib beradi —
+   qo'lda yozilgan blokda `auth_request` yoki `Authorization: Bearer`
+   tushib qolsa HLS 401 bilan uziladi (`deploy/README.md`).
 
 ## Video sahifangizda HTTPS
 

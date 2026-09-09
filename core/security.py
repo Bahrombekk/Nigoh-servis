@@ -162,6 +162,42 @@ def stream_access_ok(ip: str, path: str, token: str) -> bool:
     return alive
 
 
+# ---------- HLS "CDN kaliti" ----------
+#
+# MediaMTX `hlsCDNSecret` — bu kalit `Authorization: Bearer` sarlavhasida
+# kelsa MediaMTX so'rovni SESSIYASIZ o'tkazadi va manzillarga na
+# `session=`, na `token=` qo'shadi. Sarlavhani nginx qo'yadi.
+#
+# Nima uchun kalit endi AVTOMATIK: ilgari u .env dagi ixtiyoriy sozlama
+# edi va ikkita joyda (.env + nginx) qo'lda bir xil yozilishi kerak edi.
+# Amalda bu bajarilmadi — HTTPS (443) bloki docs/DEPLOY.md dagi eski
+# namunadan ko'chirilgan bo'lib, unda na `auth_request`, na Bearer
+# sarlavhasi bor edi. Natijada MediaMTX sessiyali rejimda qoldi va manba
+# har uzilganda tomoshabin DOIMIY 401 oldi:
+#
+#     .../media/hls/<slug>/video1_stream.m3u8?session=...&token=...  -> 401
+#
+# Lokalda muammo ko'rinmasdi, chunki MEDIA_BASE bo'sh bo'lganda brauzer
+# videoni to'g'ridan MediaMTX portidan oladi (nginx umuman yo'q).
+#
+# Endi kalit secret.key'dan hosil qilinadi — HAR DOIM mavjud, hech
+# qachon bo'sh emas. Sozlanadigan yagona joy nginx, uni esa
+# `python scripts/nginx_conf.py` tayyor holda chiqarib beradi.
+#
+# HLS_CDN_SECRET muhit o'zgaruvchisi qo'yilsa u ustun turadi (bir necha
+# server bitta kalitni bo'lishishi kerak bo'lgan hol).
+
+_cdn_key = hashlib.sha256(b"nigoh-hls-cdn:" + _load_key()).digest()
+
+
+def hls_cdn_secret() -> str:
+    """MediaMTX `hlsCDNSecret` va nginx `Authorization: Bearer` qiymati."""
+    override = os.environ.get("HLS_CDN_SECRET", "").strip()
+    if override:
+        return override
+    return base64.urlsafe_b64encode(_cdn_key).decode().rstrip("=")
+
+
 # ---------- ichki jarayonlar chiptasi ----------
 #
 # Launcher'ning FFmpeg'i (o'girish) va snapshot zaxirasi MediaMTX'ga

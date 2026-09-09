@@ -70,3 +70,50 @@ def test_prefikssiz_manzil_ham_ishlaydi(client):
     tok = security.stream_token("kam_d")
     r = _sora(client, f"/kam_d/index.m3u8?token={tok}", ip="203.0.113.13")
     assert r.status_code == 204
+
+
+# ---------- CDN kaliti ----------
+#
+# Kalit bo'sh bo'lsa MediaMTX sessiyali rejimga tushadi va manba har
+# uzilganda tomoshabin doimiy 401 oladi. Ilgari u .env dagi ixtiyoriy
+# sozlama edi va serverda qo'yilmay qolgandi — shu testlar shu holatning
+# qaytishiga yo'l qo'ymaydi.
+
+def test_cdn_kaliti_hech_qachon_bosh_emas():
+    kalit = security.hls_cdn_secret()
+    assert kalit
+    assert len(kalit) >= 32
+
+
+def test_cdn_kaliti_ozgarmaydi():
+    """Kalit har chaqiruvda bir xil — aks holda nginx'dagi nusxasi
+    darhol eskirardi va HAMMA HLS so'rovi 401 bo'lardi."""
+    assert security.hls_cdn_secret() == security.hls_cdn_secret()
+
+
+def test_mediamtx_konfiguratsiyasida_kalit_bor():
+    import yaml
+
+    from media import sync
+    conf = yaml.safe_load(sync.build_config([]))
+    assert conf["hlsCDNSecret"] == security.hls_cdn_secret()
+
+
+def test_muhit_ozgaruvchisi_ustun(monkeypatch):
+    monkeypatch.setenv("HLS_CDN_SECRET", "qolda-qoyilgan-kalit")
+    assert security.hls_cdn_secret() == "qolda-qoyilgan-kalit"
+
+
+def test_sessiyali_rejim_jurnalga_tushadi(client, monkeypatch):
+    """Manzilda `session=` bo'lsa — nginx Bearer qo'ymayapti. Bu jimgina
+    o'tib ketmasligi kerak: aynan shu nosozlik ishlab chiqarishda
+    haftalab sezilmay turgandi."""
+    from api import auth as auth_modul
+    yozuvlar = []
+    monkeypatch.setattr(auth_modul, "log",
+                        lambda *a, **k: yozuvlar.append((a, k)))
+    monkeypatch.setattr(auth_modul, "_bearer_warned", [0.0])
+    tok = security.stream_token("kam_e")
+    _sora(client, f"/media/hls/kam_e/video1_stream.m3u8?session=abc&token={tok}",
+          ip="203.0.113.20")
+    assert any(a[1] == "hls_bearer_yoq" for a, _ in yozuvlar)

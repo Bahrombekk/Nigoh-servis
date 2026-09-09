@@ -42,6 +42,7 @@ import yaml
 
 from core.db import DATA_DIR
 from core.rtsp_probe import build_rtsp_url
+from core.security import hls_cdn_secret
 
 # Loyiha ildizi — bu fayl media/ ichida turadi. mediamtx.yml ma'lumotlar
 # katalogida (standart — ildiz; konteynerda NIGOH_DATA volume).
@@ -50,10 +51,15 @@ CONFIG_PATH = DATA_DIR / "mediamtx.yml"
 API_BASE = os.environ.get("MEDIAMTX_API", "http://127.0.0.1:9997")
 API_TIMEOUT = 4.0
 
-# HLS uchun "CDN kaliti" — `.env` dagi HLS_CDN_SECRET dan olinadi va
+# HLS uchun "CDN kaliti" — `core.security.hls_cdn_secret()` beradi va
 # nginx'dagi `proxy_set_header Authorization "Bearer <kalit>"` bilan
-# AYNAN bir xil bo'lishi shart. Bo'sh qolsa mexanizm o'chiq va MediaMTX
-# eski sessiyali yo'lda ishlaydi.
+# AYNAN bir xil bo'lishi shart. Kalit `secret.key` dan hosil qilinadi,
+# ya'ni HAR DOIM mavjud — mexanizm hech qachon "o'chiq" qolmaydi.
+#
+# Ilgari u `.env` dagi ixtiyoriy sozlama edi va ikkita joyda (.env va
+# nginx) qo'lda bir xil yozilishi kerak edi. Amalda bu bajarilmadi:
+# `.env` da qiymat yo'q edi, konfiguratsiyaga `hlsCDNSecret: ''` tushardi
+# va nginx Bearer yuborsa ham MediaMTX sessiyali rejimda qolaverardi.
 #
 # Yoqilganda MediaMTX `Authorization: Bearer <kalit>` bilan kelgan
 # so'rovni SESSIYASIZ o'tkazadi va manzillarga na `session=`, na
@@ -74,7 +80,6 @@ API_TIMEOUT = 4.0
 # umuman kelmasa MediaMTX eski sessiyali yo'lda ishlaydi (ya'ni yuqorida
 # tasvirlangan 401 qaytadi) — shu holat /api/auth/hls da aniqlanib
 # jurnalga ogohlantirish bo'lib tushadi.
-HLS_CDN_SECRET = os.environ.get("HLS_CDN_SECRET", "")
 
 # Kamerani MediaMTX o'zi tortsinmi yoki FFmpeg tortsinmi.
 #
@@ -672,7 +677,7 @@ def build_config(cameras: list[dict], auth_url: str | None = None,
         "hlsSegmentCount": 7,
         "hlsSegmentDuration": "1s",
         "hlsAllowOrigins": ["*"],
-        "hlsCDNSecret": HLS_CDN_SECRET,
+        "hlsCDNSecret": hls_cdn_secret(),
         "hlsTrustedProxies": ["127.0.0.1"],
 
         "rtmp": False,

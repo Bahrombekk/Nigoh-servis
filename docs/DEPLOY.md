@@ -92,39 +92,43 @@ Parollar ochiq HTTP orqali yurmasligi uchun oldiga nginx qo'ying va
 video ham shu domen ostidan (HTTPS) yuradi, brauzerning mixed-content
 blokiga tushmaydi va 8888/8889-portlarni tashqariga ochish shart emas.
 
+Nginx konfiguratsiyasini **qo'lda yozmang** — u yaratiladi:
+
+```bash
+cd /opt/nigoh
+certbot certonly --webroot -w /var/www/html -d kamera.example.uz   # sertifikat
+python scripts/nginx_conf.py > /etc/nginx/sites-available/nigoh.conf
+ln -sf /etc/nginx/sites-available/nigoh.conf /etc/nginx/sites-enabled/
+nginx -t && systemctl reload nginx
+```
+
+Skript 80 (→443 redirect) va 443 bloklarini birga chiqaradi. Sertifikat
+hali yo'q bo'lsa `--no-ssl` bilan boshlang, certbot'dan keyin qaytadan
+yarating. Tafsilotlar: `deploy/README.md`.
+
+**Nima uchun skript.** `/media/hls/` blokida ikkita narsa bo'lishi shart
+va ular boshqa joydagi qiymat bilan mos kelishi kerak:
+
+| Nginx'da | Nima bo'ladi bo'lmasa |
+|---|---|
+| `auth_request /_hlsauth;` | Chipta tekshirilmaydi — slug'ni bilgan har kim kamerani ko'radi |
+| `proxy_set_header Authorization "Bearer <kalit>";` | MediaMTX **sessiyali** rejimda qoladi: manba qisqa uzilsa HLS muxeri yo'q qilinadi, sessiya o'ladi va tomoshabin **doimiy 401** oladi |
+
+Kalit `secret.key` dan avtomatik hosil bo'ladi (MediaMTX tomonda
+`hlsCDNSecret`, nginx tomonda Bearer) — skript ikkalasini bir xil
+qiladi. Ilgari bu qo'lda ko'chirilardi va 443-blok eski namunadan
+olingani uchun HTTPS'da video 401 bilan uzilardi, lokalda esa (nginx
+umuman qatnashmagani sababli) hammasi ishlayotgandek ko'rinardi.
+
+Tekshirish — javobda `session=` **bo'lmasligi** kerak:
+
+```bash
+curl -s "https://kamera.example.uz/media/hls/<slug>/index.m3u8?token=<chipta>" | grep -c session
+```
+
 `X-Forwarded-For` majburiy: MediaMTX tomoshabinning haqiqiy IP'sini shu
 sarlavhadan oladi (aks holda hamma 127.0.0.1 bo'lib ko'rinadi va HLS
-sessiyalari aralashadi).
-
-```nginx
-server {
-    listen 443 ssl;
-    server_name kamera.example.uz;
-    ssl_certificate     /etc/letsencrypt/live/kamera.example.uz/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/kamera.example.uz/privkey.pem;
-
-    # API + UI
-    location / {
-        proxy_pass http://127.0.0.1:8010;
-        proxy_set_header Host $host;
-        proxy_set_header X-Forwarded-Proto https;
-        proxy_set_header X-Forwarded-For $remote_addr;
-    }
-
-    # HLS video (MEDIA_BASE=/media bo'lganda)
-    location /media/hls/ {
-        proxy_pass http://127.0.0.1:8888/;
-        proxy_set_header X-Forwarded-For $remote_addr;
-        proxy_buffering off;
-    }
-
-    # WebRTC signal (WHEP)
-    location /media/whep/ {
-        proxy_pass http://127.0.0.1:8889/;
-        proxy_set_header X-Forwarded-For $remote_addr;
-    }
-}
-```
+sessiyalari aralashadi) — skript uni har bir blokda qo'yadi.
 
 WebRTC media (8189) proksisiz to'g'ridan ishlayveradi — firewall'da
 **udp va tcp** ochiq tursin; ikkalasi ham ulanolmasa brauzer o'zi
