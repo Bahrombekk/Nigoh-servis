@@ -116,8 +116,11 @@ async function api(path, options = {}) {
     try { detail = (await res.json()).detail || detail; } catch (e) {}
     throw new Error(detail);
   }
-  if (res.status === 204) return null;
-  return res.json();
+  if (res.status === 204) return options.raw ? {data: null, res} : null;
+  const data = await res.json();
+  // raw — javob sarlavhalari ham kerak bo'lganda (masalan
+  // X-Nigoh-Existing: kamera allaqachon bor edi).
+  return options.raw ? {data, res} : data;
 }
 
 /* API kechikishi — shu brauzerning o'z so'rovlaridan p95. Resurs
@@ -3405,24 +3408,35 @@ async function scanAdd(picked) {
     $("#sreg").focus(); return; }
   const prefix = $("#spre").value.trim() || region;
   $("#sadd").disabled = true;
-  let ok = 0;
+  let ok = 0, bor = 0;
   for (const ch of picked) {
     try {
-      await api("/api/v1/admin/cameras", {method: "POST", body: {
-        name: `${prefix} ${ch.channel}-kanal`, region,
-        source_type: "rtsp", ip: $("#sip").value.trim(),
-        port: +$("#sport").value || 554,
-        username: $("#slog").value.trim(), password: $("#spw").value || null,
-        vendor: (scanMeta && scanMeta.vendor) || "boshqa",
-        rtsp_path: ch.rtsp_path || "/stream1"}});
-      ok++;
+      const r = await api("/api/v1/admin/cameras", {method: "POST", raw: true,
+        body: {
+          name: `${prefix} ${ch.channel}-kanal`, region,
+          source_type: "rtsp", ip: $("#sip").value.trim(),
+          port: +$("#sport").value || 554,
+          username: $("#slog").value.trim(), password: $("#spw").value || null,
+          vendor: (scanMeta && scanMeta.vendor) || "boshqa",
+          rtsp_path: ch.rtsp_path || "/stream1"}});
+      // Servis takrorni xato qilmaydi — o'sha kamerani qaytaradi.
+      // Nusxa yaratilmagani ko'rinib turishi uchun alohida sanaymiz.
+      if (r.res.headers.get("X-Nigoh-Existing")) {
+        bor++;
+        pushEv("amal", `<b>${ch.channel}-kanal</b> allaqachon bor · `
+          + `${esc(r.data.name)}`);
+      } else {
+        ok++;
+      }
       ch._pick = false;
     } catch (e) {
       pushEv("xato", `<b>${ch.channel}-kanal</b> saqlanmadi · ${esc(e.message)}`);
     }
   }
-  toast("Qo'shildi", `${ok}/${picked.length} kanal saqlandi`, ok === picked.length ? "" : "mid");
-  pushEv("amal", `skan · ${ok} ta kamera qo'shildi`);
+  const bori = bor ? `, ${bor} ta allaqachon bor edi` : "";
+  toast("Qo'shildi", `${ok}/${picked.length} kanal saqlandi${bori}`,
+        ok + bor === picked.length ? "" : "mid");
+  pushEv("amal", `skan · ${ok} ta kamera qo'shildi${bori}`);
   drawScanGrid();
   loadCams();
 }
