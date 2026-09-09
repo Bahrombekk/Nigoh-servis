@@ -10,6 +10,9 @@ Tekshiruv arzon bo'lishi uchun:
     portga javob beryaptimi). Bu bir necha millisekund va trafik deyarli nol.
   * Takrorlanuvchi manzillar birlashtiriladi: 2000 kamera 40 ta NVR'da
     bo'lsa, 2000 emas, 40 ta tekshiruv ketadi.
+  * MediaMTX oqim olayotgan manzil UMUMAN tekshirilmaydi — tiriklik
+    allaqachon isbotlangan, ortiqcha ulanish esa ba'zi kameralarda
+    jonli sessiyani uzib qo'yadi (`_sweep` izohi).
   * Hammasi parallel (manzillar soniga moslashadi), har 60 soniyada bir marta.
 """
 import socket
@@ -72,7 +75,23 @@ def _tcp_ok(pair: tuple[str, int]) -> bool:
     return _connect(pair, RETRY_TIMEOUT)[0]
 
 
-def _rescue_streaming(fresh: dict[tuple[str, int], bool]) -> list:
+def _live_pairs() -> set[tuple[str, int]]:
+    """MediaMTX ayni damda oqim olayotgan (ip, port) juftliklari.
+
+    Ilgak o'rnatilmagan yoki so'rov yiqilgan bo'lsa bo'sh to'plam —
+    tekshiruv o'z yo'lida davom etadi.
+    """
+    if _streaming_pairs is None:
+        return set()
+    try:
+        return _streaming_pairs()
+    except Exception as exc:                # noqa: BLE001
+        log("health", "streaming_probe_failed", level="warning", error=str(exc))
+        return set()
+
+
+def _rescue_streaming(fresh: dict[tuple[str, int], bool],
+                      live: set[tuple[str, int]] | None = None) -> list:
     """Oqim ketayotgan manzilni "o'chiq" deb belgilamaydi.
 
     TCP tekshiruvi va MediaMTX ikki mustaqil dalil, va ular teng emas:
@@ -84,12 +103,11 @@ def _rescue_streaming(fresh: dict[tuple[str, int], bool]) -> list:
     Zaif dalil kuchlisini bekor qila olmasligi kerak.
     """
     failed = [pair for pair, ok in fresh.items() if not ok]
-    if not failed or _streaming_pairs is None:
+    if not failed:
         return []
-    try:
-        live = _streaming_pairs()
-    except Exception as exc:                # noqa: BLE001
-        log("health", "streaming_probe_failed", level="warning", error=str(exc))
+    if live is None:
+        live = _live_pairs()
+    if not live:
         return []
     rescued = [pair for pair in failed if pair in live]
     for pair in rescued:
@@ -115,11 +133,31 @@ def _sweep() -> None:
             _statuses.clear()
         return
 
-    workers = min(MAX_WORKERS, max(8, len(pairs)))
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        results = list(pool.map(_tcp_ok, pairs))
+    # OQIM KETAYOTGAN MANZIL TEKSHIRILMAYDI.
+    #
+    # Sabab shunchaki tejash emas. Kameralar (Dahua, ONVIF klonlari)
+    # bir vaqtda ochilgan RTSP ulanishlari soniga sezgir: tekshiruv
+    # ulanib darhol uziladi, kamera esa shu payt tirik sessiyani
+    # yopib qo'yishi mumkin — ishlab chiqarishda tcpdump'da ko'rindi
+    # (tekshiruv SYN'iga SYN-ACK va AYNAN SHU MILLISEKUNDDA jonli
+    # sessiyaga FIN). MediaMTX o'sha manzildan bayt olayotgan bo'lsa,
+    # kamera tirikligi allaqachon isbotlangan — qo'shimcha ulanishning
+    # yangi ma'lumoti yo'q, zarari esa bor.
+    live = _live_pairs()
+    probe = [pair for pair in pairs if pair not in live]
 
-    fresh = dict(zip(pairs, results))
+    results = []
+    if probe:
+        workers = min(MAX_WORKERS, max(8, len(probe)))
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            results = list(pool.map(_tcp_ok, probe))
+
+    fresh = dict(zip(probe, results))
+    for pair in pairs:
+        if pair in live:
+            fresh[pair] = True
+    # Tekshiruv davomida oqim boshlangan bo'lsa ham "o'chiq" deb
+    # belgilanmasin — ro'yxat sweep boshida olingan.
     _rescue_streaming(fresh)
 
     # Holat o'zgarganlarni SSE abonentlariga e'lon qilamiz. Birinchi sweep
@@ -231,10 +269,13 @@ def check_now(ip: str | None, port: int | None) -> bool | None:
     if not ip:
         return None
     pair = (ip, port or 554)
-    ok = _tcp_ok(pair)
-    if not ok:
-        probe = {pair: False}
-        if _rescue_streaming(probe):
+    # Oqim ketayotgan manzilga ulanmaymiz (`_sweep` izohi) — MediaMTX
+    # dalili yetarli.
+    if pair in _live_pairs():
+        ok = True
+    else:
+        ok = _tcp_ok(pair)
+        if not ok and _rescue_streaming({pair: False}):
             ok = True
     with _lock:
         old = _statuses.get(pair)
