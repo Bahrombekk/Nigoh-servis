@@ -11,7 +11,7 @@
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect x='1' y='1' width='14' height='14' rx='4' fill='%232563EB'/></svg>">
 <!-- ?v= — kesh buster: oldindagi proxy'lar statikani keshlab qolsa,
      har chiqarilishda raqamni oshiring, URL o'zgarib yangi fayl yuklanadi. -->
-<link rel="stylesheet" href="/static/style.css?v=25">
+<link rel="stylesheet" href="/static/style.css?v=32">
 </head>
 <body>
 
@@ -198,7 +198,7 @@
             <button class="pill" data-h="168">7 kun</button>
             <button class="pill" data-h="720">30 kun</button>
           </span></div>
-        <div class="tbl"><table><thead><tr>
+        <div class="tbl tbl-scroll"><table><thead><tr>
           <th style="width:36px">#</th><th>Guruh</th><th>Kamera</th><th style="width:220px">Uzilish darajasi</th>
           <th>Uptime</th><th>Uzilish</th><th>O'chiq turgan</th>
         </tr></thead><tbody id="gtb"></tbody></table></div>
@@ -219,6 +219,7 @@
           <button class="pill" data-f="online"><i class="dot s-online"></i>online <span class="n"></span></button>
           <button class="pill" data-f="stalled"><i class="dot s-stalled"></i>stalled <span class="n"></span></button>
           <button class="pill" data-f="offline"><i class="dot s-offline"></i>offline <span class="n"></span></button>
+          <button class="pill" data-f="nostream"><i class="dot s-stalled"></i>oqim yo'q <span class="n"></span></button>
           <button class="pill" data-f="unknown"><i class="dot s-unknown"></i>unknown <span class="n"></span></button>
         </span>
         <label class="search-box"><svg class="ic"><use href="#i-search"/></svg>
@@ -316,20 +317,39 @@
         <div class="head"><span class="tile-i xl"><svg class="ic xl"><use href="#i-grid"/></svg></span>
           <div class="ttl"><h1 class="h1">Devor</h1><p class="sub" id="wsum">—</p></div></div>
         <span class="tools">
+          <button class="btn" id="wlive"><svg class="ic sm"><use href="#i-play"/></svg><span>Hammasini jonli ochish</span></button>
+          <button class="btn ghost" id="wclear" title="Tanlovni tozalash"><svg class="ic sm"><use href="#i-x"/></svg><span>Tozalash</span></button>
+        </span>
+      </div>
+      <div class="filters wall-bar">
+        <span class="tools" id="wmode">
+          <button class="pill sel" data-wm="all">Hammasi</button>
+          <button class="pill" data-wm="online"><i class="dot s-online"></i>Online</button>
+          <button class="pill" data-wm="prob"><i class="dot s-offline"></i>Muammoli</button>
+          <button class="pill" data-wm="sel">Tanlangan <span class="n" id="wseln"></span></button>
+        </span>
+        <label class="select"><svg class="ic sm" style="position:static"><use href="#i-pin"/></svg>
+          <select id="wregion"><option value="">Barcha hudud</option></select>
+          <svg class="ic sm"><use href="#i-chev-d"/></svg></label>
+        <label class="select"><svg class="ic sm" style="position:static"><use href="#i-server"/></svg>
+          <select id="wnode"><option value="">Barcha tugun</option></select>
+          <svg class="ic sm"><use href="#i-chev-d"/></svg></label>
+        <label class="search-box"><svg class="ic"><use href="#i-search"/></svg>
+          <input id="wsearch" placeholder="Nom, IP yoki hudud…"></label>
+        <span class="tools" style="margin-left:auto">
+          <span class="seg" id="wview">
+            <button class="pill sq sel" data-wv="snap" title="Suratlar — yengil, ko'p kamera uchun">Surat</button>
+            <button class="pill sq" data-wv="live" title="Jonli video — bir necha kamera uchun">Jonli</button>
+          </span>
+          <span class="vsep"></span>
           <button class="pill sq mono" data-w="4">2×2</button>
           <button class="pill sq mono sel" data-w="9">3×3</button>
           <button class="pill sq mono" data-w="16">4×4</button>
           <button class="pill sq mono" data-w="36">6×6</button>
-          <span class="vsep"></span>
-          <button class="pill sq" id="wprob">Faqat muammolilar</button>
-          <button class="pill sq" id="wsel">Tanlanganlar <span class="n" id="wseln"></span></button>
-          <button class="btn" id="wlive"><svg class="ic sm"><use href="#i-play"/></svg><span>Hammasini jonli ochish</span></button>
-          <button class="btn ghost icon" id="wclear" title="Tanlovni tozalash"><svg class="ic"><use href="#i-x"/></svg></button>
         </span>
       </div>
       <div class="wall-box"><div class="wall" id="wall"></div><div id="wempty"></div></div>
-      <div class="tip"><svg class="ic"><use href="#i-info"/></svg><span><b>Maslahat:</b> katakni bosing — video ochiladi (sub oqim).
-        Kamera nomini bosib uning sahifasiga o'ting.</span><span class="r">Devor rejimida real vaqtda kuzatuv · NIGOH diagnostika</span></div>
+      <div class="wall-foot"><span id="wcount" class="meta"></span><span class="pager" id="wpager"></span></div>
     </section>
 
     <!-- kamera sahifasi (diagnostika) -->
@@ -488,7 +508,7 @@
 </div></div>
 <div id="toasts"></div>
 
-<script src="/static/vendor/hls.min.js?v=25"></script>
-<script src="/static/app.js?v=25"></script>
+<script src="/static/vendor/hls.min.js?v=32"></script>
+<script src="/static/app.js?v=32"></script>
 </body>
 </html>

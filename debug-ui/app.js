@@ -29,18 +29,32 @@ const age = (s) => s == null || s < 0 ? "yo'q"
   : s < 3600 ? Math.round(s / 60) + " daq" : Math.round(s / 3600) + " soat";
 const clock = () => new Date().toTimeString().slice(0, 8);
 const LBL = {online:"online", stalled:"stalled · kadr yo'q", offline:"offline",
-             unknown:"unknown · tekshirilmagan", disabled:"o'chirilgan"};
+             unknown:"unknown · tekshirilmagan", disabled:"o'chirilgan",
+             nostream:"oqim yo'q"};
 /* Muammo-yo'naltirilgan ko'rinish: e'tibor talab qiladigan holatlar va
    ularning tartibi — yomoni tepada. */
 const PROB = new Set(["offline", "stalled", "unknown"]);
-const RANK = {offline:0, stalled:1, unknown:2, disabled:3, online:4};
+/* Ko'rsatish uchun holat: port 554 ochiq bo'lsa health "online" deydi,
+   lekin RTSP tekshiruvi kodek olmagan bo'lsa oqim aslida ishlamaydi
+   (ko'pincha login/parol noto'g'ri yoki RTSP yo'l xato). Bunday kamerani
+   alohida "nostream" toifasiga chiqaramiz va MUAMMOLI hisoblaymiz. */
+function effState(c) {
+  if (c.state === "online" && c.ip && !c.codec && c.source_type !== "manual") return "nostream";
+  return c.state;
+}
+/* Kamera e'tibor talab qiladimi (muammoli ro'yxati, filtr, sanoq shu). */
+function isProb(c) {
+  const e = effState(c);
+  return e === "offline" || e === "stalled" || e === "unknown" || e === "nostream";
+}
+const RANK = {offline:0, nostream:1, stalled:2, unknown:3, disabled:4, online:5};
 /* Holat -> nuqta rangi (CSS o'zgaruvchilari style.css da). */
 const DOT = {online:"var(--d-on)", stalled:"var(--d-stall)", offline:"var(--d-off)",
-             unknown:"var(--d-unk)", disabled:"var(--d-dis)"};
+             unknown:"var(--d-unk)", disabled:"var(--d-dis)", nostream:"var(--d-stall)"};
 /* Hukm turi -> nuqta rangi / matn rangi. */
 const KDOT = {ok:"var(--d-on)", warn:"var(--d-stall)", bad:"var(--d-off)", idle:"var(--d-unk)"};
 const KINK = {ok:"var(--green)", warn:"var(--amber)", bad:"var(--red)", idle:"var(--gray)"};
-const stateKind = (st) => st === "online" ? "ok" : st === "stalled" ? "warn"
+const stateKind = (st) => st === "online" ? "ok" : st === "stalled" || st === "nostream" ? "warn"
   : st === "offline" ? "bad" : "idle";
 
 /* Ikonka — index.html dagi SVG sprite'dan. */
@@ -127,7 +141,7 @@ function apiP95() {
 function drawTopbar() {
   const cams = S.cams || [];
   const cnt = (st) => cams.filter((c) => c.state === st).length;
-  const prob = cams.filter((c) => PROB.has(c.state)).length;
+  const prob = cams.filter((c) => isProb(c)).length;
   const kind = !cams.length ? "okp" : prob ? (cnt("offline") ? "bad" : "warn") : "okp";
   $("#hpill").className = "hchip " + kind;
   $("#tbtitle").textContent = cams.length ? `${prob} muammoli` : "yuklanmoqda…";
@@ -164,13 +178,14 @@ const S = {
   prevRt: null,           // {t, paths}
   filt: "prob", sortK: "state", sortD: 1, picked: new Set(),
   up7: null, up7At: 0,    // kamera id -> 7 kunlik uptime (jadval ustuni)
-  wallN: 9, wallMode: "all", wallLive: false,
+  wallN: 9, wallMode: "all", wallView: "snap", wallRegion: "", wallNode: "", wallQ: "", wallPage: 1,
   evlog: [], evFilt: "all", evPause: false, evN: 0,
   gBy: "region", gHours: 24, groups: null,      // topologiya: reyting jadvali
   tHours: 24, stat: null, worst: null, causes: null,   // uzilishlar sahifasi
   diagDay: 0, hist: null,                       // kamera sahifasi
   sel: null, busy: null, note: {}, vsort: "worst",   // "xato qayerda?" tanlovi va amal izi
   camsAt: 0, tq: "",
+  cpage: 1, cper: 25,          // kameralar jadvali sahifasi
   curId: null, page: "verdict",
   nodes: [], health: null, status: null, recentEv: [],
 };
@@ -451,7 +466,7 @@ $("#spweye").onclick = () => {
 };
 
 function drawNav() {
-  const prob = S.cams.filter((c) => PROB.has(c.state)).length;
+  const prob = S.cams.filter((c) => isProb(c)).length;
   $("#nv").textContent = S.cams.length ? (prob || "✓") : "";
   $("#nv").className = "n" + (prob ? " alert" : "");
   $("#nc").textContent = S.cams.length || "";
@@ -578,6 +593,24 @@ function verdictFor(c) {
     };
   }
 
+  if (c.state === "online" && c.ip && !c.codec && c.source_type !== "manual") {
+    const nvr2 = nvrInfo(c);
+    return {
+      badge: "kamera tomonida", kind: "warn",
+      title: "Port ochiq, lekin RTSP oqim bermayapti",
+      body: `${c.ip}:${port} TCP javob beryapti (health shuning uchun "online" deydi), lekin RTSP tekshiruvi kodek ololmadi — oqim aslida kelmayapti. Ko'pincha login/parol noto'g'ri yoki RTSP yo'l xato. "Qayta tekshirish" aniq bosqichni aytadi: tarmoq → login → yo'l.`,
+      actLabel: "Qayta tekshirish", actKind: "probe",
+      actNote: `${c.ip}:${port} · foydalanuvchi ${c.username || "admin"}`,
+      chain: [
+        step("Kamera · RTSP " + port, "oqim yo'q", "warn", "RTSP", `${c.ip}:${port} porti ochiq, lekin DESCRIBE kodek qaytarmadi — login/parol yoki yo'l (${esc(c.rtsp_path || "/")}) xato bo'lishi mumkin.`),
+        nvrStep(nvr2.crowded ? "warn" : "ok", nvr2.crowded ? `${nvr2.sessions} sessiya` : `${nvr2.on} online`, `${nvr2.n} kanal · ${nvr2.sessions} faol sessiya${nvr2.crowded ? " — limitga yaqin" : ""}.`),
+        step("Tugun · MediaMTX", "yo'l ochilmaydi", "warn", nodeNm, "Manba RTSP'ni bera olmaganda MediaMTX yo'lni tayyor qilolmaydi — brauzer HLS 400 / WHEP 500 oladi."),
+        step("Chipta", "amal qiladi", "idle", "auth", "Chipta imzolanadi, lekin oqim bo'lmagani uchun foyda bermaydi."),
+        step("Brauzer", "oqim ochilmaydi", "warn", "400/500", "Devorda ochilsa xato beradi — shuning uchun ommaviy ochishda bunday kameralar chetlab o'tiladi."),
+      ],
+    };
+  }
+
   // online
   const snapStale = a >= 0 && a > 600 && c.ip;
   const snapNone = a < 0 && c.ip;
@@ -661,7 +694,7 @@ async function vAct(kind, c) {
 /* Muammo qachondan beri — soniyada (-1: ma'lum emas). */
 function suspectSec(c) {
   if (c.state === "offline") return sinceSec(c.last_seen);
-  if (c.state === "stalled") return snapAge(c);
+  if (c.state === "stalled" || effState(c) === "nostream") return snapAge(c);
   return -1;
 }
 function suspectAge(c) { const s = suspectSec(c); return s >= 0 ? age(s) : "—"; }
@@ -683,13 +716,13 @@ function verdictAdvice(c, v) {
 function drawVerdict() {
   if (S.page !== "verdict") return;
   const sort = S.vsort || "worst";
-  const probs = S.cams.filter((c) => PROB.has(c.state)).sort((a, b) => {
+  const probs = S.cams.filter((c) => isProb(c)).sort((a, b) => {
     if (sort === "name") return String(a.name || "").localeCompare(String(b.name || ""));
     if (sort === "recent") {
       const sa = suspectSec(a), sb = suspectSec(b);
       return (sa < 0 ? 1e12 : sa) - (sb < 0 ? 1e12 : sb);
     }
-    return (RANK[a.state] ?? 9) - (RANK[b.state] ?? 9) ||
+    return (RANK[effState(a)] ?? 9) - (RANK[effState(b)] ?? 9) ||
            String(a.name || "").localeCompare(String(b.name || ""));
   });
   $("#vn").textContent = S.cams.length ? `${probs.length} ta` : "yuklanmoqda…";
@@ -697,15 +730,15 @@ function drawVerdict() {
 
   // Tanlov: muammoli ro'yxatda qolgan bo'lsa saqlanadi, aks holda eng yomoni.
   let cur = S.sel != null ? S.byId.get(S.sel) : null;
-  if (!cur || (!PROB.has(cur.state) && probs.length)) cur = probs[0] || null;
+  if (!cur || (!isProb(cur) && probs.length)) cur = probs[0] || null;
   if (!cur && S.cams.length) cur = S.byId.get(S.sel) || null;
 
   $("#vsus").innerHTML = probs.length ? probs.slice(0, 40).map((c) => {
-    const k = stateKind(c.state);
-    return `<button class="sus ${c.state}${cur && c.id === cur.id ? " sel" : ""}" data-id="${c.id}"
+    const es = effState(c), k = stateKind(es);
+    return `<button class="sus ${es}${cur && c.id === cur.id ? " sel" : ""}" data-id="${c.id}"
       style="box-shadow:inset 3px 0 0 ${DOT[c.state]}">
-      <span class="row"><i class="dot" style="background:${DOT[c.state]}"></i><b>${esc(c.name)}</b>
-        <span class="tag ${k === "bad" ? "bad" : k === "warn" ? "mid" : ""}">${esc(c.state)}</span>
+      <span class="row"><i class="dot" style="background:${DOT[es]}"></i><b>${esc(c.name)}</b>
+        <span class="tag ${k === "bad" ? "bad" : k === "warn" ? "mid" : ""}">${esc(LBL[es] || es)}</span>
         <span class="age">${esc(suspectAge(c))}</span>${ic("chev-r", "sm")}</span>
       <span class="where">${ic("pin")}${esc(c.region || "hududsiz")}${c.ip ? " · " + esc(c.ip) : ""} · ${esc(nodeName(c))}</span>
     </button>`;
@@ -927,7 +960,7 @@ function drawTopo() {
       <div class="node-body">
         <div class="tbl-tools"><h3>Registratorlar va kameralar</h3><span class="chip">${rows.length} ta qurilma</span>
           ${nodes[0] === n ? `<label class="search-box">${ic("search")}<input data-tq placeholder="IP, nom yoki tur bo'yicha qidirish…" value="${esc(S.tq || "")}"></label>` : ""}</div>
-        <div class="tbl"><table class="ttab"><thead><tr><th>Holat</th><th>IP manzil / nom</th><th>Turi</th><th>Kanal</th>
+        <div class="tbl tbl-scroll"><table class="ttab"><thead><tr><th>Holat</th><th>IP manzil / nom</th><th>Turi</th><th>Kanal</th>
           <th>Sessiya</th><th>Foydalanish</th><th>Holat / natija</th><th>Diagnostika</th><th></th></tr></thead>
         <tbody>${shown.map((r) => `<tr class="click" data-ip="${esc(r.ip)}">
           <td><i class="dot" style="background:${KDOT[r.k]}"></i></td>
@@ -961,14 +994,14 @@ function drawTopo() {
 
 /* ═════════ kameralar jadvali ═════════ */
 $$("#cfilt .pill").forEach((b) => (b.onclick = () => {
-  S.filt = b.dataset.f;
+  S.filt = b.dataset.f; S.cpage = 1;
   $$("#cfilt .pill").forEach((x) => x.classList.toggle("sel", x === b));
   drawCams();
 }));
-$("#csearch").oninput = () => drawCams();
+$("#csearch").oninput = () => { S.cpage = 1; drawCams(); };
 $$(".chead button[data-s]").forEach((th) => (th.onclick = () => {
   const k = th.dataset.s;
-  S.sortD = S.sortK === k ? -S.sortD : 1; S.sortK = k; drawCams();
+  S.sortD = S.sortK === k ? -S.sortD : 1; S.sortK = k; S.cpage = 1; drawCams();
 }));
 
 function up7(c) { return S.up7 ? S.up7.get(c.id) : null; }
@@ -985,7 +1018,7 @@ function tableRows() {
     return c[S.sortK] ?? "";
   };
   const match = (c) => S.filt === "all" ? true
-    : S.filt === "prob" ? PROB.has(c.state) : c.state === S.filt;
+    : S.filt === "prob" ? isProb(c) : S.filt === "nostream" ? effState(c) === "nostream" : c.state === S.filt;
   return S.cams.filter((c) =>
       match(c) &&
       (!q || (c.name || "").toLowerCase().includes(q) ||
@@ -1002,41 +1035,47 @@ function tableRows() {
 function drawCams() {
   if (S.page !== "cams") { drawNav(); return; }
   const rs = tableRows();
-  const cnt = (s) => S.cams.filter((c) => c.state === s).length;
-  const probN = S.cams.filter((c) => PROB.has(c.state)).length;
+  const cnt = (s) => S.cams.filter((c) => effState(c) === s).length;
+  const probN = S.cams.filter((c) => isProb(c)).length;
   const N = Math.max(1, S.cams.length);
-  const seg = ["online", "stalled", "offline", "unknown", "disabled"];
+  const seg = ["online", "nostream", "stalled", "offline", "unknown", "disabled"];
   const pct = (s) => (cnt(s) / N * 100);
   $("#csummary").innerHTML = S.cams.length ? `
     <div><span class="tile-i xl">${ic("cam", "lg")}</span><div class="big"><span>Jami kameralar</span><b>${S.cams.length}</b>
       <div class="d"><span class="ok">${ic("up", "sm")}${cnt("online")} online</span>
         ${cnt("offline") ? `<span class="bad">${ic("down", "sm")}${cnt("offline")} offline</span>` : ""}
+        ${cnt("nostream") ? `<span class="warn">${cnt("nostream")} oqim yo'q</span>` : ""}
         ${cnt("stalled") ? `<span class="warn">${cnt("stalled")} stalled</span>` : ""}</div></div></div>
     <div class="mid"><div class="park-bar">${seg.map((s) => `<i style="width:${pct(s).toFixed(2)}%;background:${DOT[s]}"></i>`).join("")}</div>
       <div class="park-leg">${seg.filter((s) => cnt(s)).map((s) =>
-        `<span><i style="background:${DOT[s]}"></i>${cnt(s)} ${s} (${pct(s).toFixed(1)}%)</span>`).join("")}</div></div>
+        `<span><i style="background:${DOT[s]}"></i>${cnt(s)} ${s === "nostream" ? "oqim yo'q" : s} (${pct(s).toFixed(1)}%)</span>`).join("")}</div></div>
     <button class="prob ${probN ? "" : "ok"}" id="csumprob"><span class="tile-i xl ${probN ? "bad" : "ok"}">${ic(probN ? "alert" : "check", "lg")}</span>
       <div class="cnt"><span>Muammoli kameralar</span><b>${probN}</b><small>${probN ? "Diqqat talab qiladi" : "Hammasi ishlayapti"}</small></div>
       ${ic("chev-r", "chev")}</button>` : "";
   const sp = $("#csumprob");
   if (sp) sp.onclick = () => { S.filt = "prob"; $$("#cfilt .pill").forEach((x) => x.classList.toggle("sel", x.dataset.f === "prob")); drawCams(); };
 
-  $("#ctb").innerHTML = rs.map((c) => {
+  const per = S.cper, pages = Math.max(1, Math.ceil(rs.length / per));
+  if (S.cpage > pages) S.cpage = pages;
+  if (S.cpage < 1) S.cpage = 1;
+  const pageRows = rs.slice((S.cpage - 1) * per, S.cpage * per);
+  $("#ctb").innerHTML = pageRows.map((c) => {
     const rt = camRt(c), a = snapAge(c), u = up7(c);
-    const k = stateKind(c.state);
+    const es = effState(c), k = stateKind(es);
     const since = c.state === "offline" ? (sinceSec(c.last_seen) >= 0 ? age(sinceSec(c.last_seen)) + " dan beri" : "")
       : c.state === "stalled" ? (a >= 0 ? age(a) + " dan beri" : "")
       : c.state === "unknown" ? "yangi" : "";
     return `<button class="crow${S.picked.has(c.id) ? " pick" : ""}" data-id="${c.id}"
-      style="box-shadow:inset 3px 0 0 ${c.state === "online" ? "transparent" : DOT[c.state]}">
+      style="box-shadow:inset 3px 0 0 ${es === "online" ? "transparent" : DOT[es]}">
       <span class="cbx">${S.picked.has(c.id) ? "✓" : ""}</span>
-      <span class="nm"><i class="dot" style="background:${DOT[c.state]}"></i>
+      <span class="nm"><i class="dot" style="background:${DOT[es]}"></i>
         <span class="cnt"><b>${esc(c.name)}</b>
-          <span class="ln"><span class="tag ${k === "bad" ? "bad" : k === "warn" ? "mid" : k === "ok" ? "good" : ""}">${esc(c.state)}</span>
+          <span class="ln"><span class="tag ${k === "bad" ? "bad" : k === "warn" ? "mid" : k === "ok" ? "good" : ""}">${esc(LBL[es] || es)}</span>
             ${since ? `<span>${esc(since)}</span>` : ""}${c.external_id ? `<span class="mono">${esc(c.external_id)}</span>` : ""}</span></span></span>
       <span class="col"><span class="m1">${esc(c.ip || "tayyor oqim")}</span>
         <span class="m2">${esc(c.region || "hududsiz")} · ${esc(nodeName(c))}</span></span>
-      <span class="col"><span class="m1">${c.codec ? esc(c.codec) + (c.sub_codec ? " · " + esc(c.sub_codec) : "") : "—"}${c.transcode ? " → H264" : ""}</span>
+      <span class="col"><span class="m1">${c.codec ? esc(c.codec) + (c.sub_codec ? " · " + esc(c.sub_codec) : "") + (c.transcode ? " → H264" : "")
+        : es === "nostream" ? '<span style="color:var(--amber)">kodek aniqlanmadi</span>' : "—"}</span>
         <span class="m2" style="color:${rt.ready ? "var(--green)" : "var(--mute)"}">yo'l: ${rt.ready ? "managed" : rt.warm ? "issiq" : "yo'q"}</span></span>
       <span class="right">${rt.inMbps ? rt.inMbps.toFixed(1) + " Mb/s" : "—"}</span>
       <span class="col">${u
@@ -1058,8 +1097,17 @@ function drawCams() {
     };
   });
   const totalIn = S.cams.reduce((s, c) => s + camRt(c).inMbps, 0);
+  const from = rs.length ? (S.cpage - 1) * per + 1 : 0, to = Math.min(rs.length, S.cpage * per);
   $("#cfoot").innerHTML = rs.length
-    ? `<span>${rs.length} ta kamera ko'rsatilyapti (${S.cams.length} tadan)</span><span class="meta">kirish ${totalIn.toFixed(1)} Mbit/s · saralash: ${esc(S.sortK)}</span>` : "";
+    ? `<span>${from}–${to} ko'rsatilyapti · ${rs.length} tadan${rs.length !== S.cams.length ? ` (jami ${S.cams.length})` : ""} · ${totalIn.toFixed(1)} Mbit/s kirish</span>
+       <span class="pager"><span class="meta">Sahifada</span>
+         <label class="select"><select id="cper">${[25, 50, 100].map((n) => `<option value="${n}"${n === per ? " selected" : ""}>${n}</option>`).join("")}</select>${ic("chev-d", "sm")}</label>
+         <button class="btn ghost sm icon" id="cprev"${S.cpage <= 1 ? " disabled" : ""}>${ic("chev-r", "sm")}</button>
+         <span class="meta">${S.cpage} / ${pages}</span>
+         <button class="btn ghost sm icon" id="cnext"${S.cpage >= pages ? " disabled" : ""}>${ic("chev-r", "sm")}</button></span>` : "";
+  const per_ = $("#cper"); if (per_) per_.onchange = () => { S.cper = +per_.value; S.cpage = 1; drawCams(); };
+  const prev = $("#cprev"); if (prev) prev.onclick = () => { if (S.cpage > 1) { S.cpage--; drawCams(); window.scrollTo({top: 0, behavior: "smooth"}); } };
+  const next = $("#cnext"); if (next) next.onclick = () => { if (S.cpage < pages) { S.cpage++; drawCams(); window.scrollTo({top: 0, behavior: "smooth"}); } };
   $("#cempty").innerHTML = rs.length ? "" : `<div class="empty">${
     S.filt === "prob" && S.cams.length
       ? `✓ Muammoli kamera yo'q — ${S.cams.length} kamera ishlayapti.<br>Hammasini ko'rish uchun «Hammasi» filtrini tanlang.`
@@ -2018,7 +2066,7 @@ function drawStat() {
     </button>`;}).join("") : "";
   $$("#tworst .worst[data-id]").forEach((b) => (b.onclick = () => {
     const id = +b.dataset.id, c = S.byId.get(id);
-    if (c && PROB.has(c.state)) { S.sel = id; go("verdict"); } else openDiag(id);
+    if (c && isProb(c)) { S.sel = id; go("verdict"); } else openDiag(id);
   }));
   $("#tempty").innerHTML = rows.length ? "" :
     `<div class="empty" style="margin-top:8px">Bu davrda uzilish qayd etilmagan.</div>`;
@@ -2038,49 +2086,179 @@ $$("#thours .pill").forEach((b) => (b.onclick = () => {
    qaysi pleyerga tegishli ekani shu yerdan topiladi. */
 const wallPlayers = new Map();
 $$("[data-w]").forEach((b) => (b.onclick = () => {
-  S.wallN = +b.dataset.w;
+  S.wallN = +b.dataset.w; S.wallPage = 1;
   $$("[data-w]").forEach((x) => x.classList.toggle("sel", x === b));
+  if (S.wallView === "live" && S.wallN >= 16) heavyWarn();
   drawWall(true);
 }));
-$("#wprob").onclick = () => { S.wallMode = S.wallMode === "prob" ? "all" : "prob"; drawWall(true); };
-$("#wsel").onclick = () => { S.wallMode = S.wallMode === "sel" ? "all" : "sel"; drawWall(true); };
+$$("#wview .pill").forEach((b) => (b.onclick = () => {
+  S.wallView = b.dataset.wv;
+  $$("#wview .pill").forEach((x) => x.classList.toggle("sel", x === b));
+  if (S.wallView === "live" && S.wallN >= 16) heavyWarn();
+  drawWall(true);
+}));
+let heavyWarnedAt = 0;
+function heavyWarn() {
+  if (Date.now() - heavyWarnedAt < 30000) return;
+  heavyWarnedAt = Date.now();
+  toast("Ko'p jonli oqim og'ir", `${S.wallN} katak jonli video brauzerni sekinlashtiradi — ko'p kamera uchun «Surat» rejimi tavsiya etiladi`, "mid");
+}
+$$("#wmode .pill").forEach((b) => (b.onclick = () => {
+  S.wallMode = b.dataset.wm; S.wallPage = 1;
+  $$("#wmode .pill").forEach((x) => x.classList.toggle("sel", x === b));
+  drawWall(true);
+}));
+$("#wregion").onchange = () => { S.wallRegion = $("#wregion").value; S.wallPage = 1; drawWall(true); };
+$("#wnode").onchange = () => { S.wallNode = $("#wnode").value; S.wallPage = 1; drawWall(true); };
+$("#wsearch").oninput = () => { S.wallQ = $("#wsearch").value; S.wallPage = 1; drawWall(true); };
 $("#wclear").onclick = () => { S.picked.clear(); if (S.wallMode === "sel") S.wallMode = "all"; drawWall(true); drawNav(); };
+/* "Hammasini jonli ochish": oqimlar BIRDAN emas, ketma-ket ochiladi.
+   Sabab: 25 katakni bir vaqtda ochsak MediaMTX 25 ta RTSP ulanishni
+   birdan tortadi, har biri tayyor bo'lguncha HLS 400, WHEP 500 qaytaradi
+   va konsol xatoga to'ladi (ishlab chiqarishda aynan shu ko'rindi).
+   Har 300 ms da bittadan ochsak, har yo'l tayyor bo'lishga ulguradi.
+   Yana: faqat ONLINE kameralar ochiladi — offline/stalled/unknown oqim
+   bermaydi, ularni ochish bekorga xato oqizadi (katakni qo'lda bosib
+   sinash mumkin). */
+let wallBulkTimer = null;
 $("#wlive").onclick = () => {
-  const closed = $$("#wall .tile:not(.playing)").filter((t) => t.querySelector("video"));
-  if (closed.length) closed.forEach((t) => t.click());
-  else $$("#wall .tile.playing").forEach((t) => t.click());
-  updateWallFoot();
+  clearTimeout(wallBulkTimer);
+  const playing = $$("#wall .tile.playing");
+  if (playing.length) {                       // ochiq bo'lsa — hammasini yopamiz
+    playing.forEach((t) => t.click());
+    updateWallFoot();
+    return;
+  }
+  // Faqat online VA kodeki aniqlangan kameralar. Kodeksi bo'sh online
+  // kamera — porti ochiq, lekin RTSP tekshiruvi oqim ololmagan (ko'pincha
+  // login/parol noto'g'ri yoki yo'l xato). Ularni ommaviy ochsak MediaMTX
+  // bekorga urinib 400/500 qaytaradi va konsol xatoga to'ladi — shuning
+  // uchun chetlab o'tamiz (katakni qo'lda bosib tekshirsa bo'ladi).
+  const cams = $$("#wall .tile:not(.playing)").map((t) => ({t, c: S.byId.get(+t.dataset.id)}))
+    .filter((o) => o.c && o.t.querySelector("video"));
+  const queue = cams.filter((o) => o.c.state === "online" && o.c.codec).map((o) => o.t);
+  const skipped = cams.length - queue.length;
+  if (!queue.length) {
+    toast("Ochiladigan oqim yo'q", "Faqat oqimi tasdiqlangan online kameralar ochiladi", "mid");
+    return;
+  }
+  if (skipped) toast(`${queue.length} ta oqim ochilmoqda`, `${skipped} ta kamera o'tkazib yuborildi (oqim tasdiqlanmagan)`, "");
+  let i = 0;
+  const step = () => {
+    if (S.page !== "wall" || i >= queue.length) { updateWallFoot(); return; }
+    const t = queue[i++];
+    if (!t.classList.contains("playing")) t.click();
+    $("#wlive span").textContent = `Ochilmoqda… ${i}/${queue.length}`;
+    wallBulkTimer = setTimeout(step, 300);
+  };
+  step();
 };
 
 function wallCams() {
+  const q = (S.wallQ || "").toLowerCase().trim();
   let l = S.cams.filter((c) => c.enabled);
-  if (S.wallMode === "prob") l = l.filter((c) => c.state !== "online");
-  if (S.wallMode === "sel") l = l.filter((c) => S.picked.has(c.id));
-  return l.slice(0, S.wallN);
+  if (S.wallMode === "online") l = l.filter((c) => c.state === "online" && c.codec);
+  else if (S.wallMode === "prob") l = l.filter((c) => isProb(c));
+  else if (S.wallMode === "sel") l = l.filter((c) => S.picked.has(c.id));
+  if (S.wallRegion) l = l.filter((c) => (c.region || "") === S.wallRegion);
+  if (S.wallNode) l = l.filter((c) => String(c.node_id || 1) === S.wallNode);
+  if (q) l = l.filter((c) => (c.name || "").toLowerCase().includes(q) ||
+      (c.ip || "").includes(q) || (c.region || "").toLowerCase().includes(q));
+  // Muammolilar tepada — devorda ham e'tibor kerak bo'lganlar oldin.
+  return l.sort((a, b) => (RANK[effState(a)] ?? 9) - (RANK[effState(b)] ?? 9) ||
+      String(a.name || "").localeCompare(String(b.name || "")));
+}
+/* Hudud/tugun tanlagichlarini kameralar ro'yxatidan to'ldiradi. */
+function fillWallSelects() {
+  const regs = [...new Set(S.cams.map((c) => c.region).filter(Boolean))].sort();
+  const cur = $("#wregion");
+  if (cur && cur.dataset.n !== String(regs.length)) {
+    cur.dataset.n = regs.length;
+    cur.innerHTML = `<option value="">Barcha hudud</option>` +
+      regs.map((r) => `<option value="${esc(r)}"${r === S.wallRegion ? " selected" : ""}>${esc(r)}</option>`).join("");
+  }
+  const nodes = [...new Set(S.cams.map((c) => c.node_id || 1))].sort((a, b) => a - b);
+  const nc = $("#wnode");
+  if (nc && nc.dataset.n !== String(nodes.length)) {
+    nc.dataset.n = nodes.length;
+    nc.innerHTML = `<option value="">Barcha tugun</option>` +
+      nodes.map((n) => `<option value="${n}"${String(n) === S.wallNode ? " selected" : ""}>${esc(nodeName({node_id: n}))}</option>`).join("");
+  }
+}
+let wallSnapTimer = null;
+/* Surat rejimida kataklar rasmini muntazam yangilaydi — hammasini birdan
+   emas, bo'lib (tarmoq portlamasin). To'liq aylanish ~8 s. Rasm `?stale=1`
+   bilan server keshidan olinadi: kameraga qo'shimcha ulanish yo'q. */
+function startWallSnap() {
+  clearTimeout(wallSnapTimer);
+  if (S.page !== "wall" || S.wallView !== "snap") return;
+  let i = 0;
+  const tick = () => {
+    if (S.page !== "wall" || S.wallView !== "snap") { clearTimeout(wallSnapTimer); return; }
+    const imgs = $$("#wall .tile-snap");
+    if (imgs.length) {
+      const batch = Math.max(1, Math.ceil(imgs.length / 4));
+      for (let b = 0; b < batch; b++) {
+        const img = imgs[(i + b) % imgs.length];
+        const cid = img.closest(".tile").dataset.id;
+        img.src = `/api/v1/cameras/${cid}/snapshot?stale=1&t=${Date.now()}`;
+      }
+      i = (i + batch) % imgs.length;
+    }
+    wallSnapTimer = setTimeout(tick, 2000);
+  };
+  wallSnapTimer = setTimeout(tick, 2000);
 }
 function stopWall() {
+  clearTimeout(wallBulkTimer);
+  clearTimeout(wallSnapTimer);
   wallPlayers.forEach((p) => p.stop());
   wallPlayers.clear();
 }
 /* Katak turi: video bo'ladimi yoki "ulanish yo'q" yozuvi. Tur o'zgarsa
    katak qayta quriladi, o'zgarmasa pleyer tegilmaydi. */
-const tileKind = (c) => c.state === "offline" || c.state === "unknown" ? "off" : "video";
+/* Katak turi ko'rinishga bog'liq:
+   SURAT rejimi — jonli video EMAS, muntazam yangilanadigan JPEG. Dekodlash
+   yo'q, kameraga qo'shimcha RTSP ulanish yo'q (server keshidagi surat),
+   shuning uchun 6×6 ham, bir necha brauzer ham bemalol ko'taradi.
+   JONLI rejimi — haqiqiy video (og'ir): bir necha kamerani yaqindan
+   kuzatish uchun. */
+function tileKind(c) {
+  const e = effState(c);
+  if (S.wallView === "snap") return c.snapshot_at ? "snap" : "snapoff";
+  return e === "offline" || e === "unknown" || e === "disabled" ? "off" : "video";
+}
 function tileHtml(c) {
-  const off = tileKind(c) === "off";
-  return `${off
-      ? `<div class="tile-off ${c.state === "unknown" ? "idle" : ""}">${ic("cam-off")}<b>${
-          c.state === "offline" ? "ulanish yo'q" : "tekshirilmagan"}</b><span>${
-          c.state === "offline" ? "Kamera aloqasi uzilgan" : "Birinchi tekshiruv navbatda"}</span></div>`
-      : `<video muted playsinline ${c.snapshot_at ? `poster="/api/v1/cameras/${c.id}/snapshot?stale=1"` : ""}></video>
-         <div class="tile-msg"></div><div class="tile-play">▶</div>`}
-    <div class="tile-h"><i class="dot" style="background:${DOT[c.state]}"></i>${esc(c.name)}</div>
+  const k = tileKind(c), e = effState(c);
+  let body;
+  if (k === "snap") {
+    body = `<img class="tile-snap" alt="" loading="lazy"
+        src="/api/v1/cameras/${c.id}/snapshot?stale=1&t=${Math.floor(Date.now() / 8000)}"
+        onerror="this.closest('.tile').classList.add('imgerr')">
+      <div class="tile-noimg">${ic("cam-off", "lg")}<span>surat yuklanmadi</span></div>
+      ${e !== "online" ? `<div class="tile-badge ${stateKind(e)}"><i class="dot" style="background:${DOT[e]}"></i>${esc(LBL[e] || e)}</div>` : ""}`;
+  } else if (k === "snapoff") {
+    body = `<div class="tile-off ${e === "unknown" ? "idle" : ""}">${ic("cam-off")}<b>${
+        e === "offline" ? "ulanish yo'q" : e === "unknown" ? "tekshirilmagan" : "surat hali yo'q"}</b><span>${
+        e === "offline" ? "Kamera aloqasi uzilgan" : e === "unknown" ? "Birinchi tekshiruv navbatda" : "Snapshot tsikli hali yetmagan"}</span></div>`;
+  } else if (k === "off") {
+    body = `<div class="tile-off ${c.state === "unknown" ? "idle" : ""}">${ic("cam-off")}<b>${
+        c.state === "offline" ? "ulanish yo'q" : "tekshirilmagan"}</b><span>${
+        c.state === "offline" ? "Kamera aloqasi uzilgan" : "Birinchi tekshiruv navbatda"}</span></div>`;
+  } else {
+    body = `<video muted playsinline ${c.snapshot_at ? `poster="/api/v1/cameras/${c.id}/snapshot?stale=1"` : ""}></video>
+      <div class="tile-msg"></div><div class="tile-play">▶</div>`;
+  }
+  const hasFrame = k === "snap" || k === "video";
+  return `${body}
+    <div class="tile-h"><i class="dot" style="background:${DOT[e]}"></i>${esc(c.name)}</div>
     <div class="tile-tr"><span class="snapt">${c.snapshot_at ? esc(localDM(c.snapshot_at) + " " + localHM(c.snapshot_at)) : ""}</span><span class="livet">● JONLI</span>
-      ${off ? "" : `<button class="tb tfull" title="To'liq ekran">${ic("full", "sm")}</button>`}
+      ${k === "video" ? `<button class="tb tfull" title="To'liq ekran">${ic("full", "sm")}</button>` : ""}
       ${S.wallMode === "sel" ? `<button class="tb x tile-x" title="Devordan olib tashlash">${ic("x", "sm")}</button>` : ""}</div>
     <div class="tile-f"><span>${esc(c.slug || c.external_id || "")}</span><span class="sep">|</span><span>${esc(c.codec || "—")}</span>${
       c.resolution ? `<span class="sep hide-sm">|</span><span class="hide-sm">${esc(c.resolution)}</span>` : ""}${
       c.fps ? `<span class="sep hide-sm">|</span><span class="hide-sm">${c.fps}fps</span>` : ""}
-      <span class="r"><span class="rate">—</span>${off ? "" : `<button class="tb tsnap" title="Oxirgi kadr">${ic("snap", "sm")}</button>`}</span></div>`;
+      <span class="r"><span class="rate"></span>${hasFrame ? `<button class="tb tsnap" title="Oxirgi kadr">${ic("snap", "sm")}</button>` : ""}</span></div>`;
 }
 function bindTile(t, c) {
   const id = c.id;
@@ -2089,9 +2267,9 @@ function bindTile(t, c) {
   if (x) x.onclick = (e) => { e.stopPropagation(); S.picked.delete(id); drawWall(true); drawNav(); };
   const video = t.querySelector("video");
   const full = t.querySelector(".tfull"), snap = t.querySelector(".tsnap");
-  if (full) full.onclick = (e) => { e.stopPropagation(); (video.requestFullscreen || video.webkitEnterFullscreen || (() => {})).call(video); };
+  if (full && video) full.onclick = (e) => { e.stopPropagation(); (video.requestFullscreen || video.webkitEnterFullscreen || (() => {})).call(video); };
   if (snap) snap.onclick = (e) => { e.stopPropagation(); window.open(`/api/v1/cameras/${id}/snapshot?stale=1&t=${Date.now()}`, "_blank"); };
-  if (!video) { t.onclick = () => openDiag(id); return; }
+  if (!video) { t.onclick = () => openDiag(id); return; }   // surat rejimi: bosilsa kamera sahifasi
   // Video BOSILGANDA ochiladi — devor ochilishi bilan hamma oqim birdan
   // tortilmasin (kamera va tarmoqqa ortiqcha yuk bo'lardi). "Hammasini
   // jonli ochish" tugmasi — ataylab, bir bosishda.
@@ -2122,60 +2300,93 @@ function bindTile(t, c) {
    farq yo'q edi va har 15 soniyada hamma pleyer to'xtatilib qayta
    yaratilardi — tomoshabin uchun "bir necha soniya ko'rsatib uzilib
    qolish" aynan shu edi. */
+/* restart=true — user rejim/filtr/setka/sahifani o'zgartirdi yoki devorga
+   birinchi kirildi: to'liq quriladi (oqimlar to'xtaydi — kutilgan).
+   restart!=true — fon yangilanishi (loadCams 15 s, SSE holat hodisasi):
+   OQIMLAR HECH QACHON UZILMAYDI. Faqat mavjud kataklar holati yangilanadi;
+   ro'yxat yoki tartib o'zgarsa ham qayta QURILMAYDI. Ilgari bu farq yo'q
+   edi va bitta kamera holati o'zgarganda (masalan "online" filtridan
+   chiqib ketsa) butun ro'yxat o'zgarib, stopWall() bilan HAMMA oqim
+   birdan uzilardi — foydalanuvchi aynan shuni ko'rgan. */
 function drawWall(restart) {
   if (S.page !== "wall") return;
-  $("#wprob").classList.toggle("sel", S.wallMode === "prob");
-  $("#wsel").classList.toggle("sel", S.wallMode === "sel");
-  const l = wallCams();
+  fillWallSelects();
+  const all = wallCams();
+  const pages = Math.max(1, Math.ceil(all.length / S.wallN));
+  if (S.wallPage > pages) S.wallPage = pages;
+  if (S.wallPage < 1) S.wallPage = 1;
+  S._wallTotal = all.length; S._wallPages = pages;
   const cur = $$("#wall .tile");
-  const same = !restart && cur.length === l.length &&
-    cur.every((t, i) => +t.dataset.id === l[i].id);
-  if (same) {
+
+  if (!restart && cur.length) {
+    // Fon yangilanishi — buzmaymiz, faqat holatni yangilaymiz.
     cur.forEach((t) => {
       const c = S.byId.get(+t.dataset.id);
+      if (!c) return;
       if (t.dataset.kind !== tileKind(c)) {
-        // offline bo'ldi yoki qaytdi — faqat shu katak qayta quriladi
+        // Shu bitta kamera turini o'zgartirdi (online↔offline) — faqat
+        // O'SHA katak qayta quriladi, boshqalari tegilmaydi.
         const p = wallPlayers.get(c.id);
         if (p) { p.stop(); wallPlayers.delete(c.id); }
-        t.className = "tile";
-        t.dataset.kind = tileKind(c);
-        t.innerHTML = tileHtml(c);
-        bindTile(t, c);
+        t.className = "tile"; t.dataset.kind = tileKind(c);
+        t.innerHTML = tileHtml(c); bindTile(t, c);
       } else {
-        t.querySelector(".tile-h .dot").style.background = DOT[c.state];
+        const dot = t.querySelector(".tile-h .dot");
+        if (dot) dot.style.background = DOT[effState(c)];
       }
     });
-  } else {
-    stopWall();
-    const cols = Math.ceil(Math.sqrt(Math.min(S.wallN, Math.max(l.length, 1))));
-    $("#wall").style.gridTemplateColumns = `repeat(${cols},minmax(0,1fr))`;
-    $("#wall").innerHTML = l.map((c) =>
-      `<div class="tile" data-id="${c.id}" data-kind="${tileKind(c)}">${tileHtml(c)}</div>`).join("");
-    $$("#wall .tile").forEach((t) => bindTile(t, S.byId.get(+t.dataset.id)));
+    updateWallFoot();
+    return;
   }
+
+  // To'liq qurish (user amali yoki birinchi chizish).
+  const l = all.slice((S.wallPage - 1) * S.wallN, S.wallPage * S.wallN);
+  stopWall();
+  const cols = Math.ceil(Math.sqrt(Math.min(S.wallN, Math.max(l.length, 1))));
+  $("#wall").style.gridTemplateColumns = `repeat(${cols},minmax(0,1fr))`;
+  $("#wall").innerHTML = l.map((c) =>
+    `<div class="tile" data-id="${c.id}" data-kind="${tileKind(c)}">${tileHtml(c)}</div>`).join("");
+  $$("#wall .tile").forEach((t) => bindTile(t, S.byId.get(+t.dataset.id)));
+  startWallSnap();
   updateWallFoot();
   $("#wempty").innerHTML = l.length ? "" : `<span class="wall-empty">${
     S.wallMode === "sel"
       ? "Devor bo'sh — Kameralar jadvalidagi katakchani belgilang yoki kamera sahifasida «Devorga qo'shish» ni bosing."
-      : S.wallMode === "prob" ? "Muammoli kamera yo'q — hammasi ishlayapti." : "Ko'rsatiladigan kamera yo'q."}</span>`;
+      : S.wallMode === "prob" ? "Muammoli kamera yo'q — hammasi ishlayapti."
+      : S.wallRegion || S.wallNode || S.wallQ ? "Bu filtrga mos kamera yo'q — filtrni kengaytiring."
+      : "Ko'rsatiladigan kamera yo'q."}</span>`;
 }
 function updateWallFoot() {
   let total = 0;
-  $$("#wall .tile").forEach((t) => {
+  const tiles = $$("#wall .tile");
+  tiles.forEach((t) => {
     const c = S.byId.get(+t.dataset.id);
     if (!c) return;
     const mb = camRt(c).inMbps;
     total += mb;
-    t.querySelector(".tile-f .rate").textContent = mb ? mb.toFixed(1) + " Mb/s" : "—";
+    const rate = t.querySelector(".tile-f .rate");
+    if (rate) rate.textContent = mb ? mb.toFixed(1) + " Mb/s" : "—";
   });
   const playing = $$("#wall .tile.playing").length;
   $("#wlive span").textContent = playing ? "Oqimlarni yopish" : "Hammasini jonli ochish";
   $("#wseln").textContent = S.picked.size || "";
-  const eg = S.health ? ` · egress ${Math.round(S.health.egress_mbps)}/${
-    S.health.egress_capacity_mbps} Mbit/s` : "";
-  const mode = S.wallMode === "sel" ? `${S.picked.size} kamera tanlangan` : S.wallMode === "prob" ? "faqat muammolilar" : "hammasi";
-  $("#wsum").textContent = `${mode} · ${$$("#wall .tile").length} katak · ${playing} jonli · sub oqim · kirish ${
-    total.toFixed(1)} Mbit/s${eg}`;
+  const eg = S.health ? ` · egress ${Math.round(S.health.egress_mbps)}/${S.health.egress_capacity_mbps} Mbit/s` : "";
+  const total_ = S._wallTotal || tiles.length, pages = S._wallPages || 1;
+  const from = total_ ? (S.wallPage - 1) * S.wallN + 1 : 0, to = Math.min(total_, S.wallPage * S.wallN);
+  const modeLbl = {all: "hammasi", online: "online", prob: "muammoli", sel: "tanlangan"}[S.wallMode] || "hammasi";
+  const snap = S.wallView === "snap";
+  $("#wlive").style.display = snap ? "none" : "";
+  $("#wsum").textContent = snap
+    ? `${total_} kamera · ${modeLbl}${S.wallRegion ? " · " + S.wallRegion : ""} · surat rejimi · avtomatik yangilanadi`
+    : `${total_} kamera · ${modeLbl}${S.wallRegion ? " · " + S.wallRegion : ""} · ${playing} jonli · kirish ${total.toFixed(1)} Mbit/s${eg}`;
+  $("#wcount").textContent = total_
+    ? `${from}–${to} ko'rsatilyapti · ${total_} tadan · ${snap ? "surat (~8 s da yangilanadi)" : "jonli · sub oqim"}` : "kamera yo'q";
+  $("#wpager").innerHTML = pages > 1
+    ? `<button class="btn ghost sm icon" id="wprev"${S.wallPage <= 1 ? " disabled" : ""}>${ic("chev-r", "sm")}</button>
+       <span class="meta">${S.wallPage} / ${pages}</span>
+       <button class="btn ghost sm icon" id="wnext"${S.wallPage >= pages ? " disabled" : ""}>${ic("chev-r", "sm")}</button>` : "";
+  const pv = $("#wprev"); if (pv) pv.onclick = () => { if (S.wallPage > 1) { S.wallPage--; drawWall(true); } };
+  const nx = $("#wnext"); if (nx) nx.onclick = () => { if (S.wallPage < pages) { S.wallPage++; drawWall(true); } };
 }
 
 /* ═════════ kamera sahifasi ═════════ */
