@@ -9,6 +9,7 @@ Skript bazadan kamerani topadi va FFmpeg'ni ishga tushiradi. Shu tufayli
 `mediamtx.yml` ichida kameralar ro'yxati ham, parollar ham saqlanmaydi —
 1000 ta kamera bo'lsa ham konfiguratsiya o'zgarmaydi.
 """
+import concurrent.futures
 import os
 import socket
 import subprocess
@@ -19,6 +20,7 @@ from core import security
 from core.db import get_db
 from core.rtsp_probe import build_rtsp_url
 
+from . import sync
 from .sync import (RTSP_PORT, SUB_SUFFIX, ffmpeg_path, has_nvenc,
                    relay_args, transcode_args)
 
@@ -60,11 +62,121 @@ def load_camera(slug: str):
     return row
 
 
+def _ready_set() -> set[str]:
+    """MediaMTX'da HOZIR kadr berayotgan yo'llar — API orqali (tez, ffprobe
+    yo'q). `ready` + trek bor + bayt kelmoqda bo'lsa, yo'l ishlayapti."""
+    try:
+        d = sync._api("GET", "/v3/paths/list?itemsPerPage=1000")
+    except Exception:
+        return set()
+    out = set()
+    for i in (d or {}).get("items", []):
+        if i.get("ready") and i.get("tracks") and i.get("bytesReceived"):
+            out.add(i["name"])
+    return out
+
+
+def _warm(names: list[str], port: int, token: str, timeout: float = 6.0) -> None:
+    """Sovuq relaylarni parallel ISITADI: bitta kadr o'qib sourceOnDemand'ni
+    yoqadi. Faqat tayyor bo'lmagan relaylar uchun chaqiriladi (tayyorlarini
+    qayta ochib vaqt yo'qotmaymiz)."""
+    exe = ffmpeg_path()
+    if not exe or not names:
+        return
+
+    def touch(name: str) -> None:
+        url = f"rtsp://127.0.0.1:{port}/{name}?token={token}"
+        try:
+            subprocess.run(
+                [exe, "-hide_banner", "-loglevel", "error",
+                 "-rtsp_transport", "tcp", "-timeout", "4000000",
+                 "-i", url, "-frames:v", "1", "-f", "null", "-"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                timeout=timeout)
+        except Exception:
+            pass
+
+    with concurrent.futures.ThreadPoolExecutor(
+            max_workers=min(16, len(names))) as ex:
+        list(ex.map(touch, names))
+
+
+def run_wall(slug: str) -> int:
+    """Devor (mozaika): bir necha kameraning LOKAL relay yo'lini bitta
+    katakli oqimga birlashtirib MediaMTX'ga publish qiladi.
+
+    Kamera bilan to'g'ridan ishlamaymiz — MediaMTX orqa xonda ushlab
+    turgan `<slug>_sub` relayidan o'qiymiz (arxitektura: relay o'rtada).
+    Faqat HOZIR kadr beradigan relaylar real katak bo'ladi; qolgani qora
+    katak, shunda bitta o'lik kamera butun mozaikani yiqitmaydi.
+    """
+    from . import mosaic, walls
+    key = slug[len("wall_"):]
+    info = walls.wall_relays(key)
+    if info is None:
+        print(f"Devor topilmadi: {slug}", file=sys.stderr)
+        return 3
+    relays = info["relays"]
+    if not any(relays):
+        print(f"{slug}: birorta tirik kamera yo'q", file=sys.stderr)
+        return 3
+    token = security.internal_token()
+
+    # Qaysi relay ayni damda kadr beradi. Tayyorlarini API'dan darhol
+    # olamiz (ffprobe yo'q — tez); sovuqlarini isitamiz va qayta tekshiramiz.
+    # xstack kadr bermagan kirishni abadiy kutgani uchun faqat kadr
+    # berayotganlar real katak bo'ladi, qolgani qora.
+    alive = sorted({n for n in relays if n})
+    flowing = _ready_set() & set(alive)
+    cold = [n for n in alive if n not in flowing]
+    if cold:
+        _warm(cold, RTSP_PORT, token)
+        flowing = _ready_set() & set(alive)
+    sources = [
+        f"rtsp://127.0.0.1:{RTSP_PORT}/{n}?token={token}"
+        if (n and n in flowing) else None
+        for n in relays
+    ]
+    live = sum(1 for s in sources if s)
+    if live == 0:
+        print(f"{slug}: birorta relay tayyor emas", file=sys.stderr)
+        time.sleep(CRASH_RETRY_DELAY)
+        return 3
+
+    exe = ffmpeg_path()
+    if not exe:
+        print("FFmpeg topilmadi — PATH ga qo'shing", file=sys.stderr)
+        return 6
+    dest = f"rtsp://127.0.0.1:{RTSP_PORT}/{slug}?token={token}"
+    args = mosaic.mosaic_args(sources, cols=info["cols"], rows=info["rows"],
+                              dst_url=dest, gpu=has_nvenc())
+    print(f"{slug}: {info['cols']}x{info['rows']} mozaika · {live} tirik katak "
+          f"({'GPU' if has_nvenc() else 'CPU'})", file=sys.stderr)
+    started = time.monotonic()
+    process = subprocess.Popen([exe] + args)
+    try:
+        code = process.wait()
+        if code != 0 and time.monotonic() - started < 5:
+            time.sleep(CRASH_RETRY_DELAY)
+        return code
+    except KeyboardInterrupt:
+        process.terminate()
+        try:
+            return process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            return 1
+
+
 def main() -> int:
     slug = (sys.argv[1] if len(sys.argv) > 1 else os.environ.get("MTX_PATH", "")).strip()
     if not slug:
         print("Kamera nomi berilmadi", file=sys.stderr)
         return 2
+
+    # Devor mozaikasi — kamera emas, alohida tarmoq.
+    if slug.startswith("wall_"):
+        return run_wall(slug)
 
     ogirish = slug.endswith(TRANSCODE_SUFFIX)
     if ogirish:

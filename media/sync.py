@@ -571,7 +571,17 @@ def camera_paths(cameras: list[dict]) -> dict:
             "runOnDemandRestart": True,
             "runOnDemandStartTimeout": TRANSCODE_START_TIMEOUT,
             "runOnDemandCloseAfter": "1m0s",   # MediaMTX normallashtirgan shakl
-        }
+        },
+        # Devor (mozaika) — `wall_<kalit>` so'ralganda mosaic launcher
+        # ishga tushadi va tanlangan kameralarni bitta oqimga birlashtiradi.
+        # Bitta shablon barcha devorlarga yetadi (kameralar soniga bog'liq
+        # emas); talab bo'yicha ochiladi, bo'shab qolsa yopiladi.
+        "~^wall_[a-f0-9]+$": {
+            "runOnDemand": _launcher("$MTX_PATH"),
+            "runOnDemandRestart": True,
+            "runOnDemandStartTimeout": "45s",
+            "runOnDemandCloseAfter": "30s",
+        },
     }
 
 

@@ -51,6 +51,7 @@ from .health import router as health_router
 from .metrics import router as metrics_router
 from .nodes import router as nodes_router
 from .streams import router as streams_router
+from .walls import router as walls_router
 
 API_DESCRIPTION = """\
 IP kameralarni boshqarish va tarqatish servisi. MediaMTX ustidagi
@@ -125,7 +126,7 @@ def create_app() -> FastAPI:
     app.include_router(health_router)
     for router in (cameras_router, streams_router, events_router,
                    devices_router, nodes_router, metrics_router, analytics_router,
-                   admin_router):
+                   walls_router, admin_router):
         app.include_router(router, prefix="/api/v1",
                            dependencies=[Depends(require_key)])
         app.include_router(router, prefix="/api", include_in_schema=False,

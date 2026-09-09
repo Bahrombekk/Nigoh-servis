@@ -1391,7 +1391,7 @@ function createPlayer(video, msgEl) {
 
 
     const report = () => {
-      if (!tStream) return;
+      if (!tStream || (cam && cam._urls)) return;   // mozaika o'lchovga kirmaydi
       const now = performance.now();
       api("/api/v1/metrics/open", {method: "POST", body: {
         camera_id: cam.id, mode: p.mode || "", transport: transport || "hls",
@@ -1401,6 +1401,16 @@ function createPlayer(video, msgEl) {
         total_ms: Math.round(now - t0),
       }}).catch(() => {});
     };
+
+    // Devor mozaikasi: manzil oldindan tayyor (/api/v1/walls dan), kamera
+    // yo'q — /stream so'ralmaydi, o'sha oqim to'g'ridan ochiladi.
+    if (cam && cam._urls) {
+      tStream = performance.now();
+      p.mode = cam._urls.mode || "direct";
+      p.scheduleRenew(cam._urls.stream_url);
+      attach(cam._urls, stale, () => { if (!stale()) msgEl.textContent = FAIL_MSG; });
+      return;
+    }
 
     api(`/api/v1/cameras/${cam.id}/stream?hevc=${HEVC_OK ? 1 : 0}` +
         (quality ? `&quality=${quality}` : ""))
@@ -2214,6 +2224,77 @@ function stopWall() {
   clearTimeout(wallSnapTimer);
   wallPlayers.forEach((p) => p.stop());
   wallPlayers.clear();
+  if (mosaicPlayer) { mosaicPlayer.stop(); mosaicPlayer = null; }
+  S._mosaicSig = null;
+}
+
+/* ═════════ kompozit (server mozaikasi) ═════════
+   Server bir necha kamerani BITTA katakli oqimga birlashtiradi (FFmpeg
+   xstack). Brauzer 36 ta emas, bitta oqim ochadi — 6×6 ham, bir necha
+   brauzer ham qotmaydi, chunki dekodlash serverda bir marta bo'ladi.
+   Katakni bosish o'sha kamerani ochadi. */
+let mosaicPlayer = null;
+function drawMosaic(restart) {
+  const all = wallCams();
+  const n = S.wallN, cols = Math.max(1, Math.round(Math.sqrt(n))), rows = Math.ceil(n / cols);
+  const pages = Math.max(1, Math.ceil(all.length / n));
+  if (S.wallPage > pages) S.wallPage = pages;
+  if (S.wallPage < 1) S.wallPage = 1;
+  S._wallTotal = all.length; S._wallPages = pages;
+  const page = all.slice((S.wallPage - 1) * n, S.wallPage * n);
+  const ids = page.map((c) => c.id);
+  const sig = ids.join(",") + "|" + cols + "x" + rows;
+
+  if (restart || !$("#wall .mosaic-tile")) {
+    stopWall();
+    $("#wall").style.gridTemplateColumns = "1fr";
+    $("#wall").innerHTML = ids.length ? `<div class="tile mosaic-tile" style="aspect-ratio:${cols * 16}/${rows * 9}">
+      <video muted playsinline></video>
+      <div class="tile-msg">tayyorlanmoqda…</div>
+      <div class="mosaic-hit" title="Katakni bosing — kamera ochiladi"></div>
+      <div class="tile-h"><i class="dot s-online"></i>Kompozit · ${ids.length} kamera · ${cols}×${rows}</div>
+      <div class="tile-f"><span>server mozaikasi · bitta oqim</span><span class="sep">|</span><span>H.264</span>
+        <span class="r"><span class="rate">—</span></span></div>
+    </div>` : "";
+    S._mosaicSig = null;
+  }
+  updateWallFoot();
+  $("#wempty").innerHTML = ids.length ? "" : `<span class="wall-empty">${
+    S.wallMode === "sel" ? "Devor bo'sh — kamera tanlang."
+      : S.wallRegion || S.wallNode || S.wallQ ? "Bu filtrga mos kamera yo'q."
+      : "Ko'rsatiladigan kamera yo'q."}</span>`;
+  if (!ids.length || sig === S._mosaicSig) return;    // o'zgarmagan — qayta so'ramaymiz
+  S._mosaicSig = sig;
+
+  const tile = $("#wall .mosaic-tile"), video = tile.querySelector("video"), msg = tile.querySelector(".tile-msg");
+  msg.textContent = "mozaika tayyorlanmoqda… (bir necha soniya)";
+  api("/api/v1/walls", {method: "POST", body: {camera_ids: ids, cols, rows}})
+    .then((w) => {
+      if (S.page !== "wall" || S.wallView !== "mosaic") return;
+      S._mosaicTiles = w.tiles;
+      if (!mosaicPlayer) mosaicPlayer = createPlayer(video, msg);
+      mosaicPlayer.open({id: 0, name: "Kompozit devor",
+        _urls: {stream_url: w.stream_url, webrtc_url: w.webrtc_url, mode: w.mode}});
+      const hit = tile.querySelector(".mosaic-hit");
+      hit.onclick = (e) => {
+        // Bosilgan nuqta -> katak (col,row) -> kamera. Video object-fit:
+        // contain, shuning uchun avval haqiqiy tasvir to'rtburchagini
+        // (letterbox'siz) hisoblaymiz.
+        const r = video.getBoundingClientRect();
+        const va = (w.cols * 16) / (w.rows * 9);      // mozaika nisbati
+        const ba = r.width / r.height;
+        let cw = r.width, ch = r.height, ox = 0, oy = 0;
+        if (ba > va) { cw = r.height * va; ox = (r.width - cw) / 2; }
+        else { ch = r.width / va; oy = (r.height - ch) / 2; }
+        const px = e.clientX - r.left - ox, py = e.clientY - r.top - oy;
+        if (px < 0 || py < 0 || px > cw || py > ch) return;
+        const col = Math.min(w.cols - 1, Math.floor(px / (cw / w.cols)));
+        const row = Math.min(w.rows - 1, Math.floor(py / (ch / w.rows)));
+        const t = (w.tiles || []).find((x) => x.col === col && x.row === row);
+        if (t) openDiag(t.camera_id);
+      };
+    })
+    .catch((e) => { if (msg) msg.textContent = "mozaika olinmadi: " + e.message; S._mosaicSig = null; });
 }
 /* Katak turi: video bo'ladimi yoki "ulanish yo'q" yozuvi. Tur o'zgarsa
    katak qayta quriladi, o'zgarmasa pleyer tegilmaydi. */
@@ -2311,6 +2392,7 @@ function bindTile(t, c) {
 function drawWall(restart) {
   if (S.page !== "wall") return;
   fillWallSelects();
+  if (S.wallView === "mosaic") { drawMosaic(restart); return; }
   const all = wallCams();
   const pages = Math.max(1, Math.ceil(all.length / S.wallN));
   if (S.wallPage > pages) S.wallPage = pages;
@@ -2374,13 +2456,15 @@ function updateWallFoot() {
   const total_ = S._wallTotal || tiles.length, pages = S._wallPages || 1;
   const from = total_ ? (S.wallPage - 1) * S.wallN + 1 : 0, to = Math.min(total_, S.wallPage * S.wallN);
   const modeLbl = {all: "hammasi", online: "online", prob: "muammoli", sel: "tanlangan"}[S.wallMode] || "hammasi";
-  const snap = S.wallView === "snap";
-  $("#wlive").style.display = snap ? "none" : "";
-  $("#wsum").textContent = snap
-    ? `${total_} kamera · ${modeLbl}${S.wallRegion ? " · " + S.wallRegion : ""} · surat rejimi · avtomatik yangilanadi`
-    : `${total_} kamera · ${modeLbl}${S.wallRegion ? " · " + S.wallRegion : ""} · ${playing} jonli · kirish ${total.toFixed(1)} Mbit/s${eg}`;
+  const view = S.wallView;
+  $("#wlive").style.display = view === "live" ? "" : "none";   // ommaviy ochish faqat jonlida
+  const suffix = view === "snap" ? "surat rejimi · avtomatik yangilanadi"
+    : view === "mosaic" ? "kompozit · server bitta oqimga birlashtiradi"
+    : `${playing} jonli · kirish ${total.toFixed(1)} Mbit/s${eg}`;
+  $("#wsum").textContent = `${total_} kamera · ${modeLbl}${S.wallRegion ? " · " + S.wallRegion : ""} · ${suffix}`;
   $("#wcount").textContent = total_
-    ? `${from}–${to} ko'rsatilyapti · ${total_} tadan · ${snap ? "surat (~8 s da yangilanadi)" : "jonli · sub oqim"}` : "kamera yo'q";
+    ? `${from}–${to} ko'rsatilyapti · ${total_} tadan · ${
+        view === "snap" ? "surat (~8 s da yangilanadi)" : view === "mosaic" ? "kompozit · bitta oqim" : "jonli · sub oqim"}` : "kamera yo'q";
   $("#wpager").innerHTML = pages > 1
     ? `<button class="btn ghost sm icon" id="wprev"${S.wallPage <= 1 ? " disabled" : ""}>${ic("chev-r", "sm")}</button>
        <span class="meta">${S.wallPage} / ${pages}</span>

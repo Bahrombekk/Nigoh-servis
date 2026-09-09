@@ -682,6 +682,9 @@ table.tight th,table.tight td{padding:7px 10px}
 .wall-foot{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:12px;flex-wrap:wrap}
 .wall-foot .pager{display:flex;align-items:center;gap:10px}
 .wall-foot .pager #wprev .ic{transform:rotate(180deg)}
+.mosaic-tile{aspect-ratio:16/9;cursor:default}
+.mosaic-tile video{object-fit:contain}
+.mosaic-hit{position:absolute;inset:0;z-index:1;cursor:zoom-in}
 @media(max-width:820px){.wall-bar .search-box{flex-basis:100%;max-width:none;order:5}}
 
 /* ── kamera sahifasi ── */
