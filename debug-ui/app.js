@@ -43,6 +43,10 @@ const KINK = {ok:"var(--green)", warn:"var(--amber)", bad:"var(--red)", idle:"va
 const stateKind = (st) => st === "online" ? "ok" : st === "stalled" ? "warn"
   : st === "offline" ? "bad" : "idle";
 
+/* Ikonka — index.html dagi SVG sprite'dan. */
+const ic = (n, cls = "") => `<svg class="ic ${cls}"><use href="#i-${n}"/></svg>`;
+const OYLAR = ["yan", "fev", "mar", "apr", "may", "iyun", "iyul", "avg", "sen", "okt", "noy", "dek"];
+const dateLbl = (d = new Date()) => `${d.getDate()} ${OYLAR[d.getMonth()]} ${d.getFullYear()}`;
 const pad2 = (n) => (n < 10 ? "0" : "") + n;
 const dd = pad2;
 /* Server UTC beradi, operator mahalliy vaqtni ko'radi. */
@@ -124,17 +128,14 @@ function drawTopbar() {
   const cams = S.cams || [];
   const cnt = (st) => cams.filter((c) => c.state === st).length;
   const prob = cams.filter((c) => PROB.has(c.state)).length;
-  const kind = !cams.length ? "" : prob ? (cnt("offline") ? "bad" : "warn") : "";
-  $("#hpill").className = "pill-h " + kind;
-  $("#tbdot").className = "dot s-" + (prob ? (cnt("offline") ? "offline" : "stalled") : "online");
-  // Telefonda faqat birinchi qism ko'rinadi (.hide-sm) — chiziq sig'sin.
-  $("#tbtitle").innerHTML = cams.length
-    ? `${prob} muammoli · ${cams.length} kamera<span class="hide-sm"> · health 60s · reconciler 30s</span>`
-    : "yuklanmoqda…";
+  const kind = !cams.length ? "okp" : prob ? (cnt("offline") ? "bad" : "warn") : "okp";
+  $("#hpill").className = "hchip " + kind;
+  $("#tbtitle").textContent = cams.length ? `${prob} muammoli` : "yuklanmoqda…";
+  $("#hcamsn").textContent = `${cams.length} kamera`;
   const h = S.health;
   $("#tbmeta").textContent = h ? `managed ${h.managed} · tomoshabin ${h.readers}` : "—";
 }
-setInterval(() => { $("#clock").textContent = clock(); }, 1000);
+setInterval(() => { $("#clock").textContent = clock(); $("#cdate").textContent = dateLbl(); }, 1000);
 
 /* Brauzer H.265 ni o'zi o'qiy oladimi — olsa server o'girmaydi.
 
@@ -168,7 +169,8 @@ const S = {
   gBy: "region", gHours: 24, groups: null,      // topologiya: reyting jadvali
   tHours: 24, stat: null, worst: null, causes: null,   // uzilishlar sahifasi
   diagDay: 0, hist: null,                       // kamera sahifasi
-  sel: null, busy: null, note: {},              // "xato qayerda?" tanlovi va amal izi
+  sel: null, busy: null, note: {}, vsort: "worst",   // "xato qayerda?" tanlovi va amal izi
+  camsAt: 0, tq: "",
   curId: null, page: "verdict",
   nodes: [], health: null, status: null, recentEv: [],
 };
@@ -341,6 +343,10 @@ async function loadCams() {
     } catch (e) {}
     S.cams = all;
     S.byId = new Map(all.map((c) => [c.id, c]));
+    S.camsAt = Date.now();
+    // Skan formasidagi "Hudud" uchun mavjud hududlar taklifi.
+    const regs = [...new Set(all.map((c) => c.region).filter(Boolean))].sort();
+    $("#regions").innerHTML = regs.map((r) => `<option value="${esc(r)}">`).join("");
     drawCams(); drawNav(); drawTopbar();
     if (S.page === "verdict") drawVerdict();
     if (S.page === "topo") drawTopo();
@@ -424,10 +430,25 @@ function go(p) {
   if (p === "res") { drawSys(); loadStatus(); }
   if (p === "out") { drawStat(); loadStat(); }
   if (p === "ev") renderFeed();
+  if (p === "cams") drawNav();
   window.scrollTo(0, 0);
 }
 $$(".tabs .pill").forEach((b) => (b.onclick = () => go(b.dataset.p)));
 $("#dback").onclick = () => go("cams");
+$$("[data-go]").forEach((b) => (b.onclick = () => go(b.dataset.go)));
+$("#refresh").onclick = async () => {
+  const b = $("#refresh");
+  b.classList.add("spin");
+  await Promise.all([loadCams(), loadStatus(), S.page === "out" ? loadStat() : null]);
+  setTimeout(() => b.classList.remove("spin"), 400);
+};
+$("#vsort").onchange = () => { S.vsort = $("#vsort").value; drawVerdict(); };
+$("#vrefresh").onclick = async () => { await loadCams(); toast("Ro'yxat yangilandi", `${S.cams.length} kamera`); };
+$("#spweye").onclick = () => {
+  const i = $("#spw"), show = i.type === "password";
+  i.type = show ? "text" : "password";
+  $("#spweye").innerHTML = ic(show ? "eye" : "eye-off");
+};
 
 function drawNav() {
   const prob = S.cams.filter((c) => PROB.has(c.state)).length;
@@ -435,6 +456,7 @@ function drawNav() {
   $("#nv").className = "n" + (prob ? " alert" : "");
   $("#nc").textContent = S.cams.length || "";
   $("#nw").textContent = S.picked.size || "";
+  $("#wseln").textContent = S.picked.size || "";
   const t = S.stat ? S.stat.total : 0;
   $("#nt").textContent = t ? t : "";
   $("#nt").className = "n" + (t ? " alert" : "");
@@ -636,35 +658,61 @@ async function vAct(kind, c) {
   } catch (e) { done("Xato: " + e.message, "bad"); }
 }
 
-function suspectAge(c) {
-  if (c.state === "offline") { const s = sinceSec(c.last_seen); return s >= 0 ? age(s) : "—"; }
-  if (c.state === "stalled") { const a = snapAge(c); return a >= 0 ? age(a) : "—"; }
-  return "—";
+/* Muammo qachondan beri — soniyada (-1: ma'lum emas). */
+function suspectSec(c) {
+  if (c.state === "offline") return sinceSec(c.last_seen);
+  if (c.state === "stalled") return snapAge(c);
+  return -1;
+}
+function suspectAge(c) { const s = suspectSec(c); return s >= 0 ? age(s) : "—"; }
+
+const STEP_ICON = ["cam", "nvr", "server", "shield", "image"];
+const STEP_GO = ["diag", "topo", "res", "res", "diag"];
+function verdictAdvice(c, v) {
+  const nvr = nvrInfo(c);
+  if (c.state === "offline") return nvr.allDown
+    ? "avval registrator quvvati va magistral tarmoqni tekshiring — barcha kanallar birga yo'qolgan, kamera aybdor emas."
+    : "avval kamera quvvati, kabel va kommutator holatini tekshiring. Muammo davom etsa, tarmoq va parol sozlamalarini tekshiring.";
+  if (c.state === "stalled") return "oqimni qayta ulang. Takrorlansa registratordagi sessiya limitini va kameraning GOP oralig'ini ko'ring.";
+  if (c.state === "unknown") return "birinchi tekshiruv 60 soniya ichida o'tadi; kutmasdan «Hozir tekshirish» ni bosing.";
+  if (c.state === "disabled" || c.enabled === false) return "yoqilgach health tsikli holatni bir daqiqada aniqlaydi.";
+  return v.kind === "warn" ? "surat yangilanmasa kameraning HTTP yuzasi (snapshot) tekshirilsin — video bunga bog'liq emas."
+    : "aralashish kerak emas. Ochilish sekin bo'lsa «Ochilish tezligi» sahifasini ko'ring.";
 }
 
 function drawVerdict() {
   if (S.page !== "verdict") return;
-  const probs = S.cams.filter((c) => PROB.has(c.state))
-    .sort((a, b) => (RANK[a.state] ?? 9) - (RANK[b.state] ?? 9) ||
-                    String(a.name || "").localeCompare(String(b.name || "")));
+  const sort = S.vsort || "worst";
+  const probs = S.cams.filter((c) => PROB.has(c.state)).sort((a, b) => {
+    if (sort === "name") return String(a.name || "").localeCompare(String(b.name || ""));
+    if (sort === "recent") {
+      const sa = suspectSec(a), sb = suspectSec(b);
+      return (sa < 0 ? 1e12 : sa) - (sb < 0 ? 1e12 : sb);
+    }
+    return (RANK[a.state] ?? 9) - (RANK[b.state] ?? 9) ||
+           String(a.name || "").localeCompare(String(b.name || ""));
+  });
   $("#vn").textContent = S.cams.length ? `${probs.length} ta` : "yuklanmoqda…";
+  $("#vupd").textContent = S.camsAt ? new Date(S.camsAt).toTimeString().slice(0, 8) : "—";
 
   // Tanlov: muammoli ro'yxatda qolgan bo'lsa saqlanadi, aks holda eng yomoni.
   let cur = S.sel != null ? S.byId.get(S.sel) : null;
   if (!cur || (!PROB.has(cur.state) && probs.length)) cur = probs[0] || null;
   if (!cur && S.cams.length) cur = S.byId.get(S.sel) || null;
 
-  $("#vsus").innerHTML = probs.length ? probs.slice(0, 40).map((c) => `
-    <button class="sus${cur && c.id === cur.id ? " sel" : ""}" data-id="${c.id}">
-      <i class="edge" style="background:${DOT[c.state]}"></i>
-      <span class="row"><span class="st" style="color:${KINK[stateKind(c.state)]}">${esc(LBL[c.state])}</span>
-        <span class="age">${esc(suspectAge(c))}</span></span>
-      <b>${esc(c.name)}</b>
-      <span class="where">${esc(c.region || "hududsiz")}${c.ip ? " · " + esc(c.ip) : ""} · ${esc(nodeName(c))}</span>
-    </button>`).join("") + (probs.length > 40
+  $("#vsus").innerHTML = probs.length ? probs.slice(0, 40).map((c) => {
+    const k = stateKind(c.state);
+    return `<button class="sus ${c.state}${cur && c.id === cur.id ? " sel" : ""}" data-id="${c.id}"
+      style="box-shadow:inset 3px 0 0 ${DOT[c.state]}">
+      <span class="row"><i class="dot" style="background:${DOT[c.state]}"></i><b>${esc(c.name)}</b>
+        <span class="tag ${k === "bad" ? "bad" : k === "warn" ? "mid" : ""}">${esc(c.state)}</span>
+        <span class="age">${esc(suspectAge(c))}</span>${ic("chev-r", "sm")}</span>
+      <span class="where">${ic("pin")}${esc(c.region || "hududsiz")}${c.ip ? " · " + esc(c.ip) : ""} · ${esc(nodeName(c))}</span>
+    </button>`;
+  }).join("") + (probs.length > 40
       ? `<div class="meta" style="padding:6px 4px">…yana ${probs.length - 40} ta — Kameralar jadvalida</div>` : "")
     : S.cams.length
-      ? `<div class="card tint-ok" style="padding:16px;font:400 12.5px var(--mono);color:var(--green)">✓ Barcha ${S.cams.length} kamera ishlayapti</div>`
+      ? `<div class="tip ok" style="margin:0">${ic("check")}<span><b>Hammasi joyida.</b> ${S.cams.length} kamera ishlayapti.</span></div>`
       : `<div class="meta">yuklanmoqda…</div>`;
   $$("#vsus .sus").forEach((b) => (b.onclick = () => { S.sel = +b.dataset.id; drawVerdict(); }));
 
@@ -677,32 +725,47 @@ function drawVerdict() {
   const busy = S.busy === cur.id;
   const nt = S.note[cur.id];
   const sw = (S.health && S.health.health) || (S.status && S.status.health) || {};
-  const checked = sw.finished_at || sw.at ? `sweep ${age(sinceSec(sw.finished_at || sw.at))} oldin` : "health 60s / reconciler 30s";
+  const swAt = sinceSec(sw.finished_at || sw.at);
+  const since = suspectSec(cur);
+  const startedLbl = since >= 0 ? `${age(since)} oldin boshlangan` : "";
   $("#vright").innerHTML = `
     <div class="card vcard tint-${v.kind}">
-      <div class="badge-row"><span class="badge ${v.kind}">${esc(v.badge)}</span>
-        <span class="meta" style="color:var(--ink-3)">${esc(cur.name)}${cur.ip ? " · " + esc(cur.ip) : ""}</span></div>
+      <div class="badge-row"><span class="badge ${v.kind}"><i class="dot" style="background:${KDOT[v.kind]}"></i>${esc(v.badge)}</span>
+        <span class="meta" style="color:var(--ink-3)">${esc(cur.name)}${cur.ip ? " · " + esc(cur.ip) : ""}</span>
+        <span class="rt">${startedLbl ? `<span>${ic("clock")}${esc(startedLbl)}</span>` : ""}
+          <span>${ic("monitor")}${esc(nodeName(cur))}</span></span></div>
+      <span class="art" style="color:${KINK[v.kind]}">${ic(cur.state === "offline" ? "cam-off" : "cam")}</span>
       <p class="title">${esc(v.title)}</p>
       <p class="body">${esc(v.body)}</p>
       <div class="acts">
         ${busy ? `<span class="busy"><i></i>bajarilyapti…</span>`
-               : `<button class="btn" id="vact">${esc(v.actLabel)}</button>`}
+               : `<button class="btn" id="vact">${ic("play", "sm")}${esc(v.actLabel)}</button>`}
         <span class="note">${esc(v.actNote)}</span>
-        <button class="link" id="vdiag" style="margin-left:auto">Kamera sahifasi →</button>
+        <button class="btn ghost" id="vdiag" style="margin-left:auto">${ic("ext", "sm")}Kamera sahifasi →</button>
       </div>
       ${nt && !busy ? `<p class="vnote">${esc(nt)}</p>` : ""}
     </div>
-    <div class="card"><h3>Zanjir bo'ylab dalillar <span class="h3-sub">${esc(checked)}</span></h3>
-      <div class="chain">${v.chain.map((s) => `
-        <div class="step tint-${s.kind}"><i class="dot" style="background:${KDOT[s.kind]}"></i>
+    <div class="card">
+      <div class="card-h"><div class="ttl"><h3>Zanjir bo'ylab dalillar
+          <span class="h3-sub">${swAt >= 0 ? `sweep ${age(swAt)} oldin` : "health 60s / reconciler 30s"}</span></h3></div>
+        <span class="r ${swAt >= 0 && swAt < 120 ? "ok" : "warn"}"><i class="dot" style="background:${swAt >= 0 && swAt < 120 ? "var(--d-on)" : "var(--d-stall)"}"></i>${
+          swAt >= 0 && swAt < 120 ? "Tekshiruv yakunlandi" : swAt >= 0 ? "Tekshiruv eskirgan" : "Tekshiruv kutilmoqda"}</span></div>
+      <div class="chain">${v.chain.map((s, i) => `
+        <button class="step tint-${s.kind} k-${s.kind}" data-go="${STEP_GO[i]}"><span class="num">${i + 1}</span>
+          <span class="tile-i sm line">${ic(STEP_ICON[i])}</span>
           <div class="cnt"><div class="ln"><b>${esc(s.label)}</b>
-            <span class="tg" style="color:${KINK[s.kind]}">${esc(s.tag)}</span>
-            <span class="pr">${esc(s.probe)}</span></div>
-          <div class="nt">${esc(s.note)}</div></div></div>`).join("")}</div>
+            <span class="tag ${s.kind === "bad" ? "bad" : s.kind === "warn" ? "mid" : s.kind === "ok" ? "good" : ""}">${esc(s.tag)}</span></div>
+          <div class="nt">${esc(s.note)}</div></div>
+          <span class="chip pr">${esc(s.probe)}</span>${ic("chev-r", "sm chev")}</button>`).join("")}</div>
+      <div class="tip ${v.kind}">${ic("bulb")}<span><b>Maslahat:</b> ${esc(verdictAdvice(cur, v))}</span></div>
     </div>`;
   const b = $("#vact");
   if (b) b.onclick = () => vAct(v.actKind, cur);
   $("#vdiag").onclick = () => openDiag(cur.id);
+  $$("#vright .step").forEach((s) => (s.onclick = () => {
+    const to = s.dataset.go;
+    if (to === "diag") openDiag(cur.id); else go(to);
+  }));
 }
 
 /* ═════════ ochilish tezligi ═════════
@@ -719,17 +782,17 @@ function drawSpeed() {
   if (S.page !== "speed") return;
   const om = (S.health && S.health.open_ms) || {};
   const tr = Object.entries(om).filter(([, v]) => v && v.n).sort((a, b) => b[1].n - a[1].n);
-  const stat = (lbl, val, note, cls, ink) => `<div class="stat ${cls || ""}">
-    <div class="lbl" style="color:${ink || "var(--gray)"}">${lbl}</div>
-    <div class="val" style="color:${ink || "var(--ink)"}">${val}</div>
-    <div class="note" style="color:${ink || "var(--gray)"}">${note}</div></div>`;
+  const stat = (lbl, val, note, k, st) => `<div class="stat">
+    <div class="lbl">${lbl}${ic("bars")}</div>
+    <div class="val" style="color:${k === "ok" ? "var(--ink)" : KINK[k]}">${val}</div>
+    <div class="foot"><span class="note">${note}</span>${st ? `<span class="stt ${k}"><i class="dot" style="background:${KDOT[k]}"></i>${st}</span>` : ""}</div></div>`;
   if (!tr.length) {
     $("#spstats").innerHTML =
-      stat("p50 ochilish", "—", "hali o'lchov yo'q") + stat("p95 ochilish", "—", "hali o'lchov yo'q") +
-      stat("keyframe kutish", "—", "frame_ms · kamera GOP") + stat("servis ulushi", "—", "stream_ms · backend + MediaMTX");
+      stat("p50 ochilish", "—", "hali o'lchov yo'q", "idle") + stat("p95 ochilish", "—", "hali o'lchov yo'q", "idle") +
+      stat("keyframe kutish", "—", "frame_ms · kamera GOP", "idle") + stat("servis ulushi", "—", "stream_ms · backend + MediaMTX", "idle");
     $("#spbudget").innerHTML = `<div class="empty" style="margin-top:8px">O'lchov yo'q. Pleyer har ochilishda vaqtni yuboradi —
       kamerani jonli oching, raqamlar shu yerda paydo bo'ladi.<br>Server qayta ishga tushsa hisob noldan boshlanadi.</div>`;
-    $("#spadvice").textContent = "Ochilish vaqti taxmin qilinmaydi — faqat o'lchanadi.";
+    $("#spadv").innerHTML = `<div class="tip">${ic("info")}<span><b>Eslatma:</b> ochilish vaqti taxmin qilinmaydi — faqat o'lchanadi.</span></div>`;
     return;
   }
   const main = tr[0][1];
@@ -738,36 +801,66 @@ function drawSpeed() {
   const p50 = p(main, "total_ms", "p50"), p95 = p(main, "total_ms", "p95");
   const frame = p(main, "frame_ms", "p50"), stream = p(main, "stream_ms", "p50"), signal = p(main, "signal_ms", "p50");
   const n = tr.reduce((s, [, v]) => s + v.n, 0);
+  const grade = (v, ok, warn) => v <= ok ? "ok" : v <= warn ? "warn" : "bad";
+  const LBLK = {ok: "Yaxshi holat", warn: "Diqqat kerak", bad: "Ehtiyot chorasi"};
+  const k50 = grade(p50, 1500, 3000), k95 = grade(p95, 3000, 6000), kf = grade(frame, 1000, 2500), ks = grade(stream, 200, 600);
   $("#spstats").innerHTML =
-    stat("p50 ochilish", (p50 / 1000).toFixed(2) + "<u>s</u>", `${TR_LBL[tr[0][0]] || tr[0][0]} · ${n} o'lchov`) +
-    stat("p95 ochilish", (p95 / 1000).toFixed(2) + "<u>s</u>", "eng yomon 5%",
-         "tint-warn", p95 > slow ? "var(--red)" : "var(--amber)") +
-    stat("keyframe kutish", frame + "<u>ms</u>", "o'rtacha frame_ms · kamera GOP", "tint-warn", "var(--amber)") +
-    stat("servis ulushi", stream + "<u>ms</u>", "stream_ms · backend + MediaMTX", "tint-ok", "var(--green)");
+    stat("p50 ochilish", (p50 / 1000).toFixed(2) + "<u>s</u>", `${TR_LBL[tr[0][0]] || tr[0][0]} · ${n} o'lchov`, k50, LBLK[k50]) +
+    stat("p95 ochilish", (p95 / 1000).toFixed(2) + "<u>s</u>", "eng yuqori 5%", k95, LBLK[k95]) +
+    stat("keyframe kutish", frame + "<u>ms</u>", "o'rtacha frame_ms · kamera GOP", kf, LBLK[kf]) +
+    stat("servis ulushi", stream + "<u>ms</u>", "stream_ms · backend + MediaMTX", ks, LBLK[ks]);
 
   const maxT = Math.max(1, ...tr.map(([, v]) => p(v, "total_ms", "p50")));
   $("#spbudget").innerHTML = tr.map(([k, v]) => {
     const t = p(v, "total_ms", "p50");
+    const st = p(v, "stream_ms", "p50"), sg = p(v, "signal_ms", "p50"), fr = p(v, "frame_ms", "p50");
     const w = (x) => Math.round(x / maxT * 100);
+    const seg = (x, col) => x ? `<i style="width:${w(x)}%;background:${col}">${w(x) > 11 ? x + " ms" : ""}</i>` : "";
+    const kt = grade(t, slow / 2, slow);
     return `<div class="budget">
-      <div class="nm"><b>${esc(TR_LBL[k] || k)}</b><span>${v.n} o'lchov · ${esc(TR_HINT[k] || "")}</span></div>
-      <div class="bar"><i style="width:${w(p(v, "stream_ms", "p50"))}%;background:#1B4DFF"></i>
-        <i style="width:${w(p(v, "signal_ms", "p50"))}%;background:#0A6E5A"></i>
-        <i style="width:${w(p(v, "frame_ms", "p50"))}%;background:#C98A16"></i></div>
-      <div class="tot" style="color:${t > slow ? "var(--red)" : t > slow / 2 ? "var(--amber)" : "var(--ink-3)"}">${(t / 1000).toFixed(2)}s</div>
-    </div>
-    <div class="budget" style="border-top:none;padding-top:0">
-      <span></span><span class="meta">stream ${p(v, "stream_ms", "p50")} · signal ${p(v, "signal_ms", "p50")} · frame ${p(v, "frame_ms", "p50")} ms
-        · p95 ${(p(v, "total_ms", "p95") / 1000).toFixed(2)}s</span><span></span></div>`;
+      <div class="nm"><span class="tile-i sm line">${ic(k === "webrtc" ? "cam" : "play")}</span>
+        <div class="cnt"><b>${esc(TR_LBL[k] || k)}</b><span>${v.n} o'lchov · ${esc(TR_HINT[k] || "")}</span></div></div>
+      <div><div class="bar">${seg(st, "#2563EB")}${seg(sg, "#059669")}${seg(fr, "#D97706")}</div>
+        <div class="det">stream ${st} ms · signal ${sg} ms · frame ${fr} ms · p95 ${(p(v, "total_ms", "p95") / 1000).toFixed(2)}s</div></div>
+      <div class="tot"><span>Jami</span><b style="color:${kt === "ok" ? "var(--ink)" : KINK[kt]}">${(t / 1000).toFixed(2)} s</b><small>(P50)</small></div>
+    </div>`;
   }).join("");
 
   const tot = Math.max(1, stream + signal + frame);
   const big = frame >= stream && frame >= signal ? "frame" : signal >= stream ? "signal" : "stream";
-  $("#spadvice").textContent = big === "frame"
-    ? `Ochilishning ${Math.round(frame / tot * 100)}% i kameradan keyframe kutishga ketyapti (o'rtacha ${frame} ms), servis ulushi esa ${stream} ms. Tezlikni backend'da emas, registratorlarda I Frame Interval'ni fps ning 1–2 baravariga tushirib olish kerak — bepul va barcha kanalga ta'sir qiladi. "Tez ochilsin" belgisi ham bor, lekin u doimiy resurs yeydi.`
+  const kb = big === "frame" ? kf : big === "signal" ? grade(signal, 300, 1000) : ks;
+  const head = big === "frame" ? `Ochilishning ${Math.round(frame / tot * 100)}% i keyframe kutishga ketyapti`
+    : big === "signal" ? `Signalizatsiya ${signal} ms — bu tarmoq/proksi belgisi`
+    : `Servis ulushi ${stream} ms — eng katta bo'lak backend/MediaMTX'da`;
+  const text = big === "frame"
+    ? `O'rtacha frame_ms ${frame} ms, servis ulushi esa ${stream} ms. Tezlikni backend'da emas, registratorlarda I Frame Interval'ni qisqartirib olish kerak — bepul va barcha kanalga ta'sir qiladi.`
     : big === "signal"
-    ? `Signalizatsiya ${signal} ms — bu tarmoq/proksi belgisi (servis ${stream} ms, keyframe ${frame} ms). Uzoq kameralar uchun o'sha joyga alohida MediaMTX tuguni qo'ying: kamera trafigi lokal qoladi, magistralga faqat ko'rilayotgan oqim chiqadi.`
-    : `Servis ulushi ${stream} ms — eng katta bo'lak backend/MediaMTX'da. MediaMTX'da ortiqcha yo'llar (pending_paths) yoki uzoq tugun API'si tekshirilsin; Resurs sahifasidagi "managed" soni tomoshabinlarga qarab o'sishi kerak, kameralarga qarab emas.`;
+    ? `Servis ${stream} ms, keyframe ${frame} ms — sekinlik kamera va server orasidagi yo'lda. Uzoq kameralar uchun o'sha joyga alohida MediaMTX tuguni qo'ying: kamera trafigi lokal qoladi, magistralga faqat ko'rilayotgan oqim chiqadi.`
+    : `MediaMTX'da ortiqcha yo'llar (pending_paths) yoki uzoq tugun API'si tekshirilsin. Resurs sahifasidagi "managed" soni tomoshabinlarga qarab o'sishi kerak, kameralarga qarab emas.`;
+  const tips = big === "frame"
+    ? ["Registratorda I Frame Interval'ni fps ning 1–2 baravariga tushiring.",
+       "Sekin ochiladigan kameralarda «Tez ochilish» (always_on) ni yoqing — narxi ~200 MB xotira.",
+       "H.265 kameralar brauzerda o'girilmasin — sub oqimni H.264 qiling."]
+    : big === "signal"
+    ? ["Uzoq hududlar uchun MediaMTX edge tuguni o'rnating.",
+       "Kamera va server orasidagi tarmoq yo'lini tekshiring (RTT, yo'qotishlar).",
+       "WHEP/proksi konfiguratsiyasini tekshiring, TLS kechikishini kamaytiring.",
+       "Kamera GOP va keyframe oralig'ini sozlang (1–2 s)."]
+    : ["MediaMTX'da ortiqcha yo'llarni (pending_paths) tozalang — Resurs sahifasida ko'rinadi.",
+       "Uzoq tugun API'si sekin bo'lsa tugunni kameraga yaqin joylashtiring.",
+       "Resurs sahifasida «managed» soni tomoshabinga qarab o'sishini tekshiring."];
+  const fb = om.hls_fallback && om.hls_fallback.n;
+  const note = (p95 > slow ? `P95 ochilish ${(p95 / 1000).toFixed(2)} s — eng yomon 5% holat sekin. ` : "Ochilish vaqtlari me'yorda. ") +
+    (fb ? `WebRTC yiqilib HLS'ga tushgan ochilishlar: ${fb} — bu UDP yopiq muhit yoki kodek mos kelmasligi belgisi.` : "");
+  $("#spadv").innerHTML = `<div class="card ${kb === "ok" ? "tint-ok" : kb === "warn" ? "tint-warn" : "tint-bad"}">
+    <div class="two">
+      <div><div class="adv-h ${kb}">${ic("target")}${kb === "ok" ? "Zanjir toza" : "Asosiy muammo aniqlandi"}</div>
+        <div class="adv-t">${esc(head)}</div><p class="adv-p">${esc(text)}</p></div>
+      <div><div class="adv-h">${ic("bulb")}Tavsiyalar</div>
+        <ol class="numlist">${tips.map((t, i) => `<li><i>${i + 1}</i>${esc(t)}</li>`).join("")}</ol></div>
+    </div>
+    <div class="tip" style="margin-top:14px">${ic("info")}<span><b>Eslatma:</b> ${esc(note)}</span></div>
+  </div>`;
 }
 
 /* ═════════ topologiya ═════════
@@ -777,10 +870,14 @@ function drawTopo() {
   if (S.page !== "topo") return;
   const nodes = (S.nodes || []).length ? S.nodes
     : [{id: 1, name: "Asosiy", status: S.health ? (S.health.mediamtx ? "online" : "offline") : "unknown"}];
+  const q = (S.tq || "").toLowerCase().trim();
+  const KIND = {online: "ok", degraded: "warn", offline: "bad"};
   $("#tnodes").innerHTML = nodes.map((n) => {
     const cams = S.cams.filter((c) => (c.node_id || 1) === n.id);
-    const kind = n.status === "online" ? "ok" : n.status === "degraded" ? "warn" : n.status === "offline" ? "bad" : "idle";
+    const kind = KIND[n.status] || "idle";
     const rtm = n.runtime || {};
+    const ready = rtm.ready ?? n.ready ?? 0, readers = rtm.readers ?? n.readers ?? 0;
+    const off = cams.filter((c) => c.state === "offline").length;
     const groups = new Map();
     cams.forEach((c) => {
       const k = c.ip || "tayyor oqim";
@@ -789,50 +886,77 @@ function drawTopo() {
     });
     const rows = [...groups.entries()].map(([ip, g]) => {
       const info = nvrInfo(g[0]);
-      const off = g.filter((x) => x.state === "offline").length;
+      const goff = g.filter((x) => x.state === "offline").length;
       const stall = g.filter((x) => x.state === "stalled").length;
       const on = g.filter((x) => x.state === "online").length;
       const sess = g.reduce((s, x) => s + camRt(x).sessions, 0);
       const single = g.length === 1;
-      const allDown = !single && off === g.length && g[0].ip;
-      const k = allDown ? "bad" : (stall || (off && !single) || info.crowded) ? "warn" : off ? "bad" : "ok";
+      const allDown = !single && goff === g.length && g[0].ip;
+      const k = allDown ? "bad" : (stall || (goff && !single) || info.crowded) ? "warn" : goff ? "bad" : on ? "ok" : "idle";
       const tag = allDown ? "javob yo'q" : info.crowded ? "sessiya ko'p" : stall ? `${stall} kanal muzlagan`
-        : off ? (single ? "javob yo'q" : `${off} kanal offline`) : on ? "sog'lom" : "tekshirilmagan";
+        : goff ? (single ? "javob yo'q" : `${goff} kanal offline`) : on ? "sog'lom" : "tekshirilmagan";
       const note = allDown ? "Barcha kanallar birga yo'qolgan — quvvat yoki magistral."
-        : off && single ? "Yakka kamera javob bermayapti — kabel, quvvat yoki kameraning o'zi."
+        : goff && single ? "Yakka kamera javob bermayapti — kabel, quvvat yoki kameraning o'zi."
         : info.crowded ? `${sess} faol sessiya — ko'p DVR'larda chegara 6–8. Yangi ulanish uchun eski sessiya bo'shashi kerak.`
         : stall ? "Ulanish bor, bayt kelmayapti — reconciler kuzatyapti."
-        : off ? "Registrator tirik, ayrim kanal javob bermayapti — kanal o'chirilgan yoki kabel."
-        : `${on} online · ${sess} faol sessiya.`;
-      return {ip, g, k, tag, note, sess, on, off, stall, rank: k === "bad" ? 0 : k === "warn" ? 1 : 2};
-    }).sort((a, b) => a.rank - b.rank || b.g.length - a.g.length);
-    const shown = rows.slice(0, 40);
+        : goff ? "Registrator tirik, ayrim kanal javob bermayapti — kanal o'chirilgan yoki kabel."
+        : on ? `${on} online · ${sess} faol sessiya.` : "Birinchi tekshiruv navbatda.";
+      const names = g.map((x) => x.name).join(" ");
+      return {ip, g, k, tag, note, sess, on, single, names, rank: k === "bad" ? 0 : k === "warn" ? 1 : 2};
+    }).sort((a, b) => a.rank - b.rank || b.g.length - a.g.length)
+      .filter((r) => !q || r.ip.toLowerCase().includes(q) || r.names.toLowerCase().includes(q) ||
+                     (r.single ? "kamera" : "registrator").includes(q));
+    const shown = rows.slice(0, 60);
+    const host = n.api_base || "http://127.0.0.1:9997";
+    const nstat = (icon, k, v, sub, subk) => `<div class="nstat"><span class="tile-i sm ${k}">${ic(icon)}</span>
+      <div class="cnt"><b>${v}</b><span>${sub[0]}</span>${sub[1] ? `<span class="sub ${subk || ""}">${sub[1]}</span>` : ""}</div></div>`;
     return `<div class="node">
-      <div class="node-h"><i class="dot" style="background:${KDOT[kind]}"></i><b>${esc(n.name)}</b>
-        <span class="st ${kind}">${esc(n.status || "—")}</span>
-        <span class="nkv"><span>kamera ${cams.length}</span><span>yo'l ${rtm.ready ?? n.ready ?? "—"}</span>
-          <span>tomoshabin ${rtm.readers ?? n.readers ?? "—"}</span>
-          ${n.stalled ? `<span style="color:var(--amber)">muzlagan ${n.stalled}</span>` : ""}
-          ${n.pending_paths ? `<span style="color:var(--amber)">ortiqcha yo'l ${n.pending_paths}</span>` : ""}
-          ${n.api_base ? `<span>${esc(n.api_base)}</span>` : ""}</span></div>
-      ${shown.map((r) => `<button class="nvr" data-ip="${esc(r.ip)}">
-        <span class="nm"><i class="dot" style="background:${KDOT[r.k]}"></i>
-          <span class="cnt"><b>${esc(r.ip)}</b><span>${r.g.length} kanal · ${r.g.length > 1 ? "registrator" : "yakka kamera"}</span></span></span>
-        <span class="sess"><span>sessiya ${r.sess}</span>
-          <span class="bar-h"><i style="width:${Math.min(100, r.sess / 8 * 100)}%;background:${r.sess > 6 ? "var(--d-stall)" : "var(--d-on)"}"></i></span></span>
-        <span class="tg" style="color:${KINK[r.k]}">${esc(r.tag)}</span>
-        <span class="nt">${esc(r.note)}</span></button>`).join("")}
-      ${rows.length > 40 ? `<div class="node-more">…yana ${rows.length - 40} registrator — Kameralar jadvalida</div>` : ""}
-      ${!rows.length ? `<div class="node-more">Bu tugunga kamera biriktirilmagan.</div>` : ""}
+      <div class="node-h">
+        <div class="nm"><div class="ln"><i class="dot" style="background:${KDOT[kind]}"></i><b>${esc(n.name)}</b>
+            <span class="st ${kind}">${esc(n.status || "—")}</span></div>
+          <span class="m">kamera ${cams.length} · yo'l ${ready} · tomoshabin ${readers}${n.pending_paths ? ` · ortiqcha yo'l ${n.pending_paths}` : ""}</span>
+          <span class="m"><a href="${esc(host)}" target="_blank" rel="noopener">${ic("ext", "sm")}${esc(host)}</a></span></div>
+        <div class="nstats">
+          ${nstat("monitor", "", cams.length, ["Jami kamera", off ? `<i class="dot sm" style="background:var(--d-off)"></i>${off} offline` : `<i class="dot sm" style="background:var(--d-on)"></i>hammasi tirik`], off ? "bad" : "ok")}
+          ${nstat("topo", "", ready, ["Jami yo'l", n.stalled ? `<i class="dot sm" style="background:var(--d-stall)"></i>${n.stalled} muzlagan` : `<i class="dot sm" style="background:var(--d-on)"></i>bayt oqyapti`], n.stalled ? "warn" : "ok")}
+          ${nstat("users", "", readers, ["Tomoshabin", `${readers ? readers + " faol sessiya" : "hozir ko'rilmayapti"}`], "")}
+          <div class="nstat"><span class="tile-i sm">${ic("link")}</span><div class="cnt"><span>Onlayn manzil</span>
+            <b class="mono">${esc(host.replace(/^https?:\/\//, ""))}</b><span>${n.api_base ? "tashqi tugun" : "ichki tarmoq"}</span></div></div>
+        </div>
+      </div>
+      <div class="node-body">
+        <div class="tbl-tools"><h3>Registratorlar va kameralar</h3><span class="chip">${rows.length} ta qurilma</span>
+          ${nodes[0] === n ? `<label class="search-box">${ic("search")}<input data-tq placeholder="IP, nom yoki tur bo'yicha qidirish…" value="${esc(S.tq || "")}"></label>` : ""}</div>
+        <div class="tbl"><table class="ttab"><thead><tr><th>Holat</th><th>IP manzil / nom</th><th>Turi</th><th>Kanal</th>
+          <th>Sessiya</th><th>Foydalanish</th><th>Holat / natija</th><th>Diagnostika</th><th></th></tr></thead>
+        <tbody>${shown.map((r) => `<tr class="click" data-ip="${esc(r.ip)}">
+          <td><i class="dot" style="background:${KDOT[r.k]}"></i></td>
+          <td class="nm"><b>${esc(r.ip)}</b><span>${r.single ? esc(r.g[0].name) : `${r.g.length} kanal · registrator`}</span></td>
+          <td><span class="ty"><span class="tile-i sm line">${ic(r.single ? "cam" : "nvr")}</span>${r.single ? "Kamera" : "Registrator"}</span></td>
+          <td class="meta">${r.g.length} kanal</td>
+          <td class="meta">sessiya ${r.sess}</td>
+          <td><div class="use"><div class="bar-h"><i style="width:${Math.min(100, r.sess / 8 * 100)}%;background:${r.sess > 6 ? "var(--d-stall)" : "var(--d-on)"}"></i></div><span>${Math.min(100, Math.round(r.sess / 8 * 100))}%</span></div></td>
+          <td><span class="tag ${r.k === "bad" ? "bad" : r.k === "warn" ? "mid" : r.k === "ok" ? "good" : ""}">${esc(r.tag)}</span></td>
+          <td class="dg">${esc(r.note)}</td>
+          <td class="act"><span class="btn ghost sm icon">${ic("chev-r", "sm")}</span></td>
+        </tr>`).join("")}</tbody></table></div>
+        ${rows.length > 60 ? `<div class="node-more">…yana ${rows.length - 60} qurilma — Kameralar jadvalida</div>` : ""}
+        ${!rows.length ? `<div class="node-more">${q ? "Qidiruvga mos qurilma yo'q." : "Bu tugunga kamera biriktirilmagan."}</div>` : ""}
+      </div>
     </div>`;
   }).join("");
-  $$("#tnodes .nvr").forEach((b) => (b.onclick = () => {
+  $$("#tnodes tr[data-ip]").forEach((b) => (b.onclick = () => {
     const ip = b.dataset.ip;
     $("#csearch").value = ip === "tayyor oqim" ? "" : ip;
     S.filt = "all";
     $$("#cfilt .pill").forEach((x) => x.classList.toggle("sel", x.dataset.f === "all"));
     go("cams");
   }));
+  const inp = $("#tnodes [data-tq]");
+  if (inp) {
+    inp.oninput = () => { S.tq = inp.value; const pos = inp.selectionStart; drawTopo();
+      const again = $("#tnodes [data-tq]"); if (again) { again.focus(); again.setSelectionRange(pos, pos); } };
+  }
 }
 
 /* ═════════ kameralar jadvali ═════════ */
@@ -878,6 +1002,25 @@ function tableRows() {
 function drawCams() {
   if (S.page !== "cams") { drawNav(); return; }
   const rs = tableRows();
+  const cnt = (s) => S.cams.filter((c) => c.state === s).length;
+  const probN = S.cams.filter((c) => PROB.has(c.state)).length;
+  const N = Math.max(1, S.cams.length);
+  const seg = ["online", "stalled", "offline", "unknown", "disabled"];
+  const pct = (s) => (cnt(s) / N * 100);
+  $("#csummary").innerHTML = S.cams.length ? `
+    <div><span class="tile-i xl">${ic("cam", "lg")}</span><div class="big"><span>Jami kameralar</span><b>${S.cams.length}</b>
+      <div class="d"><span class="ok">${ic("up", "sm")}${cnt("online")} online</span>
+        ${cnt("offline") ? `<span class="bad">${ic("down", "sm")}${cnt("offline")} offline</span>` : ""}
+        ${cnt("stalled") ? `<span class="warn">${cnt("stalled")} stalled</span>` : ""}</div></div></div>
+    <div class="mid"><div class="park-bar">${seg.map((s) => `<i style="width:${pct(s).toFixed(2)}%;background:${DOT[s]}"></i>`).join("")}</div>
+      <div class="park-leg">${seg.filter((s) => cnt(s)).map((s) =>
+        `<span><i style="background:${DOT[s]}"></i>${cnt(s)} ${s} (${pct(s).toFixed(1)}%)</span>`).join("")}</div></div>
+    <button class="prob ${probN ? "" : "ok"}" id="csumprob"><span class="tile-i xl ${probN ? "bad" : "ok"}">${ic(probN ? "alert" : "check", "lg")}</span>
+      <div class="cnt"><span>Muammoli kameralar</span><b>${probN}</b><small>${probN ? "Diqqat talab qiladi" : "Hammasi ishlayapti"}</small></div>
+      ${ic("chev-r", "chev")}</button>` : "";
+  const sp = $("#csumprob");
+  if (sp) sp.onclick = () => { S.filt = "prob"; $$("#cfilt .pill").forEach((x) => x.classList.toggle("sel", x.dataset.f === "prob")); drawCams(); };
+
   $("#ctb").innerHTML = rs.map((c) => {
     const rt = camRt(c), a = snapAge(c), u = up7(c);
     const k = stateKind(c.state);
@@ -889,7 +1032,8 @@ function drawCams() {
       <span class="cbx">${S.picked.has(c.id) ? "✓" : ""}</span>
       <span class="nm"><i class="dot" style="background:${DOT[c.state]}"></i>
         <span class="cnt"><b>${esc(c.name)}</b>
-          <span style="color:${KINK[k]}">${esc(LBL[c.state] || c.state)} <span style="color:var(--mute)">${esc(since)}${c.external_id ? " · " + esc(c.external_id) : ""}</span></span></span></span>
+          <span class="ln"><span class="tag ${k === "bad" ? "bad" : k === "warn" ? "mid" : k === "ok" ? "good" : ""}">${esc(c.state)}</span>
+            ${since ? `<span>${esc(since)}</span>` : ""}${c.external_id ? `<span class="mono">${esc(c.external_id)}</span>` : ""}</span></span></span>
       <span class="col"><span class="m1">${esc(c.ip || "tayyor oqim")}</span>
         <span class="m2">${esc(c.region || "hududsiz")} · ${esc(nodeName(c))}</span></span>
       <span class="col"><span class="m1">${c.codec ? esc(c.codec) + (c.sub_codec ? " · " + esc(c.sub_codec) : "") : "—"}${c.transcode ? " → H264" : ""}</span>
@@ -897,11 +1041,12 @@ function drawCams() {
       <span class="right">${rt.inMbps ? rt.inMbps.toFixed(1) + " Mb/s" : "—"}</span>
       <span class="col">${u
         ? `<span class="m1" style="color:${upColor(u.uptime_pct)}">${u.uptime_pct}%</span>
-           <span class="m2">${u.outages ? u.outages + " uzilish · " + durHM(u.offline_seconds) : "uzilishsiz"}</span>`
+           <span class="m2">${u.outages ? "— " + u.outages + " uzilish · " + durHM(u.offline_seconds) : "— uzilishsiz"}</span>`
         : `<span class="m1" style="color:var(--mute)">—</span>`}</span>
       <span class="right">${rt.readers || "—"}</span>
       <span class="right" style="color:var(--mute)">${c.state === "offline"
         ? '<span class="tag bad">yopiq</span>' : esc(age(a))}</span>
+      <span class="acts"><span class="btn ghost sm">Batafsil ${ic("chev-r", "sm")}</span></span>
     </button>`;}).join("");
   $$("#ctb .crow").forEach((r) => {
     const id = +r.dataset.id;
@@ -912,6 +1057,9 @@ function drawCams() {
       } else openDiag(id);
     };
   });
+  const totalIn = S.cams.reduce((s, c) => s + camRt(c).inMbps, 0);
+  $("#cfoot").innerHTML = rs.length
+    ? `<span>${rs.length} ta kamera ko'rsatilyapti (${S.cams.length} tadan)</span><span class="meta">kirish ${totalIn.toFixed(1)} Mbit/s · saralash: ${esc(S.sortK)}</span>` : "";
   $("#cempty").innerHTML = rs.length ? "" : `<div class="empty">${
     S.filt === "prob" && S.cams.length
       ? `✓ Muammoli kamera yo'q — ${S.cams.length} kamera ishlayapti.<br>Hammasini ko'rish uchun «Hammasi» filtrini tanlang.`
@@ -919,32 +1067,23 @@ function drawCams() {
   $("#cbulk").innerHTML = S.picked.size ? `<div class="bulk">
     <b>${S.picked.size} ta</b> tanlandi
     <span class="meta">devorda sub oqim ochiladi</span>
-    <button class="btn" style="margin-left:auto" id="bwall">Devorda ochish</button>
+    <button class="btn" style="margin-left:auto" id="bwall">${ic("grid", "sm")}Devorda ochish</button>
     <button class="btn ghost" id="bclr">Bekor</button></div>` : "";
   if (S.picked.size) {
     $("#bwall").onclick = () => { S.wallMode = "sel"; go("wall"); };
     $("#bclr").onclick = () => { S.picked.clear(); drawCams(); };
   }
-  const cnt = (s) => S.cams.filter((c) => c.state === s).length;
-  const probN = S.cams.filter((c) => PROB.has(c.state)).length;
   $$("#cfilt .pill").forEach((b) => {
     const f = b.dataset.f;
     b.querySelector(".n").textContent =
       f === "all" ? S.cams.length : f === "prob" ? probN : cnt(f);
   });
-  const N = Math.max(1, S.cams.length);
-  const seg = ["online", "stalled", "offline", "unknown", "disabled"];
-  $("#parkbar").innerHTML = seg.map((s) =>
-    `<i style="width:${(cnt(s) / N * 100).toFixed(2)}%;background:${DOT[s]}"></i>`).join("");
-  $("#parkleg").innerHTML = seg.filter((s) => cnt(s) || s === "online").map((s) =>
-    `<span><i style="background:${DOT[s]}"></i>${s} ${cnt(s)}</span>`).join("");
   $$(".chead button[data-s]").forEach((b) => {
     b.classList.toggle("sel", b.dataset.s === S.sortK);
     b.querySelector(".arrow").textContent = b.dataset.s === S.sortK ? (S.sortD === 1 ? "▲" : "▼") : "";
   });
-  const totalIn = S.cams.reduce((s, c) => s + camRt(c).inMbps, 0);
   $("#csum").textContent = `${rs.length} ta ko'rsatilyapti · ${S.cams.length} dan · ${cnt("online")} online` +
-    (probN ? ` · ${probN} muammoli` : "") + ` · ${totalIn.toFixed(1)} Mbit/s kirish · qatorni bosib kamera sahifasini oching`;
+    (probN ? ` · ${probN} muammoli` : "") + ` · ${totalIn.toFixed(1)} Mbit/s kirish`;
   drawNav();
 }
 document.addEventListener("keydown", (e) => {
@@ -1724,16 +1863,17 @@ function drawGroups() {
   const outages = gs.reduce((a, g) => a + g.outages, 0);
   $("#gsum").textContent = `${gs.length} ta guruh · ${outages} uzilish · ${HOURS_LBL[S.gHours]}`;
 
-  $("#gtb").innerHTML = gs.map((g) => {
+  $("#gtb").innerHTML = gs.map((g, i) => {
     const n = Math.max(1, g.cameras);
     const w = (v) => (100 * v / n).toFixed(2) + "%";
     // Hududsiz kameralar alohida guruh — ular xaritada ham, hisobotda
     // ham yo'qoladi, shuning uchun qizil bilan belgilanadi.
     const orphan = g.key === "belgilanmagan";
     return `<tr class="click" data-k="${esc(g.key)}">
+      <td class="meta">${i + 1}</td>
       <td class="name" style="color:${orphan ? "var(--red)" : "var(--ink)"}">${esc(g.key)}</td>
       <td class="meta">${g.cameras}</td>
-      <td><div class="bar">
+      <td><div class="bar-h" style="height:8px">
         <i style="width:${w(g.online)};background:var(--d-on)"></i>
         <i style="width:${w(g.offline)};background:var(--d-off)"></i>
         <i style="width:${w(g.unknown + g.disabled)};background:var(--d-unk)"></i>
@@ -1786,13 +1926,19 @@ async function loadStat() {
   // degan xulosa esa faqat mahalliy vaqtda ma'noga ega.
   const tz = -new Date().getTimezoneOffset();
   try {
-    const [hist, worst, ev] = await Promise.all([
+    const [hist, worst, ev, fleet] = await Promise.all([
       api(`/api/v1/admin/outages/hourly?hours=${S.tHours}&tz_offset_minutes=${tz}`),
       api(`/api/v1/admin/uptime?hours=${S.tHours}&limit=8`),
       api("/api/v1/admin/events?limit=500"),
+      api(`/api/v1/admin/uptime?hours=${S.tHours}&group_by=node`),
     ]);
     S.stat = hist;
     S.worst = worst.cameras || [];
+    // Park bo'yicha yig'indi: o'chiq vaqt va o'rtacha mavjudlik (tugun kesimi eng kichik javob).
+    const g = fleet.groups || [];
+    const offSec = g.reduce((a, x) => a + x.offline_seconds, 0), camsN = g.reduce((a, x) => a + x.cameras, 0);
+    const span = Math.max(1, camsN * S.tHours * 3600);
+    S.fleet = {offline: offSec, cameras: camsN, uptime: Math.round(1000 * (span - offSec) / span) / 10};
     const since = Date.now() - S.tHours * 3600 * 1000;
     const evs = (ev.events || []);
     const inWin = evs.filter((e) => utc(e.ts).getTime() >= since);
@@ -1806,53 +1952,74 @@ async function loadStat() {
   drawNav();
 }
 
+const CAUSE_ICON = {offline: ["monitor", "bad"], stalled: ["warn", "warn"], mediamtx: ["server", "violet"], other: ["more", "idle"]};
 function drawStat() {
   if (S.page !== "out") return;
   const st = S.stat;
   $("#tsum").textContent = st
-    ? `${st.total} uzilish · ${HOURS_LBL[S.tHours]} · hodisalar jadvalidan` : "ma'lumot yo'q";
-  if (!st) { $("#thist").innerHTML = ""; return; }
-  $("#ttotal").textContent = `${st.total} uzilish · ${S.cams.length} kamera`;
+    ? `${st.total} uzilish · ${HOURS_LBL[S.tHours]} · hodisalar jadvalidan` : "Kameralar va kanallar bo'yicha uzilishlar statistikasi";
+  if (!st) { $("#thist").innerHTML = ""; $("#tchips").innerHTML = ""; return; }
 
   const max = Math.max(1, ...st.hourly);
   const peak = st.peak || {from_hour: 0, to_hour: 0, outages: 0};
   // Cho'qqi oyna sutka aylanasidan o'tishi mumkin (23:00–02:00).
-  const inPeak = (h) => {
-    const span = (peak.to_hour - peak.from_hour + 24) % 24 || 3;
-    return (h - peak.from_hour + 24) % 24 < span;
-  };
+  const span = (peak.to_hour - peak.from_hour + 24) % 24 || 3;
+  const inPeak = (h) => (h - peak.from_hour + 24) % 24 < span;
+  const peakLbl = peak.outages ? `${pad2(peak.from_hour)}:00–${pad2(peak.to_hour)}:00` : "";
+  $("#tsub").textContent = `Har soatdagi uzilish soni · ${S.cams.length} ta kamera` + (peakLbl ? ` · eng band vaqt ${peakLbl}` : " · cho'qqi yo'q");
+  const f = S.fleet;
+  const chip = (icon, k, v, l) => `<div class="schip tint-${k}"><span class="tile-i sm ${k}">${ic(icon)}</span>
+    <div class="cnt"><b>${v}</b><span>${l}</span></div></div>`;
+  $("#tchips").innerHTML =
+    chip("alert", st.total ? "bad" : "ok", st.total, "Jami uzilish") +
+    chip("clock", "blue", f ? durHM(f.offline) : "—", "Umumiy o'chiq vaqt") +
+    chip("shield-ok", f && f.uptime >= 99 ? "ok" : f && f.uptime >= 95 ? "warn" : "bad", f ? f.uptime + "%" : "—", "O'rtacha mavjudlik");
+  $("#thisty").innerHTML = `<span>${max}</span><span>${Math.round(max / 2)}</span><span>0</span>`;
   $("#thist").innerHTML = st.hourly.map((v, h) => `<i class="hbar"
     style="height:${v ? Math.max(3, Math.round(v / max * 100)) : 2}%;
-           background:${!v ? "var(--line-2)" : v === max ? "var(--d-stall)" : inPeak(h) && peak.outages ? "#E8C46A" : "#E0DACC"}"
-    title="${pad2(h)}:00 — ${v} uzilish"></i>`).join("");
-  $("#tpeak").textContent = peak.outages
-    ? `eng band oyna ${pad2(peak.from_hour)}:00–${pad2(peak.to_hour)}:00 · ${peak.outages} uzilish`
-    : "cho'qqi yo'q";
-
+           background:${!v ? "var(--line-2)" : v === max ? "#EF4444" : inPeak(h) && peak.outages ? "#FCA5A5" : "#BFDBFE"}"
+    title="${pad2(h)}:00–${pad2((h + 1) % 24)}:00 — ${v} uzilish"></i>`).join("");
   const cz = S.causes;
+  const peakN = st.hourly.filter((_, h) => inPeak(h)).reduce((a, b) => a + b, 0);
+  const main = cz && cz.n ? CAUSE.map(([k, l]) => [l, cz.counts[k] || 0]).sort((a, b) => b[1] - a[1])[0] : null;
+  $("#ttip").innerHTML = st.total ? `<div class="tip">${ic("info")}<span><b>Tahlil:</b> uzilishlarning ${Math.round(peakN / st.total * 100)}% qismi ${peakLbl} oralig'ida kuzatilgan.${
+      main && main[1] ? ` Asosiy sabab — ${esc(main[0].toLowerCase())}.` : ""}</span>
+    <button class="link" data-go="ev">${ic("ext", "sm")}Hodisalar jadvalini ochish →</button></div>`
+    : `<div class="tip ok">${ic("check")}<span><b>Toza:</b> bu davrda uzilish qayd etilmagan.</span></div>`;
+  $$("#ttip [data-go]").forEach((b) => (b.onclick = () => go(b.dataset.go)));
+
   if (cz && cz.n) {
     const other = cz.n - CAUSE.reduce((a, [k]) => a + (cz.counts[k] || 0), 0);
-    const rows = CAUSE.map(([k, l, col]) => [l, cz.counts[k] || 0, col]);
-    if (other > 0) rows.push(["Boshqa (online/resumed va h.k.)", other, "var(--line)"]);
-    $("#tcausen").textContent = `${cz.n} hodisa` + (cz.truncated ? " · oxirgi 500 tasi" : "");
-    $("#tcauses").innerHTML = rows.map(([l, n, col]) => `<div class="cause">
-      <div class="ln"><b>${esc(l)}</b><span>${n} · ${Math.round(n / cz.n * 100)}%</span></div>
-      <div class="bar-h"><i style="width:${Math.round(n / cz.n * 100)}%;background:${col}"></i></div></div>`).join("");
+    const rows = CAUSE.map(([k, l, col]) => [k, l, cz.counts[k] || 0, col]);
+    if (other > 0) rows.push(["other", "Boshqa (online/resumed va h.k.)", other, "var(--d-unk)"]);
+    $("#tcausen").textContent = `${cz.n} hodisa` + (cz.truncated ? " · oxirgi 500" : "");
+    $("#tcauses").innerHTML = rows.map(([k, l, n, col]) => `<div class="cause">
+      <span class="tile-i sm ${CAUSE_ICON[k][1]}">${ic(CAUSE_ICON[k][0])}</span>
+      <div class="cnt"><div class="ln"><b>${esc(l)}</b><span>${n} · ${Math.round(n / cz.n * 100)}%</span></div>
+      <div class="bar-h"><i style="width:${Math.round(n / cz.n * 100)}%;background:${col}"></i></div></div></div>`).join("");
   } else {
-    $("#tcausen").textContent = "";
+    $("#tcausen").textContent = "0 hodisa";
     $("#tcauses").innerHTML = `<div class="meta" style="padding:8px 0">Bu davrda hodisa yo'q.</div>`;
   }
 
   const rows = S.worst || [];
-  $("#tworst").innerHTML = rows.map((c) => `<button class="worst" data-id="${c.id}">
-    <i class="dot" style="background:${DOT[c.state] || DOT.unknown}"></i>
-    <span class="cnt"><b>${esc(c.name)}</b>
-      <span class="m">${c.outages} uzilish · ${esc(c.region || "hududsiz")}${
-        c.last_offline_at ? " · oxirgi " + esc(localDM(c.last_offline_at) + " " + localHM(c.last_offline_at)) : ""}</span></span>
-    <span class="rt"><span style="color:${upColor(c.uptime_pct)};font-size:12px">${c.uptime_pct}%</span>
-      <span>o'chiq ${durHM(c.offline_seconds)}</span></span>
-  </button>`).join("");
-  $$("#tworst .worst").forEach((b) => (b.onclick = () => { S.sel = +b.dataset.id; go("verdict"); }));
+  $("#tworstn").textContent = `${rows.length} kamera`;
+  $("#tworst").innerHTML = rows.length ? `<div class="worst h"><span>#</span><span>Kamera</span><span>Uzilish</span><span>Mavjudlik</span><span>Oxirgi uzilish</span><span>Holat</span></div>` +
+    rows.map((c, i) => {
+      const k = stateKind(c.state);
+      const ago = c.last_offline_at ? sinceSec(c.last_offline_at) : -1;
+      return `<button class="worst" data-id="${c.id}">
+      <span class="rank r${i + 1}">${i + 1}</span>
+      <span class="nm"><i class="dot" style="background:${DOT[c.state] || DOT.unknown}"></i><b>${esc(c.name)}</b></span>
+      <span class="m">${c.outages}</span>
+      <span class="m" style="color:${upColor(c.uptime_pct)}">${c.uptime_pct}%</span>
+      <span class="m">${c.last_offline_at ? esc(localDM(c.last_offline_at) + " " + localHM(c.last_offline_at)) : "—"}${ago >= 0 ? `<small>${age(ago)} oldin</small>` : ""}</span>
+      <span><span class="tag ${k === "bad" ? "bad" : k === "warn" ? "mid" : k === "ok" ? "good" : ""}">${esc(c.state)}</span></span>
+    </button>`;}).join("") : "";
+  $$("#tworst .worst[data-id]").forEach((b) => (b.onclick = () => {
+    const id = +b.dataset.id, c = S.byId.get(id);
+    if (c && PROB.has(c.state)) { S.sel = id; go("verdict"); } else openDiag(id);
+  }));
   $("#tempty").innerHTML = rows.length ? "" :
     `<div class="empty" style="margin-top:8px">Bu davrda uzilish qayd etilmagan.</div>`;
 }
@@ -1899,15 +2066,21 @@ function stopWall() {
    katak qayta quriladi, o'zgarmasa pleyer tegilmaydi. */
 const tileKind = (c) => c.state === "offline" || c.state === "unknown" ? "off" : "video";
 function tileHtml(c) {
-  return `${tileKind(c) === "off"
-      ? `<div class="tile-off ${c.state === "unknown" ? "idle" : ""}"><span>${
-          c.state === "offline" ? "ulanish yo'q" : "tekshirilmagan"}</span></div>`
+  const off = tileKind(c) === "off";
+  return `${off
+      ? `<div class="tile-off ${c.state === "unknown" ? "idle" : ""}">${ic("cam-off")}<b>${
+          c.state === "offline" ? "ulanish yo'q" : "tekshirilmagan"}</b><span>${
+          c.state === "offline" ? "Kamera aloqasi uzilgan" : "Birinchi tekshiruv navbatda"}</span></div>`
       : `<video muted playsinline ${c.snapshot_at ? `poster="/api/v1/cameras/${c.id}/snapshot?stale=1"` : ""}></video>
          <div class="tile-msg"></div><div class="tile-play">▶</div>`}
     <div class="tile-h"><i class="dot" style="background:${DOT[c.state]}"></i>${esc(c.name)}</div>
-    ${S.wallMode === "sel" ? `<button class="tile-x" title="Devordan olib tashlash">✕</button>` : ""}
-    <div class="tile-f"><span>${esc(c.region || "")}</span><span>${esc(c.sub_codec || c.codec || "—")}</span>
-      <span class="r">—</span></div>`;
+    <div class="tile-tr"><span class="snapt">${c.snapshot_at ? esc(localDM(c.snapshot_at) + " " + localHM(c.snapshot_at)) : ""}</span><span class="livet">● JONLI</span>
+      ${off ? "" : `<button class="tb tfull" title="To'liq ekran">${ic("full", "sm")}</button>`}
+      ${S.wallMode === "sel" ? `<button class="tb x tile-x" title="Devordan olib tashlash">${ic("x", "sm")}</button>` : ""}</div>
+    <div class="tile-f"><span>${esc(c.slug || c.external_id || "")}</span><span class="sep">|</span><span>${esc(c.codec || "—")}</span>${
+      c.resolution ? `<span class="sep hide-sm">|</span><span class="hide-sm">${esc(c.resolution)}</span>` : ""}${
+      c.fps ? `<span class="sep hide-sm">|</span><span class="hide-sm">${c.fps}fps</span>` : ""}
+      <span class="r"><span class="rate">—</span>${off ? "" : `<button class="tb tsnap" title="Oxirgi kadr">${ic("snap", "sm")}</button>`}</span></div>`;
 }
 function bindTile(t, c) {
   const id = c.id;
@@ -1915,6 +2088,9 @@ function bindTile(t, c) {
   const x = t.querySelector(".tile-x");
   if (x) x.onclick = (e) => { e.stopPropagation(); S.picked.delete(id); drawWall(true); drawNav(); };
   const video = t.querySelector("video");
+  const full = t.querySelector(".tfull"), snap = t.querySelector(".tsnap");
+  if (full) full.onclick = (e) => { e.stopPropagation(); (video.requestFullscreen || video.webkitEnterFullscreen || (() => {})).call(video); };
+  if (snap) snap.onclick = (e) => { e.stopPropagation(); window.open(`/api/v1/cameras/${id}/snapshot?stale=1&t=${Date.now()}`, "_blank"); };
   if (!video) { t.onclick = () => openDiag(id); return; }
   // Video BOSILGANDA ochiladi — devor ochilishi bilan hamma oqim birdan
   // tortilmasin (kamera va tarmoqqa ortiqcha yuk bo'lardi). "Hammasini
@@ -1990,10 +2166,11 @@ function updateWallFoot() {
     if (!c) return;
     const mb = camRt(c).inMbps;
     total += mb;
-    t.querySelector(".tile-f .r").textContent = mb ? mb.toFixed(1) + " Mb/s" : "—";
+    t.querySelector(".tile-f .rate").textContent = mb ? mb.toFixed(1) + " Mb/s" : "—";
   });
   const playing = $$("#wall .tile.playing").length;
-  $("#wlive").textContent = playing ? "Oqimlarni yopish" : "Hammasini jonli ochish";
+  $("#wlive span").textContent = playing ? "Oqimlarni yopish" : "Hammasini jonli ochish";
+  $("#wseln").textContent = S.picked.size || "";
   const eg = S.health ? ` · egress ${Math.round(S.health.egress_mbps)}/${
     S.health.egress_capacity_mbps} Mbit/s` : "";
   const mode = S.wallMode === "sel" ? `${S.picked.size} kamera tanlangan` : S.wallMode === "prob" ? "faqat muammolilar" : "hammasi";
@@ -2373,6 +2550,21 @@ async function act(a, c) {
    Sarf kamera soniga emas, ko'rilayotgan oqimlarga bog'liq — "managed"
    tomoshabinlarga qarab o'sishi kerak, kameralarga qarab emas.        */
 const hEg = [], hIn = [];
+const HIST = {man: [], rd: [], tr: [], p95: []};
+const hpush = (arr, v) => { arr.push(v); if (arr.length > 40) arr.shift(); };
+/* Donut: bo'laklar [{v, color}], markazda raqam va izoh. */
+function donut(parts, center, sub) {
+  const total = parts.reduce((a, p) => a + p.v, 0) || 1;
+  const r = 15.9155, C = 100;
+  let off = 0;
+  const segs = parts.filter((p) => p.v > 0).map((p) => {
+    const len = p.v / total * C;
+    const s = `<circle r="${r}" cx="18" cy="18" fill="none" stroke="${p.color}" stroke-width="4" stroke-dasharray="${len} ${C - len}" stroke-dashoffset="${-off}"/>`;
+    off += len; return s;
+  }).join("");
+  return `<div class="donut"><svg viewBox="0 0 36 36"><circle r="${r}" cx="18" cy="18" fill="none" stroke="var(--line-2)" stroke-width="4"/>${segs}</svg>
+    <div class="c"><b>${center}</b><span>${sub}</span></div></div>`;
+}
 function spark(arr, col) {
   if (arr.length < 2) return "";
   const w = 100, h = 26, mx = Math.max(...arr, 1);
@@ -2385,70 +2577,115 @@ function spark(arr, col) {
 function drawSys() {
   if (S.page !== "res") return;
   const h = S.health;
-  if (!h) { $("#sstats").innerHTML = `<span class="dstat"><span class="note">yuklanmoqda…</span></span>`; return; }
+  if (!h) { $("#sstats").innerHTML = `<div class="dstat"><span class="note">yuklanmoqda…</span></div>`; return; }
   const st = S.status || {};
   const ing = Object.entries(S.rates)
     .filter(([slug]) => !slug.endsWith("_h264"))     // o'girish ichki aylanish
     .reduce((s, [, v]) => s + v, 0);
-  if (S.page === "res") { hEg.push(h.egress_mbps); hIn.push(ing); }
-  if (hEg.length > 40) { hEg.shift(); hIn.shift(); }
+  const transcodes = Object.keys(S.rt).filter((s) => s.endsWith("_h264")).length;
+  const p95 = apiP95();
+  hpush(hEg, h.egress_mbps); hpush(hIn, ing); hpush(HIST.man, h.managed); hpush(HIST.rd, h.readers);
+  hpush(HIST.tr, transcodes); hpush(HIST.p95, p95 || 0);
   const cap = h.egress_capacity_mbps || 1000;
   const pct = h.egress_mbps / cap * 100;
-  const transcodes = Object.keys(S.rt).filter((s) => s.endsWith("_h264")).length;
   const foreign = Array.isArray(h.mediamtx_foreign) ? h.mediamtx_foreign.length : (h.mediamtx_foreign ? 1 : 0);
-  const p95 = apiP95();
   $("#resratio").textContent = `${h.managed} yo'l · ${h.readers} tomoshabin · ${S.cams.length} kamera bazada`;
-  const ds = (lbl, val, note, cls = "") => `<div class="dstat"><span class="lbl">${lbl}</span>
-    <b class="val ${cls}">${val}</b><span class="note">${note}</span></div>`;
+  $("#resupd").textContent = `So'nggi yangilanish: ${clock()}`;
+  const ds = (icon, lbl, val, note, cls, hist, col) => `<div class="dstat"><div class="top">${ic(icon)}<span class="val ${cls}">${val}</span>${
+      hist && hist.length > 1 ? spark(hist, col || "var(--mint)") : ""}</div><span class="lbl">${lbl}</span><span class="note">${note}</span></div>`;
   $("#sstats").innerHTML =
-    ds("managed yo'l", h.managed, "kamera soniga emas, tomoshabinga bog'liq", "mint") +
-    ds("tomoshabin", h.readers, `faol sessiya · ${h.streams} oqim`) +
-    ds("egress", `${h.egress_mbps.toFixed(0)}<u>Mbit/s</u>`, `${cap} dan · ${pct.toFixed(0)}%`,
-       pct > 95 ? "rose" : pct > 80 ? "gold" : "") +
-    ds("kirish", `${ing.toFixed(0)}<u>Mbit/s</u>`, "kameralardan · runtime farqidan") +
-    ds("o'girish", transcodes, "FFmpeg jarayoni · 8 NVENC limiti", transcodes ? "gold" : "mint") +
-    ds("begona yo'l", foreign, "mediamtx_foreign · 0 bo'lishi shart", foreign ? "rose" : "mint") +
-    ds("issiq yo'l", `${h.warm}<u>/256</u>`, "sub · 10 daqiqa saqlanadi") +
-    ds("p95 API", p95 === null ? "—" : `${p95}<u>ms</u>`, "shu brauzerning so'rovlari", p95 > 1000 ? "gold" : "");
+    ds("topo", "managed yo'l", h.managed, "kamera soniga emas, tomoshabinga bog'liq", "mint", HIST.man) +
+    ds("users", "tomoshabin", h.readers, `faol sessiya · ${h.streams} oqim`, "", HIST.rd, "#93C5FD") +
+    ds("up", "egress", `${h.egress_mbps.toFixed(0)}<u>Mbit/s</u>`, `${cap} dan · ${pct.toFixed(0)}%`, pct > 95 ? "rose" : pct > 80 ? "gold" : "", hEg, "#93C5FD") +
+    ds("down", "kirish", `${ing.toFixed(0)}<u>Mbit/s</u>`, "kameralardan · runtime farqidan", "", hIn, "#93C5FD") +
+    ds("zap", "o'girish", transcodes, "FFmpeg jarayoni · 8 NVENC limiti", transcodes ? "gold" : "mint", HIST.tr, "#FCD34D") +
+    ds("globe", "begona yo'l", foreign, "mediamtx_foreign · 0 bo'lishi shart", foreign ? "rose" : "mint") +
+    ds("therm", "issiq yo'l", `${h.warm}<u>/256</u>`, "sub · 10 daqiqa saqlanadi", "") +
+    ds("pulse", "p95 API", p95 === null ? "—" : `${p95}<u>ms</u>`, "shu brauzerning so'rovlari", p95 > 1000 ? "gold" : "", HIST.p95, "#FCA5A5");
 
-  const kv = (rows) => rows.map(([k, v, col]) =>
-    `<div class="r"><span class="kk">${k}</span><span class="v" ${col ? `style="color:${col}"` : ""}>${v}</span></div>`).join("");
+  const kv = (rows) => rows.map(([k, pill, v, pk]) =>
+    `<div class="r"><span class="kk">${k}</span>${pill ? `<span class="okp ${pk || ""}">${pill}</span>` : ""}<span class="v">${v}</span></div>`).join("");
   const sw = (st.health || h.health || {});
   const sn = h.snapshots || {};
+  const swSlow = sw.duration_ms > 45000;
   $("#sjobs").innerHTML = kv([
-    ["health · 60 s", `${sw.checked || 0} manzil · ${sw.online || 0} tirik · ${((sw.duration_ms || 0) / 1000).toFixed(1)} s`,
-     sw.duration_ms > 45000 ? "var(--amber)" : "var(--green)"],
-    ["snapshot tsikli", sn.total ? `${sn.total} ta · ${((sn.duration_ms || 0) / 1000).toFixed(1)} s` : "hali yo'q"],
-    ["MediaMTX", h.mediamtx ? "tirik" : "yiqilgan", h.mediamtx ? "var(--green)" : "var(--red)"],
-    ["SSE obunachi", h.sse_subscribers],
-    ["egress tarixi", spark(hEg, "var(--blue)") || "—"],
+    ["health · 60 s", swSlow ? "SEKIN" : "OK", `${sw.checked || 0} manzil · ${sw.online || 0} tirik · ${((sw.duration_ms || 0) / 1000).toFixed(1)} s`, swSlow ? "warn" : ""],
+    ["snapshot tsikli", sn.total ? "OK" : "—", sn.total ? `${sn.total} ta · ${((sn.duration_ms || 0) / 1000).toFixed(1)} s` : "hali yo'q", sn.total ? "" : "idle"],
+    ["MediaMTX", h.mediamtx ? "OK" : "YO'Q", h.mediamtx ? "tirik" : "yiqilgan", h.mediamtx ? "" : "bad"],
+    ["SSE obunachi", "OK", h.sse_subscribers],
+    ["egress tarixi", "", spark(hEg, "var(--blue)") || "—"],
   ]);
-  $("#snodes").innerHTML = (S.nodes || []).length ? kv((S.nodes || []).map((n) => [
-    esc(n.name), `${n.status} · ${(n.runtime || {}).ready ?? n.ready ?? 0} yo'l · ${n.cameras || 0} kamera` +
-      (n.pending_paths ? ` · ${n.pending_paths} ortiqcha` : ""),
-    n.status === "online" ? "var(--green)" : n.status === "degraded" ? "var(--amber)" : "var(--red)"]))
-    : kv([["—", "tugun yo'q"]]);
+  const jobsOk = h.mediamtx && !swSlow;
+  $("#sjobs-st").innerHTML = `<i class="dot" style="background:${jobsOk ? "var(--d-on)" : "var(--d-stall)"}"></i>${jobsOk ? "Barchasi OK" : "Diqqat kerak"}`;
+  $("#sjobs-st").className = "r " + (jobsOk ? "ok" : "warn");
+
+  // MediaMTX tugunlari: kameralar holati donut + tugunlar
+  const cnt = (s) => S.cams.filter((c) => c.state === s).length;
+  const nodes = S.nodes || [];
+  const nodesOk = nodes.every((n) => n.status === "online");
+  $("#snodes").innerHTML = `<div class="donut-wrap">${donut([
+      {v: cnt("online"), color: "var(--d-on)"}, {v: cnt("stalled"), color: "var(--d-stall)"},
+      {v: cnt("offline"), color: "var(--d-off)"}, {v: cnt("unknown") + cnt("disabled"), color: "var(--d-unk)"}],
+      S.cams.length, "kamera")}
+    <div class="dleg"><div><i style="background:var(--d-on)"></i>Onlayn<b>${cnt("online")}</b></div>
+      <div><i style="background:var(--d-stall)"></i>Muzlagan<b>${cnt("stalled")}</b></div>
+      <div><i style="background:var(--d-off)"></i>Offline<b>${cnt("offline")}</b></div>
+      <div><i style="background:var(--d-unk)"></i>Noma'lum<b>${cnt("unknown") + cnt("disabled")}</b></div></div></div>
+    ${nodes.map((n) => `<div class="sect">${esc(n.name)}<span class="tag ${n.status === "online" ? "good" : n.status === "degraded" ? "mid" : "bad"}">${esc(n.status)}</span></div>
+      <div class="meta">${esc(n.api_base || "127.0.0.1:9997")}${n.pending_paths ? ` · ${n.pending_paths} ortiqcha yo'l` : ""}</div>`).join("")}
+    <div class="mini3"><div><span>RTSP yo'llar</span><b>${h.managed}</b></div><div><span>Faol oqimlar</span><b>${h.streams}</b></div>
+      <div><span>Mbit/s egress</span><b>${h.egress_mbps.toFixed(0)}</b></div></div>`;
+  $("#snodes-st").innerHTML = `<i class="dot" style="background:${nodesOk ? "var(--d-on)" : "var(--d-stall)"}"></i>${nodesOk ? "Onlayn" : "Degradatsiya"}`;
+  $("#snodes-st").className = "r " + (nodesOk ? "ok" : "warn");
+
+  // Disk: data/ tarkibi
   const d = st.disk || {};
-  $("#sdisk").innerHTML = kv([
-    ["suratlar", `${d.snapshots_mb ?? "—"} MB · ${d.snapshots_files ?? "—"} fayl`],
-    ["cameras.db", `${d.db_mb ?? "—"} MB`],
-    ["jurnal", `${d.log_mb ?? "—"} MB · aylanma 5 MB×3`],
-    ["hodisalar", "30 kun saqlanadi"],
-  ]);
+  const snapMb = +d.snapshots_mb || 0, dbMb = +d.db_mb || 0, logMb = +d.log_mb || 0, totMb = snapMb + dbMb + logMb;
+  const mb = (v) => v >= 1024 ? (v / 1024).toFixed(1) + " GB" : v.toFixed(1) + " MB";
+  $("#sdisk").innerHTML = `<div class="donut-wrap">${donut([
+      {v: snapMb, color: "var(--d-on)"}, {v: dbMb, color: "var(--blue)"}, {v: logMb, color: "var(--d-stall)"}],
+      mb(totMb).split(" ")[0], mb(totMb).split(" ")[1] + " · data/")}
+    <div class="dleg"><div><i style="background:var(--d-on)"></i>Suratlar<b>${mb(snapMb)}</b></div>
+      <div><i style="background:var(--blue)"></i>cameras.db<b>${mb(dbMb)}</b></div>
+      <div><i style="background:var(--d-stall)"></i>Jurnal<b>${mb(logMb)}</b></div>
+      <div><i style="background:var(--d-unk)"></i>Hodisalar<b>30 kun</b></div></div></div>
+    <div class="sect">Jildlar hajmi</div>
+    <div class="kv">${kv([
+      ["suratlar", "", `${d.snapshots_files ?? "—"} fayl · ${mb(snapMb)}`],
+      ["cameras.db", "", mb(dbMb)],
+      ["jurnal", "", `${mb(logMb)} · aylanma 5 MB×3`],
+    ])}</div>`;
+  $("#sdisk-st").innerHTML = `<i class="dot" style="background:var(--d-on)"></i>Hisoblandi`;
+
+  // Registratorlarga ulanishlar
   const g = {};
   S.cams.forEach((c) => {
     if (!c.ip || c.state === "offline") return;
     const n = camRt(c).sessions;
     if (n) g[c.ip] = (g[c.ip] || 0) + n;
   });
-  const conn = Object.entries(g).sort((a, b) => b[1] - a[1]).slice(0, 12);
-  $("#sconn").innerHTML = conn.length ? kv(conn.map(([ip, n]) => [esc(ip),
-      `${n} sessiya${n > 6 ? " · DVR chegarasi" : ""}`, n > 6 ? "var(--amber)" : null]))
-    : kv([["—", "faol ulanish yo'q"]]);
-  $("#sstall").innerHTML = (st.stalled || []).length
-    ? st.stalled.map((s) => `<div class="hist-r"><i class="dot" style="background:${DOT.stalled}"></i>
-        <span class="mono" style="font-size:12px">${esc(s)}</span></div>`).join("")
-    : `<div class="meta" style="padding:6px 0">Muzlagan oqim yo'q.</div>`;
+  const conn = Object.entries(g).sort((a, b) => b[1] - a[1]);
+  const crowded = conn.filter(([, n]) => n > 6).length;
+  const totalSess = conn.reduce((a, [, n]) => a + n, 0);
+  $("#sconn").innerHTML = `<div class="mini3"><div><span>Unikal IP</span><b>${conn.length}</b></div>
+      <div><span>Jami sessiya</span><b>${totalSess}</b></div>
+      <div><span>DVR chegarasi</span><b class="${crowded ? "bad" : "ok"}">${crowded}</b></div></div>
+    <div class="sect">Faol ulanishlar</div>
+    ${conn.length ? `<div class="kv">${kv(conn.slice(0, 8).map(([ip, n]) => [`<span class="mono">${esc(ip)}</span>`, "",
+      `${n} sessiya <i class="dot sm" style="background:${n > 6 ? "var(--d-stall)" : "var(--d-on)"};margin-left:8px"></i>`]))}</div>`
+      : `<div class="meta" style="padding:6px 0">Faol ulanish yo'q — hozir hech kim ko'rmayapti.</div>`}`;
+  $("#sconn-st").innerHTML = `<i class="dot" style="background:${crowded ? "var(--d-stall)" : "var(--d-on)"}"></i>${crowded ? "Limitga yaqin" : "Barqaror"}`;
+  $("#sconn-st").className = "r " + (crowded ? "warn" : "ok");
+
+  // Muzlagan oqimlar
+  const stalled = st.stalled || [];
+  $("#sstall").innerHTML = stalled.length
+    ? `<div class="kv">${stalled.map((s) => `<div class="r"><i class="dot" style="background:var(--d-stall)"></i><span class="kk mono">${esc(s)}</span><span class="v">bayt kelmayapti</span></div>`).join("")}</div>
+       <div class="tip warn" style="margin-top:12px">${ic("warn")}<span><b>Reconciler</b> 30 soniyada bir tekshiradi; tiklanmasa «Xato qayerda?» sahifasida yo'lni qayta ulang.</span></div>`
+    : `<div class="empty-ok"><span class="tile-i idle">${ic("snow", "lg")}</span><b>Muzlagan oqim yo'q.</b><p>Barcha oqimlar barqaror ishlayapti.</p></div>
+       <div class="tip ok">${ic("info")}<span><b>Yaxshi holat.</b> Reconciler oxirgi 30 soniyada muzlagan oqimlar aniqlamadi.</span></div>`;
+  $("#sstall-st").innerHTML = `<i class="dot" style="background:${stalled.length ? "var(--d-stall)" : "var(--d-on)"}"></i>${stalled.length ? stalled.length + " muzlagan" : "Muammo yo'q"}`;
+  $("#sstall-st").className = "r " + (stalled.length ? "warn" : "ok");
 }
 
 /* ═════════ hodisalar (SSE) ═════════ */
@@ -2459,10 +2696,11 @@ $$("#efilt .pill[data-e]").forEach((b) => (b.onclick = () => {
 }));
 $("#epause").onclick = () => {
   S.evPause = !S.evPause;
-  $("#epause").classList.toggle("sel", S.evPause);
-  $("#epause").textContent = S.evPause ? "Davom etish" : "Pauza";
+  $("#epause").innerHTML = S.evPause ? `${ic("play", "sm")}<span>Davom etish</span>` : `${ic("pause", "sm")}<span>Pauzaga qo'yish</span>`;
+  $("#evlive").className = "live" + (S.evPause ? " paused" : "");
+  $("#evlive").innerHTML = `<i class="dot sm ${S.evPause ? "" : "s-online"}"></i>${S.evPause ? "Pauzada" : "Jonli oqim"}`;
 };
-$("#eclear").onclick = () => { S.evlog = []; S.evN = 0; $("#ne").textContent = 0; renderFeed(); };
+$("#eclear").onclick = () => { S.evlog = []; S.evN = 0; $("#ne").textContent = ""; renderFeed(); };
 
 function pushEv(kind, body, id) {
   if (S.evPause && (kind === "state" || kind === "snapshot")) return;
@@ -2471,14 +2709,31 @@ function pushEv(kind, body, id) {
   $("#ne").textContent = ++S.evN;
   if (S.page === "ev") renderFeed(true);
 }
+const EV_ICON = {state: ["pulse", ""], snapshot: ["image", "warn"], amal: ["check", "ok"], xato: ["alert", "bad"]};
 function renderFeed(anim) {
-  const l = S.evlog.filter((e) => S.evFilt === "all" || e.kind === S.evFilt).slice(0, 80);
-  $("#feed").innerHTML = l.length ? l.map((e, i) => `<div class="ev${anim && !i ? " new" : ""}"
-    ${e.id ? `data-id="${e.id}"` : ""}>
-    <span class="ev-t">${e.t}</span><span class="ev-k ${e.kind}">${e.kind}</span>
-    <span class="ev-b">${e.body}</span></div>`).join("")
-    : `<div class="empty" style="border:none">Bu turdagi hodisa hali yo'q.</div>`;
+  if (S.page !== "ev") return;
+  const l = S.evlog.filter((e) => S.evFilt === "all" || e.kind === S.evFilt).slice(0, 120);
+  $("#evn").textContent = `${S.evlog.length} ta hodisa`;
+  $("#feed").innerHTML = `<div class="ev h"><span>Vaqt</span><span>Turi</span><span>Kamera / manba</span><span>Tavsif</span><span></span></div>` +
+    (l.length ? l.map((e, i) => {
+      const cam = e.id != null ? S.byId.get(e.id) : null;
+      const body = cam ? e.body.replace(/^<b>.*?<\/b>\s*/, "") : e.body;
+      const [icon, k] = EV_ICON[e.kind] || ["more", "idle"];
+      return `<button class="ev${anim && !i ? " new" : ""}" ${e.id != null ? `data-id="${e.id}"` : ""}>
+      <span class="ev-t">${e.t}</span>
+      <span class="ev-k ${e.kind}"><span class="tile-i ${k}">${ic(icon, "sm")}</span><span class="tg">${e.kind}</span></span>
+      <span class="ev-c">${cam ? `${ic("cam")}${esc(cam.name)}<span>${esc(cam.ip || "")}</span>` : `<span>tizim</span>`}</span>
+      <span class="ev-b">${body}</span>${ic("chev-r", "sm chev")}</button>`;
+    }).join("") : `<div class="empty" style="border:none">Bu turdagi hodisa hali yo'q.</div>`);
   $$("#feed .ev[data-id]").forEach((d) => (d.onclick = () => openDiag(+d.dataset.id)));
+  const c = (k) => S.evlog.filter((e) => e.kind === k).length;
+  const stat = (icon, k, lbl, val, note) => `<div class="stat ico tint-${k}"><span class="tile-i ${k}">${ic(icon, "lg")}</span>
+    <div class="cnt"><span class="lbl">${lbl}</span><span class="val">${val}</span><span class="note">${note}</span></div></div>`;
+  $("#evstats").innerHTML =
+    stat("file", "blue", "Jami hodisalar", S.evlog.length, "shu sessiyada") +
+    stat("image", "ok", "Snapshotlar", c("snapshot"), "surat yangilandi") +
+    stat("alert", "bad", "Xatolar", c("xato"), "amal bajarilmadi") +
+    stat("pulse", "warn", "Holat o'zgarishi", c("state"), "online / stalled / offline");
 }
 
 function startSSE() {
