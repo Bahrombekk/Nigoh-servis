@@ -1916,7 +1916,7 @@ function createPlayer(video, msgEl) {
             return;
           }
           const code = d.response && d.response.code;
-          /* 401/403/404 — bu CHIPTA muammosi EMAS, manba hozir yo'q.
+          /* 401/403/404/5xx — bu CHIPTA muammosi EMAS, manba hozir yo'q.
 
              Ishlab chiqarishda o'lchandi (negoh.das-uty.uz, tcpdump +
              MediaMTX jurnali): kamera SETUP javobida
@@ -1928,6 +1928,19 @@ function createPlayer(video, msgEl) {
 
                  index.m3u8          -> 404
                  video1_stream.m3u8  -> 401 {"error":"authentication error"}
+
+             Xom (o'girilmagan) yo'lda yana bitta ko'rinishi bor: manba
+             uzilganda MediaMTX muxerni yo'q qiladi va shu oraliqdagi
+             master so'roviga 500 qaytaradi (o'lchandi: 10.30.11.55,
+             H.265 asosiy oqim — kamera RTSP'ni 2-4 soniyada uzadi):
+
+                 index.m3u8          -> 500 (Internal Server Error)
+
+             Bu ham o'tkinchi: manba qaytishi bilan o'sha manzil o'sha
+             chipta bilan 200 beradi. Shuning uchun 5xx ham xuddi
+             401/404 kabi "manba kutilmoqda" deb qaraladi — pleyer
+             yopilmaydi. 502/503 esa ilova/nginx qayta ishga tushgan
+             oraliq (deploy) — u ham o'tkinchi.
 
              Chipta esa butunlay joyida — o'sha chipta bilan bir soniya
              keyin o'sha manzil 200 beradi. Shuning uchun yangi chipta
@@ -1941,7 +1954,8 @@ function createPlayer(video, msgEl) {
              masterga `max-age=30` beradi va usiz brauzer 30 soniyagacha
              keshdagi eski masterni qaytarardi, ya'ni tiklanish qadami
              umuman ishlamasdi. */
-          if (code === 401 || code === 403 || code === 404) {
+          if (code === 401 || code === 403 || code === 404
+              || (code >= 500 && code <= 504)) {
             // Bitta istisno: chipta HAQIQATAN muddati tugagan bo'lsa
             // (masalan, ilova uzoq to'xtab turgan va `scheduleRenew`
             // taymeri o'z vaqtida ishlamagan) kutishning ma'nosi yo'q —
