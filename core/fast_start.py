@@ -337,7 +337,7 @@ def _ffmpeg_exe() -> str:
     return shutil.which("ffmpeg") or ""
 
 
-def _ffmpeg_frame(url: str) -> bytes | None:
+def _ffmpeg_frame(url: str, timeout: float = 10) -> bytes | None:
     """Istalgan RTSP manzildan bitta JPEG kadr (FFmpeg bilan)."""
     exe = _ffmpeg_exe()
     if not exe or not url:
@@ -347,7 +347,7 @@ def _ffmpeg_frame(url: str) -> bytes | None:
             [exe, "-hide_banner", "-loglevel", "error",
              "-rtsp_transport", "tcp", "-i", url,
              "-frames:v", "1", "-q:v", "4", "-f", "image2", "-"],
-            capture_output=True, timeout=10,
+            capture_output=True, timeout=timeout,
         )
     except (OSError, subprocess.SubprocessError):
         return None
@@ -390,12 +390,19 @@ def device_snapshot(ip: str, username: str, password: str, channel: int,
 
 
 def snapshot(camera_id: int, ip: str, username: str, password: str,
-             vendor: str, rtsp_path: str, slug: str = "") -> bytes | None:
+             vendor: str, rtsp_path: str, slug: str = "",
+             port: int = 554) -> bytes | None:
     """Kameraning JPEG suratini qaytaradi (qisqa muddat keshlab).
 
     Avval kameraning HTTP-snapshot manzillari sinaladi (eng tez yo'l),
-    ular ishlamasa — MediaMTX'dagi oqimdan kadr olinadi (har qanday
-    kamera uchun ishlaydi, lekin sekinroq).
+    ular ishlamasa — RTSP'dan kadr olinadi: TO'G'RIDAN kameradan (sovuq
+    kamerada ham ~1-2 s), bo'lmasa MediaMTX'dagi oqimdan.
+
+    Nega to'g'ridan: NVR'lar ko'pincha ISAPI/HTTP portini tashqariga
+    ochmaydi (RTSP boshqa portga forward qilingan) — HTTP surat 404
+    beradi. MediaMTX'dan olish esa sovuq kamerada runOnDemand cold-start
+    (keyframe kutish) tufayli 10 s timeout'ga uriladi. To'g'ridan RTSP
+    ikkalasini ham chetlab o'tadi.
     """
     if not ip:
         return None
@@ -419,7 +426,15 @@ def snapshot(camera_id: int, ip: str, username: str, password: str,
                 _snap_url[camera_id] = url
                 return data
 
-    data = _ffmpeg_snapshot(slug)
+    # RTSP zaxira: avval TO'G'RIDAN kameradan (sovuq kamerada ham tez,
+    # HTTP kabi port muammosi yo'q), bo'lmasa MediaMTX oqimidan.
+    data = None
+    if rtsp_path:
+        from .rtsp_probe import build_rtsp_url
+        data = _ffmpeg_frame(
+            build_rtsp_url(ip, port, rtsp_path, username, password))
+    if not data:
+        data = _ffmpeg_snapshot(slug)
     if data:
         # HTTP yo'l ishlamadi, RTSP ishladi. Kesh uzun: har 10 soniyada
         # yangi RTSP sessiya ochish tirik oqimga xalaqit beradi.

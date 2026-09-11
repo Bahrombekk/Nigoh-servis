@@ -163,8 +163,12 @@ def camera_state(row) -> str:
     if not row["ip"]:
         return "unknown"
     slug = row["slug"] or ""
-    variants = {slug, slug + mediamtx_sync.SUB_SUFFIX,
-                slug + mediamtx_sync.TRANSCODE_SUFFIX}
+    # Faqat TOMOSHA qilinadigan oqimlar kamerani "muzlagan" qiladi: asosiy
+    # (slug) va H.264 o'girish (_h264). SUB oqim ALOHIDA — u faqat devor
+    # kataklari uchun; sub muzlasa (masalan kameraning 2-oqimi yo'q/beqaror)
+    # asosiy oqim ishlab turgani holda butun kamera muammoli ko'rinmasin.
+    # Sub holatini devorning o'z tayyorlik tekshiruvi hal qiladi.
+    variants = {slug, slug + mediamtx_sync.TRANSCODE_SUFFIX}
     for display in reconciler.stalled_paths():
         if display.split("@", 1)[0] in variants:
             return "stalled"
@@ -203,6 +207,7 @@ def admin_camera(row, request: Request) -> dict:
         "rtsp_path": row["rtsp_path"] or "",
         "sub_path": row["sub_path"] or "",
         "sub_codec": (row["sub_codec"] or "") if "sub_codec" in row.keys() else "",
+        "sub_bad": bool(row["sub_bad"]) if "sub_bad" in row.keys() else False,
         "node_id": row["node_id"] or 1,
         "vendor": row["vendor"] or "boshqa",
         "enabled": bool(row["enabled"]),

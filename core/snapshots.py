@@ -163,13 +163,12 @@ def read(row, live: bool = True) -> tuple[bytes | None, str, float]:
     return None, "", 0.0
 
 
-def capture(row) -> bool:
-    """Bitta kameradan surat olib diskka yozadi, bazaga vaqtni belgilaydi."""
-    data = fast_start.snapshot(
-        row["id"], row["ip"], row["username"] or "",
-        security.decrypt(row["password_enc"]),
-        row["vendor"] or "", row["rtsp_path"] or "", row["slug"] or "")
-    if not data:
+def store_frame(row, data: bytes | None) -> bool:
+    """Tayyor JPEG kadrni surat sifatida saqlaydi: disk + `snapshot_at` +
+    SSE. Manba ikki xil — server olgan kadr (`capture`) yoki brauzer jonli
+    ko'rinishdan yuborgan kadr (push endpoint). Ikkinchisi ochiq turgan
+    kamera uchun alohida RTSP grab'ni tejaydi."""
+    if not data or data[:2] != b"\xff\xd8":       # JPEG belgisi
         return False
     at = datetime.now(timezone.utc).isoformat(timespec="seconds")
     try:
@@ -187,6 +186,16 @@ def capture(row) -> bool:
                              "external_id": row["external_id"] or "",
                              "at": at})
     return True
+
+
+def capture(row) -> bool:
+    """Bitta kameradan surat olib diskka yozadi, bazaga vaqtni belgilaydi."""
+    data = fast_start.snapshot(
+        row["id"], row["ip"], row["username"] or "",
+        security.decrypt(row["password_enc"]),
+        row["vendor"] or "", row["rtsp_path"] or "", row["slug"] or "",
+        row["port"] or 554)
+    return store_frame(row, data)
 
 
 def _due_cameras() -> list:

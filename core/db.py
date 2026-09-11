@@ -30,6 +30,10 @@ CAMERA_EXTRA_COLUMNS = {
     "rtsp_path": "TEXT",
     "sub_path": "TEXT",                           # past sifatli 2-oqim (video devor)
     "sub_codec": "TEXT",                          # sub oqim kodegi (odatda H264)
+    # Sub oqimi brauzerda ochilmagan (masalan H.265 sub) — bir marta
+    # aniqlangач saqlanadi, keyingi safar devor to'g'ridan asosiy oqimdan
+    # ochadi, sub'ni qayta sinamaydi. Kamera tahrirlanganda 0 ga qaytadi.
+    "sub_bad": "INTEGER NOT NULL DEFAULT 0",
     "vendor": "TEXT",
     "enabled": "INTEGER NOT NULL DEFAULT 1",
     "note": "TEXT",

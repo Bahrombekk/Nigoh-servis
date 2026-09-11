@@ -184,10 +184,12 @@ def admin_update(ref: str, cam: CameraIn, request: Request):
 
         try:
             db.execute(
+                # sub_bad=0 — tahrirdan keyin sub qayta sinaladi (yo'l/parol
+                # o'zgargan bo'lishi mumkin).
                 "UPDATE cameras SET name=?, region=?, lat=?, lng=?, stream_url=?, "
                 "slug=?, ip=?, port=?, username=?, password_enc=?, rtsp_path=?, "
                 "sub_path=?, sub_codec=?, vendor=?, enabled=?, note=?, codec=?, "
-                "resolution=?, fps=?, "
+                "resolution=?, fps=?, sub_bad=0, "
                 "transcode=?, always_on=?, node_id=?, external_id=? WHERE id=?",
                 (
                     cam.name.strip(), cam.region.strip(), cam.lat, cam.lng,

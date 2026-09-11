@@ -214,3 +214,41 @@ def camera_snapshot(ref: str, request: Request, stale: int = 0):
         if request.headers.get("if-none-match") == etag:
             return Response(status_code=304, headers=headers)
     return Response(content=data, media_type="image/jpeg", headers=headers)
+
+
+@router.post("/{ref}/snapshot", status_code=204)
+async def push_snapshot(ref: str, request: Request):
+    """Brauzer jonli ko'rinishdan olgan kadrni surat sifatida saqlaydi.
+
+    Operator kamerani (devorda yoki sahifasida) jonli ko'rayotgan bo'lsa,
+    brauzer allaqachon dekodlangan kadrga ega — o'shani yuboradi va surat
+    yangilanadi. Shunda server o'sha kamera uchun alohida RTSP grab
+    qilmaydi: ochiq turgan kameralarda surat tsiklining yuki kamayadi.
+    """
+    with get_db() as db:
+        row = resolve_ref(db, ref)
+    if row is None or not row["enabled"]:
+        raise HTTPException(404, "Kamera topilmadi")
+    data = await request.body()
+    # Katta yuklamadan himoya + JPEG tekshiruvi store_frame ichida.
+    if len(data) > 3_000_000:
+        raise HTTPException(413, "Surat juda katta (≤3 MB)")
+    if not snapshots.store_frame(row, data):
+        raise HTTPException(400, "JPEG kutilgan")
+    return Response(status_code=204)
+
+
+@router.post("/{ref}/sub-bad", status_code=204)
+def mark_sub_bad(ref: str):
+    """Kameraning sub oqimi brauzerда ochilmadi — buni saqlaymiz.
+
+    Frontend devor kataki sub'ni ocholmay asosiyga o'tganда chaqiradi.
+    Keyingi safar (restart bo'lsa ham) devor to'g'ridan asosiy oqimdan
+    ochadi, sub'ni qayta sinamaydi. Kamera tahrirlanganда 0 ga qaytadi.
+    """
+    with get_db() as db:
+        row = resolve_ref(db, ref)
+        if row is None:
+            raise HTTPException(404, "Kamera topilmadi")
+        db.execute("UPDATE cameras SET sub_bad = 1 WHERE id = ?", (row["id"],))
+    return Response(status_code=204)

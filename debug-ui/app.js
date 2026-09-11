@@ -177,6 +177,7 @@ const S = {
   rates: {},              // slug -> Mbit/s (ikki so'rov orasidagi farq)
   prevRt: null,           // {t, paths}
   filt: "prob", sortK: "state", sortD: 1, picked: new Set(),
+  subBad: new Set(),      // sub oqimi ishlamagan kameralar — keyingi safar asosiydan ochamiz
   up7: null, up7At: 0,    // kamera id -> 7 kunlik uptime (jadval ustuni)
   wallN: 9, wallMode: "all", wallView: "snap", wallRegion: "", wallNode: "", wallQ: "", wallPage: 1,
   evlog: [], evFilt: "all", evPause: false, evN: 0,
@@ -1164,6 +1165,7 @@ const WATCH_MS = 2000;
 const WATCH_DEAD = 6;
 const MAX_RETRY = 3;          // ketma-ket shuncha urinishdan keyin taslim
 const RETRY_WINDOW = 60000;   // shuncha tinch turgandan keyin hisob yangilanadi
+const SNAP_PUSH_MS = 30000;   // jonli ochiq turganda surat shuncha vaqtda yangilanadi
 /* WebRTC jitter buferi nishoni (ms) — brauzer tasvirni ko'rsatishdan
    oldin shuncha ushlab turadi.
 
@@ -1289,13 +1291,52 @@ function warmStream(c) {
   api(`/api/v1/cameras/${c.id}/stream?hevc=${HEVC_OK ? 1 : 0}`).catch(() => {});
 }
 
+/* Devor kataki qaysi sifatда ochilsin. Sub yengil, lekin: (a) ilgari
+   ishlamagan (subBad) yoki (b) sub kodegi H.265 bo'lsa — brauzer WebRTC'da
+   H.265 ni dekod qila olmaydi va katak qotib qoladi. Bunday kamerani
+   KUTMASDAN to'g'ridan asosiy oqimdan ochamiz (asosiy H.264 ga o'girilgan). */
+function wallQuality(cam) {
+  if (!cam) return "sub";
+  // sub_bad — serverда saqlangan (bir marta aniqlangan, restart bo'lsa ham
+  // esda); subBad — shu sessiyaда aniqlangan; sub_codec H.265 — oldindan
+  // ma'lum ochilmaydigan.
+  if (cam.sub_bad || S.subBad.has(cam.id)) return "";
+  if (/265|hevc/i.test(cam.sub_codec || "")) return "";
+  return "sub";
+}
+
 function createPlayer(video, msgEl) {
   const p = {video, msgEl, hls: null, pc: null, token: 0, mode: "",
              cam: null, quality: "", watch: null, retries: 0, lastRetry: 0,
-             renew: null, reopens: 0, reopenTimer: null};
+             renew: null, reopens: 0, reopenTimer: null, snapTimer: null};
 
   p.stopWatch = () => { if (p.watch) { clearInterval(p.watch); p.watch = null; } };
   p.stopRenew = () => { if (p.renew) { clearTimeout(p.renew); p.renew = null; } };
+  p.stopSnap = () => { if (p.snapTimer) { clearInterval(p.snapTimer); p.snapTimer = null; } };
+
+  /* Jonli ko'rinishdan surat: video ochiq va kadr yurayotgan bo'lsa,
+     dekodlangan kadrni serverga yuboramiz — ochiq kamera uchun server
+     alohida RTSP grab qilmaydi. WebRTC/HLS kadri bir xil manbadan, shuning
+     uchun canvas "tainted" bo'lmaydi. Xato bo'lsa jimgina o'tkazamiz. */
+  p.pushSnap = () => {
+    const cam = p.cam;
+    if (!cam || !cam.id || video.paused || video.readyState < 2
+        || video.videoWidth < 2) return;
+    let cv;
+    try {
+      cv = document.createElement("canvas");
+      cv.width = video.videoWidth;
+      cv.height = video.videoHeight;
+      cv.getContext("2d").drawImage(video, 0, 0);
+    } catch (e) { return; }         // tainted canvas — jimgina tashlab ketamiz
+    cv.toBlob((blob) => {
+      if (!blob) return;
+      fetch(`/api/v1/cameras/${cam.id}/snapshot`, {
+        method: "POST", body: blob, credentials: "same-origin",
+        headers: {"Content-Type": "image/jpeg"},
+      }).catch(() => {});
+    }, "image/jpeg", 0.6);
+  };
 
   /* Chiptani yangilash uchun qayta ochish. p.retry() dan farqi: bu
      nosozlik EMAS, shuning uchun urinishlar hisobiga kirmaydi va
@@ -1340,6 +1381,7 @@ function createPlayer(video, msgEl) {
     p.token++;
     p.stopWatch();
     p.stopRenew();
+    p.stopSnap();
     if (p.reopenTimer) { clearTimeout(p.reopenTimer); p.reopenTimer = null; }
     if (p.hls) { p.hls.destroy(); p.hls = null; }
     if (p.pc) { p.pc.close(); p.pc = null; }
@@ -1356,6 +1398,23 @@ function createPlayer(video, msgEl) {
      qaytaradi. */
   p.retry = (why) => {
     if (!p.cam) return;
+    // Sub oqim ishlamasa (ko'pincha H.265 sub'ni brauzer dekod qila olmay
+    // "ulangan" holatda qotib qolsa) qayta urinmaymiz — asosiy oqimga
+    // o'tamiz. Majburlab serverda sub'ni o'girmaymiz; asosiy oqim (kerak
+    // bo'lsa allaqachon H.264 ga o'girilgan) baribir ishlaydi.
+    if (p.quality === "sub") {
+      console.log(`[pleyer] ${why} — sub ishlamadi, asosiy oqimga o'tildi`);
+      if (p.cam) {
+        S.subBad.add(p.cam.id);            // shu sessiyada
+        p.cam.sub_bad = true;              // ma'lumotда
+        // Serverda saqlaymiz — restart bo'lsa ham qayta sinamaydi.
+        fetch(`/api/v1/cameras/${p.cam.id}/sub-bad`,
+              {method: "POST", credentials: "same-origin"}).catch(() => {});
+      }
+      p.retries = 0;
+      p.open(p.cam, "");
+      return;
+    }
     const now = Date.now();
     // Bir daqiqa tinch ishlagandan keyingi uzilish — yangi voqea, eski
     // hisob bilan bog'lanmasin (aks holda bir marta taslim bo'lgan
@@ -1381,6 +1440,14 @@ function createPlayer(video, msgEl) {
     const my = ++p.token;
     const stale = () => p.token !== my;
     msgEl.textContent = "ulanmoqda…";
+
+    // Jonli ochiq turганda surat vaqti-vaqti yangilanib tursin (kadr
+    // yurayotgan bo'lsa). Mozaika (cam._urls) chetda — uning id'si yo'q.
+    p.stopSnap();
+    if (cam && cam.id) {
+      setTimeout(p.pushSnap, 4000);            // birinchi kadr kelgach
+      p.snapTimer = setInterval(p.pushSnap, SNAP_PUSH_MS);
+    }
 
     /* Ochilish vaqti bosqichlarga bo'lib o'lchanadi — "sekin" degan
        shikoyatga javob berish uchun bitta raqam yetmaydi. t0 bosildi,
@@ -1558,7 +1625,13 @@ function createPlayer(video, msgEl) {
           });
           if (frames === null) return;              // statistika hali yo'q
           if (frames === prev) still++; else { still = 0; prev = frames; }
-          if (still >= WATCH_DEAD) { p.stopWatch(); p.retry("kadrlar to'xtadi"); }
+          // Hech qachon kadr dekod bo'lmagan (frames 0) — tez taslim
+          // (~4 s): sub H.265 bo'lsa brauzer uni umuman ocholmaydi,
+          // 12 s kutishning ma'nosi yo'q. Bir marta kadr kelgandan
+          // keyingi qotish esa uzunroq kutiladi (sog'lom oqimning
+          // portlashli jimligini uzмaslik uchun).
+          const dead = (prev <= 0 && still >= 2) || still >= WATCH_DEAD;
+          if (dead) { p.stopWatch(); p.retry("kadr kelmadi"); }
         }).catch(() => {});
       }, WATCH_MS);
     }
@@ -2366,7 +2439,7 @@ function bindTile(t, c) {
       t.classList.remove("playing");
       if (overlay) overlay.style.display = "";
     } else {
-      player.open(S.byId.get(id), "sub");
+      player.open(S.byId.get(id), wallQuality(S.byId.get(id)));
       t.classList.add("playing");
       if (overlay) overlay.style.display = "none";
     }
@@ -2484,6 +2557,9 @@ function openDiag(id) {
   drawDiag();
   loadDiagHistory(c);
   warmStream(c);          // play bosilguncha oqim tayyor bo'lib tursin
+  // Kamera sahifasi — bitta kamerani ataylab ochish, "talab bo'yicha".
+  // Efirdagi kamerada oqim darhol ko'rinsin (muzlagan/uzilganida yozuv).
+  if (c.state === "online") openLive(c);
 }
 
 /* ── jonli ko'rish: panel doim ko'rinadi, video bir bosishda ── */
@@ -2561,6 +2637,7 @@ function drawDiag() {
     <button class="btn ghost" data-a="snap">Suratni yangilash</button>
     <button class="btn ghost" data-a="stale">Oxirgi kadr</button>
     <button class="btn ghost" data-a="wall">Devorga qo'shish</button>
+    <button class="btn ghost" data-a="edit">Tahrirlash</button>
     <button class="btn ghost" data-a="toggle">${c.enabled ? "O'chirib qo'yish" : "Yoqish"}</button>
     <button class="btn danger" data-a="del">O'chirish</button>`;
   $$("#dacts [data-a]").forEach((b) => (b.onclick = () => act(b.dataset.a, c)));
@@ -2782,6 +2859,7 @@ async function loadHistory(c) {
 async function act(a, c) {
   if (a === "verdict") { S.sel = c.id; go("verdict"); return; }
   if (a === "live") { openLive(c); return; }
+  if (a === "edit") { openEditModal(c); return; }
   if (a === "wall") { S.picked.add(c.id); S.wallMode = "sel"; drawNav(); go("wall"); return; }
   if (a === "toggle") {
     try {
@@ -2839,6 +2917,87 @@ async function act(a, c) {
         ? "Kamera offline yoki manba javob bermadi" : res.status + "-xato", "bad");
     }
   } catch (e) { toast("Xato", e.message, "bad"); }
+}
+
+/* ── kamerani tahrirlash: shu sahifada, oyna ichida ──
+   Backend PUT /admin/cameras/{id} butun obyektni almashtiradi; parol
+   bo'sh qoldirilsa o'zgarmaydi (backend'da None = tegilmasin).          */
+function openEditModal(c) {
+  const VEND = ["dahua", "hikvision", "boshqa"];
+  if (c.vendor && !VEND.includes(c.vendor)) VEND.unshift(c.vendor);
+  const inp = (id, label, val, attr = "") =>
+    `<label class="ef"><span>${label}</span>
+      <input id="ef-${id}" value="${esc(val == null ? "" : String(val))}" ${attr}></label>`;
+  const ov = document.createElement("div");
+  ov.className = "modal-ov";
+  ov.innerHTML = `<div class="modal-card" role="dialog" aria-modal="true">
+    <div class="modal-h"><h3>Kamerani tahrirlash</h3>
+      <button class="modal-x" id="ef-x" aria-label="Yopish">✕</button></div>
+    <div class="ef-grid">
+      ${inp("name", "Nomi", c.name)}
+      ${inp("region", "Hudud", c.region)}
+      ${inp("ip", "IP", c.ip)}
+      ${inp("port", "Port", c.port || 554, "type=number min=1 max=65535")}
+      ${inp("username", "Login", c.username)}
+      ${inp("password", "Parol", "", "type=password autocomplete=new-password placeholder=bo'sh = o'zgarmaydi")}
+      ${inp("rtsp_path", "RTSP yo'l", c.rtsp_path)}
+      ${inp("sub_path", "Sub yo'l", c.sub_path, "placeholder=bo'sh = avtomatik")}
+      <label class="ef"><span>Ishlab chiqaruvchi</span>
+        <select id="ef-vendor">${VEND.map((v) =>
+          `<option ${v === c.vendor ? "selected" : ""}>${esc(v)}</option>`).join("")}</select></label>
+      ${inp("external_id", "Tashqi ID", c.external_id)}
+      ${inp("note", "Izoh", c.note)}
+      <label class="ef ef-chk"><input type="checkbox" id="ef-always_on" ${
+        c.always_on ? "checked" : ""}><span>Doim yoqiq (always-on)</span></label>
+    </div>
+    <div class="ef-err" id="ef-err" role="alert"></div>
+    <div class="modal-f"><button class="btn ghost" id="ef-cancel">Bekor</button>
+      <button class="btn dark" id="ef-save">Saqlash</button></div>
+  </div>`;
+  document.body.appendChild(ov);
+  const q = (s) => ov.querySelector(s);
+  const gv = (id) => q("#ef-" + id).value.trim();
+  const close = () => { document.removeEventListener("keydown", onKey); ov.remove(); };
+  const onKey = (e) => { if (e.key === "Escape") close(); };
+  document.addEventListener("keydown", onKey);
+  ov.onclick = (e) => { if (e.target === ov) close(); };
+  q("#ef-x").onclick = close;
+  q("#ef-cancel").onclick = close;
+  q("#ef-name").focus();
+  q("#ef-save").onclick = async () => {
+    const name = gv("name"), region = gv("region");
+    if (!name || !region) {
+      q("#ef-err").textContent = "Nomi va hudud bo'sh bo'lmasin.";
+      return;
+    }
+    const body = {
+      name, region, source_type: c.source_type || "rtsp",
+      node_id: c.node_id || 1, enabled: c.enabled !== false,
+      always_on: q("#ef-always_on").checked, note: gv("note"),
+      external_id: gv("external_id"), lat: c.lat || 0, lng: c.lng || 0,
+      ip: gv("ip"), port: +gv("port") || 554, username: gv("username"),
+      rtsp_path: gv("rtsp_path") || "/stream1",
+      sub_path: gv("sub_path") || null, vendor: q("#ef-vendor").value,
+      stream_url: c.stream_url || "",
+    };
+    const pw = q("#ef-password").value;   // trim EMAS — parol bo'sh joyli bo'lishi mumkin
+    if (pw) body.password = pw;           // bo'sh -> yubormaymiz -> o'zgarmaydi
+    const btn = q("#ef-save");
+    btn.disabled = true; btn.textContent = "Saqlanmoqda…";
+    try {
+      const r = await api(`/api/v1/admin/cameras/${c.id}`, {method: "PUT", body});
+      S.byId.set(c.id, r);
+      S.cams = S.cams.map((x) => x.id === c.id ? r : x);
+      toast(r.name, "Saqlandi");
+      pushEv("amal", `<b>${esc(r.name)}</b> tahrirlandi`, c.id);
+      close();
+      if (S.page === "diag" && S.curId === c.id) { closeLive(); drawDiag(); }
+      loadCams();
+    } catch (e) {
+      q("#ef-err").textContent = e.message || "Saqlanmadi";
+      btn.disabled = false; btn.textContent = "Saqlash";
+    }
+  };
 }
 
 /* ═════════ resurs ═════════

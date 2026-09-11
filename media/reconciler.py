@@ -311,6 +311,13 @@ def _check_stalls(node: dict) -> None:
             # SSE: yo'l nomidan kamera topiladi (suffikslar olib tashlanadi).
             # `resumed` tashqariga `online` bo'lib chiqadi — abonent uchun
             # holat lug'ati bitta: online/offline/stalled.
+            #
+            # SUB oqim muzlashi kamera holatini o'zgartirmaydi: sub faqat
+            # devor kataklari uchun, asosiy oqim ishlab tursa kamera muammoli
+            # emas (camera_state ham shunday hisoblaydi). Hodisa jurnalda
+            # qoladi (yuqorida yozildi), lekin tomoshabinga stalled yuborilmaydi.
+            if name.endswith(sync.SUB_SUFFIX):
+                continue
             base = name
             for suffix in (sync.TRANSCODE_SUFFIX, sync.SUB_SUFFIX):
                 if base.endswith(suffix):
