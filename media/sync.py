@@ -28,6 +28,7 @@ import ctypes
 import json
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import threading
@@ -223,6 +224,62 @@ def _host_only(value: str) -> str:
 
 
 WEBRTC_HOSTS = _webrtc_hosts()
+
+
+def _marshrut_manbasi() -> str:
+    """Serverning HAQIQIY tarmoq manzili — marshrut jadvali bo'yicha.
+
+    Nima uchun kerak: MediaMTX standart holda mashinadagi HAMMA
+    interfeysni ICE nomzodi qilib e'lon qiladi va brauzer ularning
+    birini tanlaydi. Tanlov bizga bog'liq emas — amalda VPN yoki
+    virtual adapter tanlanadi. Shu o'rnatmada o'lchandi: brauzer ham,
+    server ham BITTA kompyuterda turgani holda video Radmin VPN
+    adapteri (fdfd::1a0c:3007) orqali ketdi va 36 soniyada 11 marta
+    qotdi — vaqtning 22 %. Yo'l haqiqiy tarmoq kartasiga
+    (192.168.136.69) o'tkazilganda qotish 11,7 % ga tushdi, kadr
+    tezligi 21,6 dan 25,4 ga ko'tarildi. Paket yo'qolmagan (0) —
+    virtual adapter kadrni yo'qotmaydi, kechiktiradi; WebRTC uchun
+    kechikkan kadr — qotish.
+
+    Interfeys nomi bo'yicha ro'yxat (`webrtcIPsFromInterfacesList`) bu
+    ishga yaramaydi: Windows'da `socket.if_nameindex()` haqiqiy nom
+    o'rniga `ethernet_0` kabi soxta nom qaytaradi va MediaMTX hech
+    qanday nomzod bermay qoladi (sinaldi — ICE "new" holatida qotdi).
+    Marshrut esa ikkala tizimda ham bir xil ishlaydi: UDP soketni
+    ulash paket HECH QAYERGA yuborilmasdan yadroga "shu manzilga
+    qaysi karta orqali chiqasan" degan savolni beradi.
+
+    Topilmasa bo'sh satr — chaqiruvchi eski xatti-harakatda qoladi.
+    """
+    for maqsad in ("8.8.8.8", "1.1.1.1"):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            sock.connect((maqsad, 9))
+            ip = sock.getsockname()[0]
+            if ip and not ip.startswith("127."):
+                return ip
+        except OSError:
+            continue
+        finally:
+            sock.close()
+    return ""
+
+
+def webrtc_ice_hosts() -> list[str]:
+    """Brauzerga e'lon qilinadigan ICE manzillari.
+
+    Tartib: operator bergan qiymat (WEBRTC_HOSTS/MEDIA_HOST/MEDIA_BASE)
+    ustun — tashqi tomoshabin faqat o'sha domenga yetadi. Bo'sh bo'lsa
+    serverning marshrut bo'yicha aniqlangan o'z manzili ishlatiladi.
+
+    Ro'yxat bo'sh qaytishi ham to'g'ri natija: bunda interfeyslardan
+    yig'ish O'CHIRILMAYDI (`write_config` ga qarang), ya'ni eski
+    xatti-harakat saqlanadi va WebRTC ishlamay qolmaydi.
+    """
+    if WEBRTC_HOSTS:
+        return list(WEBRTC_HOSTS)
+    ip = _marshrut_manbasi()
+    return [ip] if ip else []
 
 # Chiqish navbati. MediaMTX standarti — 512; bitta oqimni ko'p tomoshabin
 # ko'rganda u to'lib ketadi va server "reader is too slow" deb paketlarni
@@ -650,7 +707,7 @@ def build_config(cameras: list[dict], auth_url: str | None = None,
     # kerak: uzoq tugunda bu uning o'z public_host'i, markaziy tugunda —
     # WEBRTC_HOSTS (yoki MEDIA_HOST).
     extra_hosts = ([node["public_host"]] if node.get("public_host")
-                   else list(WEBRTC_HOSTS))
+                   else webrtc_ice_hosts())
     config = {
         "logLevel": "info",
         # Sekin tomoshabin butun oqimni buzmasin (yuqoridagi izoh).
@@ -696,6 +753,27 @@ def build_config(cameras: list[dict], auth_url: str | None = None,
         # tushmasin (yuqoridagi izoh).
         "webrtcLocalTCPAddress": f":{WEBRTC_TCP_PORT}" if WEBRTC_TCP_PORT else "",
         "webrtcAdditionalHosts": extra_hosts,
+        # Manzil aniq berilgan bo'lsa, INTERFEYSLARDAN nomzod yig'ish
+        # o'chadi. Nima uchun: MediaMTX standart holda mashinadagi HAMMA
+        # interfeysni ICE nomzodi qilib e'lon qiladi — Radmin VPN,
+        # Tailscale, WSL vEthernet, Teredo ham. ICE ularning birini
+        # tanlashi mumkin va tanlaydi ham.
+        #
+        # Shu o'rnatmada o'lchandi (10.30.11.71, brauzer ham server ham
+        # BITTA kompyuterda):
+        #
+        #   Radmin VPN adapteri orqali : 21,6 kadr/s, 36 s da 11 qotish,
+        #                                jami 7,9 s — vaqtning 22 %
+        #   haqiqiy tarmoq kartasi     : 25,4 kadr/s, 47 s da 5,5 s
+        #                                qotish — vaqtning 11,7 %
+        #
+        # Ikkalasida ham yo'qolgan paket 0 — virtual adapter paketni
+        # yo'qotmaydi, kechiktiradi; WebRTC uchun bu qotish demak.
+        #
+        # DIQQAT: ro'yxat bo'sh bo'lsa TEGILMAYDI. O'chirib qo'yilsa
+        # MediaMTX umuman nomzod bermaydi va WebRTC ulanmaydi — bu ham
+        # shu yerda o'lchandi (ICE "new" holatida qotib qoldi).
+        "webrtcIPsFromInterfaces": not extra_hosts,
         # Nginx (127.0.0.1) orqali kelgan so'rovlarda haqiqiy tomoshabin
         # IP'si X-Forwarded-For sarlavhasidan olinadi — auth va HLS
         # sessiyalari to'g'ri IP bilan ishlaydi.

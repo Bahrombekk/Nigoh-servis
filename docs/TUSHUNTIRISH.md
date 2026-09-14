@@ -441,6 +441,74 @@ undan uzun bo'lishi shart:
 Eng yaxshi yechim — kameraning o'zida I-kadr oralig'ini qisqartirish
 (odatda fps ning 1-2 baravari).
 
+**Qanday o'lchanadi.** Sekundlik hisoblagich bu savolga javob BERMAYDI:
+kamera bir sekundlik kadrlarni bir zumda tashlab keyin jim tursa ham
+"25 kadr/s" bo'lib ko'rinadi. Kadrlarning kelish oralig'ini o'lchash
+kerak:
+
+```
+python scripts/kadr_oraligi.py --hammasi --sekund 45
+```
+
+Shu o'rnatmada olingan natija (zanjirda MediaMTX ham, brauzer ham yo'q —
+ffprobe to'g'ridan kameraga):
+
+| kamera | fps | p50 oraliq | eng katta | baho |
+|---|---|---|---|---|
+| 10.30.11.71 asosiy | 24,1 | 13 ms | 1598 ms | 45 s dan 19,5 s jimlik |
+| 10.30.11.71 sub | 25,0 | 24 ms | 1186 ms | 39 s dan 8,8 s |
+| 10.30.33.53 (Dahua) | 5,3 | 0 ms | 9928 ms | 37 s dan 28,3 s |
+
+25 kadr/s da oraliq 40 ms bo'lishi kerak; mediani 13 ms — kadrlar to'p-to'p
+kelayotgani. Kameraning O'Z veb-sahifasi bunda qotmaydi, chunki u bir
+necha soniyalik bufer to'playdi va kechikish bilan o'ynatadi; WebRTC esa
+real vaqtda o'ynatadi va buferi quriydi.
+
+**Buferni kattalashtirish yordam bermaydi** — sinaldi (10.30.11.71,
+ICE haqiqiy tarmoq kartasida):
+
+| pleyer buferi | qotish ulushi | fps | tashlangan kadr |
+|---|---|---|---|
+| majburlanmagan (brauzer o'zi) | 27,6 % | 25,2 | 0 |
+| qat'iy 1000 ms (hozirgi) | 19,7 % | 21,3 | 119 |
+| qotishda 4000 ms gacha o'sadigan | 27,2 % | 18,6 | 758 |
+
+Bufer o'sgani sayin brauzer quvib yetish uchun kadr tashlaydi (0 -> 119
+-> 758) va natija yaxshilanmaydi. Hozirgi 1000 ms qoldirildi: uchtasining
+ichida qotish ulushi eng past. Farqlar kichik va kameraning o'z
+tebranishi darajasida — ya'ni bu bo'g'inda olinadigan foyda tugagan,
+sabab kamerada.
+
+**5. ICE virtual adapterdan o'tyaptimi?**
+
+MediaMTX standart holda mashinadagi HAMMA tarmoq interfeysini ICE
+nomzodi qilib e'lon qiladi — Radmin VPN, Tailscale, WSL vEthernet,
+Teredo ham. Brauzer ularning birini tanlaydi va tanlov bizga bog'liq
+emas. Shu o'rnatmada brauzer ham, server ham BITTA kompyuterda turgani
+holda video Radmin VPN adapteri orqali ketdi:
+
+| ICE yo'li | fps | qotish |
+|---|---|---|
+| Radmin VPN (`fdfd::1a0c:3007`) | 21,6 | 36 s da 11 marta, 7,9 s — **22 %** |
+| haqiqiy tarmoq kartasi | 25,4 | 47 s da 5,5 s — **11,7 %** |
+
+Ikkalasida ham yo'qolgan paket 0 — virtual adapter paketni yo'qotmaydi,
+kechiktiradi; WebRTC uchun kechikkan kadr qotish demak.
+
+Endi bu o'z-o'zidan to'g'rilanadi: `webrtc_ice_hosts()` serverning
+marshrut bo'yicha aniqlangan manzilini beradi va `webrtcIPsFromInterfaces`
+o'chiriladi (`media/sync.py`). Tekshirish:
+
+```
+GET /health   ->  "webrtc_public_hosts"
+brauzer konsolida: pc.getStats() -> nominated candidate-pair
+```
+
+Interfeys nomi bo'yicha ro'yxat (`webrtcIPsFromInterfacesList`) bu ishga
+yaramaydi: Windows'da `socket.if_nameindex()` haqiqiy nom o'rniga
+`ethernet_0` kabi soxta nom qaytaradi va MediaMTX umuman nomzod bermay
+qoladi (sinaldi — ICE "new" holatida qotdi).
+
 ---
 
 ## 13. Bir sahifalik xulosa
