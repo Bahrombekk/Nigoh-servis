@@ -121,7 +121,7 @@ def main() -> None:
         elif ulush < 10:
             baho = "sezilarli"
         else:
-            baho = "YOMON — kamera sozlamasi"
+            baho = "YOMON - kamera sozlamasi"
         print(f"{r['id']:5} {r['ip']:16} {o['fps']:5.1f} {o['p50']:5.0f} "
               f"{o['p95']:5.0f} {o['eng_katta']:10.0f} "
               f"{o['boshliq_soni']:4} / {o['boshliq_sek']:4.1f}s  {baho}")
