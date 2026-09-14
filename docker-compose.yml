@@ -14,6 +14,21 @@ services:
     image: nigoh:latest
     container_name: nigoh
     restart: unless-stopped
+    # Konteynerda haqiqiy init (tini) turadi va PID 1 bo'ladi.
+    #
+    # Nima uchun: MediaMTX `runOnDemand` launcher'ini to'xtatganda
+    # launcher o'z FFmpeg bolasini yig'ishtirmasdan o'lishi mumkin —
+    # bola PID 1 ga o'tadi. PID 1 oddiy dastur bo'lsa (bizda `python
+    # main.py`) u begona bolalarni HECH QACHON yig'ishtirmaydi va ular
+    # zombi bo'lib to'planadi. Shu serverda qo'shni o'rnatmada aynan
+    # shunday bo'lgan: bitta jarayon ostida 1067 ta zombi FFmpeg, eng
+    # eskisi 5 kunlik. Har zombi PID bandlaydi — oxiri yangi jarayon
+    # ochilmay qoladi, ya'ni kamera ochilmaydi.
+    #
+    # tini bolalarni yig'ishtiradi va to'xtatish signalini to'g'ri
+    # uzatadi. Servisning o'z bolalari (MediaMTX, snapshot FFmpeg'lari)
+    # avvalgidek o'zi kutib oladi — bunga tegmaydi.
+    init: true
     network_mode: host
     env_file: .env
     volumes:

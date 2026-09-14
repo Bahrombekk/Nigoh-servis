@@ -18,9 +18,11 @@ Admin parolini almashtirish:
 Kod tuzilishi:
     main.py            shu fayl — faqat kirish nuqtasi
     api/               BACKEND: config, modellar, endpointlar, analytics
-    media/             MEDIAMTX QATLAMI: sync, reconciler, launcher
+    media/             MEDIAMTX QATLAMI: sync, reconciler, launcher,
+                       transport (RTSP transportini o'lchash)
     core/              UMUMIY: db, security, health, snapshots, rtsp_probe,
-                       device_info, fast_start, bus, events, metrics, log
+                       device_info, fast_start, bus, events, metrics, log,
+                       watchdog
     debug-ui/          diagnostika konsoli (ENABLE_UI=1 bo'lganda)
     tests/             pytest (pytest.ini: testpaths=tests)
     scripts/           yordamchi skriptlar (qabul_test, import_mediamtx)
@@ -34,6 +36,18 @@ import uvicorn
 from api import create_app
 from api.bootstrap import bootstrap, change_admin_password
 from api.config import API_KEY, PORT
+from core import watchdog
+
+# Uvicorn to'xtatish signalini olganda ochiq ulanishlarni shuncha kutadi,
+# keyin majburan uzadi.
+#
+# NIMA UCHUN CHEGARA BOR. Standart holda uvicorn CHEKSIZ kutadi, SSE
+# (`/api/v1/events`) ulanishi esa hech qachon o'z-o'zidan yopilmaydi —
+# ishlab chiqarishda aynan shu bo'ldi: bitta SSE ulanishi tufayli jarayon
+# "Waiting for connections to close" holatida qotib qoldi, tinglash soketi
+# yopildi va butun xizmat (HLS auth, RTSP auth, API) muddatsiz o'ldi.
+# Tafsiloti: core/watchdog.py.
+SHUTDOWN_GRACE = float(os.environ.get("SHUTDOWN_GRACE", "5"))
 
 if "--admin-parol" in sys.argv:
     index_of = sys.argv.index("--admin-parol")
@@ -66,4 +80,8 @@ if __name__ == "__main__":
     else:
         # Tayyor obyekt beriladi — modul qayta import qilinmaydi,
         # bootstrap ham ikki marta ishlamaydi.
-        uvicorn.run(app, host="0.0.0.0", port=PORT)
+        # Port o'lib, jarayon tirik qolgan holat uchun oxirgi chegara
+        # (konteynerda o'zini tugatadi, Docker qaytaradi).
+        watchdog.start(PORT)
+        uvicorn.run(app, host="0.0.0.0", port=PORT,
+                    timeout_graceful_shutdown=SHUTDOWN_GRACE)
