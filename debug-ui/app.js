@@ -1320,11 +1320,12 @@ function warmStream(c) {
    KUTMASDAN to'g'ridan asosiy oqimdan ochamiz (asosiy H.264 ga o'girilgan). */
 function wallQuality(cam) {
   if (!cam) return "sub";
-  // sub_bad — serverда saqlangan (bir marta aniqlangan, restart bo'lsa ham
-  // esda); subBad — shu sessiyaда aniqlangan; sub_codec H.265 — oldindan
-  // ma'lum ochilmaydigan.
+  // Devor har doim SUB oqimni ishlatadi — kichik (640×360), zaif linkda
+  // yo'qotishdan omon qoladi, serverga yengil. H.265 sub bo'lsa server uni
+  // H.264 ga o'giradi (`_sub_h264`, quyida hevc=0 so'raladi) — shuning uchun
+  // H.265 sub'ni endi asosiyga o'tkazmaymiz (asosiy katta va yo'qotishga
+  // sezgir). Faqat sub HAQIQATAN ishlamaganда (sub_bad) asosiyга tushamiz.
   if (cam.sub_bad || S.subBad.has(cam.id)) return "";
-  if (/265|hevc/i.test(cam.sub_codec || "")) return "";
   return "sub";
 }
 
@@ -1511,7 +1512,9 @@ function createPlayer(video, msgEl) {
       return;
     }
 
-    api(`/api/v1/cameras/${cam.id}/stream?hevc=${HEVC_OK ? 1 : 0}` +
+    // Sub so'ralganda hevc=0 — H.265 sub'ni server H.264 ga o'girsin
+    // (`_sub_h264`), aks holda brauzer H.265 sub'ni ocholmay qotardi.
+    api(`/api/v1/cameras/${cam.id}/stream?hevc=${quality === "sub" ? 0 : (HEVC_OK ? 1 : 0)}` +
         (quality ? `&quality=${quality}` : ""))
       .then((urls) => {
         if (stale()) return;
