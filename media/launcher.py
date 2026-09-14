@@ -24,6 +24,8 @@ from . import sync
 from .sync import (
     RTSP_PORT,
     SUB_SUFFIX,
+    TRANSCODE_MAX_MAIN,
+    TRANSCODE_MAX_SUB,
     ffmpeg_path,
     has_nvenc,
     relay_args,
@@ -252,7 +254,12 @@ def main() -> int:
         return 6
 
     if ogirish:
-        args = transcode_args(source, destination, gpu=has_nvenc())
+        # Sub oqim kichik (odatda <= D1) — unga asosiy oqimning chegarasi
+        # keraksiz. Sifatni `-cq` belgilaydi, bu faqat yuqori chegara
+        # (media.sync.TRANSCODE_MAX_* izohiga qarang).
+        args = transcode_args(
+            source, destination, gpu=has_nvenc(),
+            maxrate=TRANSCODE_MAX_SUB if sub else TRANSCODE_MAX_MAIN)
         print(f"{slug}: H.264 ga o'girilmoqda ({'GPU' if has_nvenc() else 'CPU'})",
               file=sys.stderr)
     else:

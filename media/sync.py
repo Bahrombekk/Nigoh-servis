@@ -434,14 +434,45 @@ def relay_args(src_url: str, dst_url: str) -> list[str]:
     return _INPUT + ["-i", src_url] + _RELAY_OUTPUT + [dst_url]
 
 
+# O'girishda chiqish tezligi. ILGARI qat'iy `-rc cbr -b:v 3M` edi —
+# manba nima bo'lishidan qat'i nazar. O'lchov bu qiymat IKKALA yo'nalishda
+# ham noto'g'ri ekanini ko'rsatdi (SSIM 1,0 = manbaning aynan o'zi):
+#
+#   sub oqim, 720x576, kameradan 0,73 Mbit/s keladi:
+#     cbr 3M          -> 3,01 Mbit/s   SSIM 0,991
+#     vbr cq28 (yangi)-> 1,21 Mbit/s   SSIM 0,976     -60 % trafik
+#
+#   asosiy oqim, 2560x1440, kameradan 3,89 Mbit/s keladi:
+#     cbr 3M          -> 3,05 Mbit/s   SSIM 0,962   <- sifat SHU YERDA yo'qoladi
+#     vbr cq28 (yangi)-> 4,03 Mbit/s   SSIM 0,973
+#
+# Ya'ni 720x576 ga 3 Mbit/s isrof, 2560x1440 ga esa kam. Sabab oddiy:
+# bitta raqam ikkala o'lchamga to'g'ri kelmaydi.
+#
+# Yechim — tezlikni emas, SIFATNI belgilash (`-cq`). Enkoder qancha kerak
+# bo'lsa shuncha sarflaydi: sokin sub oqim arzon tushadi, harakatli
+# asosiy oqim kerakligini oladi. `-maxrate` faqat yuqori chegara —
+# portlashda kanalni bosib qo'ymasin (odatda tegilmaydi).
+#
+# cq 28 tanlandi: sub'da SSIM 0,976 qoladi (kuzatuv uchun ko'zga
+# ko'rinmaydigan farq), trafik esa uch baravar kamayadi.
+TRANSCODE_CQ = os.environ.get("TRANSCODE_CQ", "28")
+# Chegaralar o'lchamga qarab: sub odatda <= D1, asosiy 2-8 MP.
+TRANSCODE_MAX_SUB = os.environ.get("TRANSCODE_MAX_SUB", "2M")
+TRANSCODE_MAX_MAIN = os.environ.get("TRANSCODE_MAX_MAIN", "8M")
+
+
 def transcode_args(src_url: str, dst_url: str, gpu: bool = True,
-                   bitrate: str = "3M") -> list[str]:
+                   maxrate: str = TRANSCODE_MAX_MAIN) -> list[str]:
     """Kamera H.265 bergan holat: dekodlash va qayta kodlash.
 
     H.265 va H.264 — bir-biriga o'xshamaydigan siqish usullari, shuning
     uchun oraliq qadamsiz o'girib bo'lmaydi: tasvirni ochib, qaytadan
     siqish shart. Buni yo'qotishning yagona yo'li — kamerani H.264 ga
     o'tkazish, shunda yuqoridagi `relay_args` ishlaydi.
+
+    `maxrate` — yuqori chegara, nishon emas. Sifatni `TRANSCODE_CQ`
+    belgilaydi (yuqoridagi o'lchovga qarang).
     """
     if gpu:
         # Dekodlash ham, kodlash ham GPU'da — nusxalashsiz.
@@ -449,13 +480,14 @@ def transcode_args(src_url: str, dst_url: str, gpu: bool = True,
             "-hwaccel", "cuda", "-hwaccel_output_format", "cuda",
             "-i", src_url,
             "-c:v", "h264_nvenc", "-preset", "p1", "-tune", "ull",
-            "-rc", "cbr", "-b:v", bitrate,
+            "-rc", "vbr", "-cq", TRANSCODE_CQ, "-b:v", "0",
+            "-maxrate", maxrate, "-bufsize", maxrate,
         ]
     else:
         video = [
             "-i", src_url,
             "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency",
-            "-b:v", bitrate,
+            "-crf", TRANSCODE_CQ, "-maxrate", maxrate, "-bufsize", maxrate,
         ]
     # Qisqa GOP — segment tezroq tayyor bo'ladi.
     return _INPUT + video + ["-g", "30", "-bf", "0"] + _OUTPUT + [dst_url]
