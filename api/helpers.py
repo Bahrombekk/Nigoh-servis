@@ -208,6 +208,10 @@ def admin_camera(row, request: Request) -> dict:
         "sub_path": row["sub_path"] or "",
         "sub_codec": (row["sub_codec"] or "") if "sub_codec" in row.keys() else "",
         "sub_bad": bool(row["sub_bad"]) if "sub_bad" in row.keys() else False,
+        # Kamera TCP'da bermagani uchun UDP'ga o'tkazilganmi (avtomatik
+        # aniqlanadi — media/transport.py). Admin ko'rinishida turadi:
+        # "nega aynan shu kamerada tasvir biroz sinadi" savoliga javob.
+        "rtsp_udp": bool(row["rtsp_udp"]) if "rtsp_udp" in row.keys() else False,
         "node_id": row["node_id"] or 1,
         "vendor": row["vendor"] or "boshqa",
         "enabled": bool(row["enabled"]),
@@ -284,6 +288,9 @@ def camera_for_mediamtx(row) -> dict | None:
         "always_on": bool(row["always_on"]),
         "sub_path": row["sub_path"] or "",
         "node_id": row["node_id"] or 1,
+        # TCP'da bermaydigan kamera (core/db.py: rtsp_udp izohi) — yo'l
+        # konfiguratsiyasiga UDP bo'lib tushadi.
+        "rtsp_udp": bool(row["rtsp_udp"]) if "rtsp_udp" in row.keys() else False,
     }
 
 

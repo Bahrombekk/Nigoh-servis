@@ -37,7 +37,7 @@ from core.db import (
 from core.log import log
 from core.rtsp_probe import build_rtsp_url
 
-from . import sync
+from . import sync, transport
 
 CHECK_INTERVAL = 30.0      # soniya — to'liq sinxronlash (yo'llar kelishtiriladi)
 # Muzlash tekshiruvi ancha tez-tez: oqim qotganini 60 soniyada bilish
@@ -65,6 +65,14 @@ SUB_DEAD_AFTER = float(os.environ.get("SUB_DEAD_AFTER", "45"))
 # operator registratorda ikkinchi oqimni yoqsa, tizim buni O'ZI ko'radi
 # va belgini oladi. Tekshiruv RTSP DESCRIBE bilan (tomoshaga tegmaydi).
 SUB_RECHECK = float(os.environ.get("SUB_RECHECK", "21600"))   # 6 soat
+# Yo'l MediaMTX'da bor, lekin shuncha vaqtdan beri "tayyor" bo'lmadi —
+# ya'ni kimdir uni ko'rmoqchi, manba esa ko'tarilmayapti. Shu holatda
+# transport tekshiruvi ishga tushadi (media/transport.py): kameralarning
+# bir qismi RTSP'ni TCP'da bermaydi va PLAY'dan keyin ulanishni darhol
+# yopadi. Muddat manba ochilishidan (SOURCE_START_TIMEOUT, 12 s) va
+# relay ko'tarilishidan (30 s) uzun bo'lishi SHART — aks holda sekin
+# ochiladigan sog'lom kamera ham tekshiruvga tushadi.
+NOT_READY_AFTER = float(os.environ.get("TRANSPORT_CHECK_AFTER", "45"))
 SPAWN_COOLDOWN = 30.0      # qayta urinishlar orasidagi eng kam vaqt
 STARTUP_WAIT = 8.0         # ishga tushirgandan keyin API'ni shuncha kutamiz
 
@@ -90,6 +98,24 @@ _sub_zero: dict[tuple[int, str], float] = {}
 # ayni damda RTSP tekshiruvida turgan sub yo'llar — takror tekshirilmasin
 _sub_tekshiruvda: set[str] = set()
 _stalled: dict[tuple[int, str], str] = {}      # (tugun, yo'l) -> ko'rsatma nomi
+# (tugun, yo'l) -> oxirgi ko'rilgan buzuq kadrlar hisobi. Yo'l "tayyor"
+# bo'lsa ham oqim yaroqsiz bo'lishi mumkin: kamera RTP paketlarni
+# tashlab yuboradi, MediaMTX esa "invalid FU-A packet" deb kadrni
+# yig'olmaydi va HLS segmenti chiqmaydi — tomoshabin 500 oladi.
+# O'lchov: bitta kamera TCP'da sekundiga 1200-1700 paket yo'qotgan,
+# o'sha kamera UDP'da bemalol ishlagan.
+_errors: dict[tuple[int, str], int] = {}
+# (tugun, yo'l) -> (jami NOSOZ vaqt, oxirgi ko'rilgan payt).
+#
+# Nima uchun JAMI vaqt, "birinchi ko'rilgan payt" emas: ochilmayotgan
+# yo'l MediaMTX ro'yxatidan vaqti-vaqti bilan butunlay yo'qoladi
+# (manba o'ladi -> talab bo'yicha yo'l o'chadi -> keyingi so'rovda
+# qaytadan tug'iladi). Boshlanish payti saqlansa, har yo'qolishda
+# hisoblagich noldan boshlanardi va muddat HECH QACHON to'lmasdi —
+# o'lchovda 7 daqiqa davomida bitta ham sinov ishga tushmadi.
+_not_ready: dict[tuple[int, str], tuple[float, float]] = {}
+# Yo'q bo'lib ketgan yo'lning hisobi shuncha vaqt saqlanadi.
+_NOT_READY_KEEP = 300.0
 
 # Ortiqcha yo'llar. MediaMTX har `paths/add`/`delete` so'roviga butun
 # konfiguratsiyani qayta yuklaydi, ya'ni bitta amal narxi mavjud yo'llar
@@ -428,6 +454,27 @@ def _recheck_sub_bad() -> None:
                   "devorda sub ishlatiladi")
 
 
+def _sinov_buyur(node_id: int, path: str) -> None:
+    """Ochilmayotgan yo'l uchun transport sinovini fonga buyuradi.
+
+    Faqat 1-tugun (backend bilan bitta mashinada): sinov kameraga SHU
+    mashinadan ulanadi, uzoq tugundagi kamera esa boshqa tarmoqda —
+    bu yerdan o'lchov yolg'on chiqadi.
+
+    `wall_` (mozaika) yo'llari kamera emas, ularda transport degan
+    tushuncha yo'q. `_h264` va `_sub` — o'sha kameraning ko'rinishlari,
+    shuning uchun asosiy slug bo'yicha sinaladi (transport butun
+    qurilmaga tegishli, alohida oqimga emas).
+    """
+    if node_id != 1 or path.startswith("wall_"):
+        return
+    slug = path
+    for suffix in (sync.TRANSCODE_SUFFIX, sync.SUB_SUFFIX):
+        if slug.endswith(suffix):
+            slug = slug[: -len(suffix)]
+    transport.request(slug)
+
+
 def _check_stalls(node: dict) -> None:
     """Bayt hisobi STALL_AFTER davomida qo'zg'almasa — oqim muzlagan.
 
@@ -450,11 +497,35 @@ def _check_stalls(node: dict) -> None:
         return
     now = time.monotonic()
     changes: list[tuple[str, str, str]] = []     # (ko'rsatma, yo'l, holat)
+    tekshirilsin: list[str] = []                 # transport sinoviga nomzodlar
     with _lock:
         for name, item in active.items():
             key = (node_id, name)
             got = int(item.get("bytesReceived") or 0)
             prev = _prev_bytes.get(key)
+            # "Tayyor emas" holati qancha cho'zilgani — bayt hisobidan
+            # MUSTAQIL kuzatiladi. Manba ko'tarilib darhol o'lsa (kamera
+            # TCP'ni ko'tarmasa) yo'l hech qachon tayyor bo'lmaydi, bayt
+            # esa har urinishda noldan boshlanadi — ya'ni quyidagi
+            # muzlash mantig'i buni umuman ko'rmaydi.
+            # Nosozlikning ikki ko'rinishi bir xil hisoblanadi: yo'l
+            # umuman tayyor bo'lmasligi ham, tayyor bo'lib buzuq kadr
+            # berishi ham tomoshabin uchun bitta natija — video yo'q.
+            xato = int(item.get("inboundFramesInError") or 0)
+            oldingi = _errors.get(key)
+            _errors[key] = xato
+            nosoz = (not item.get("ready")) or (oldingi is not None and xato > oldingi)
+            if not nosoz:
+                _not_ready.pop(key, None)
+            else:
+                jami, oxirgi = _not_ready.get(key, (0.0, now))
+                # Faqat UZLUKSIZ kuzatuv qo'shiladi: yo'l bir necha
+                # tsikl ko'rinmay tursa, o'sha oraliq hisobga kirmaydi.
+                if now - oxirgi <= STALL_INTERVAL * 3:
+                    jami += now - oxirgi
+                _not_ready[key] = (jami, now)
+                if jami >= NOT_READY_AFTER:
+                    tekshirilsin.append(name)
             # Bayt keldi (yoki yo'lni birinchi marta ko'ryapmiz) — hisob
             # noldan boshlanadi. Faqat shu yerda vaqt yangilanadi:
             # o'zgarmagan tsiklda yangilansa muddat hech qachon to'lmasdi.
@@ -480,8 +551,20 @@ def _check_stalls(node: dict) -> None:
                 _stalled.pop(key)                 # oqim yopildi — muzlash tugadi
         for key in [k for k in _prev_bytes if k[0] == node_id and k[1] not in active]:
             _prev_bytes.pop(key)
+        # Yo'qolgan yo'lning hisobi DARHOL o'chirilmaydi (yuqoridagi
+        # izoh) — faqat ancha vaqt ko'rinmagani tashlanadi.
+        for key, (_, oxirgi) in list(_not_ready.items()):
+            if key[0] == node_id and now - oxirgi > _NOT_READY_KEEP:
+                _not_ready.pop(key, None)
+                _errors.pop(key, None)
+        for key in [k for k in _errors if k[0] == node_id and k[1] not in active]:
+            _errors.pop(key, None)
     # Ro'yxat allaqachon qo'lda — ikkinchi API so'rovi shart emas.
     _check_sub_health(node, active)
+    # Qulfdan TASHQARIDA: sinovning o'zi fon thread'ida ketadi, lekin
+    # navbatga qo'yish ham reconciler qulfini ushlab turmasin.
+    for name in tekshirilsin:
+        _sinov_buyur(node_id, name)
     if not changes:
         return
     at = datetime.now(timezone.utc).isoformat(timespec="seconds")

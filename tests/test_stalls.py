@@ -161,3 +161,122 @@ def test_olik_tugun_tez_tsiklda_otkazib_yuboriladi(monkeypatch, clean):
     finally:
         reconciler._reachable.clear()
     assert called == [2]
+
+
+# ---------- ochilmayotgan yo'l: transport sinoviga buyurtma ----------
+#
+# Bu muzlashdan BOSHQA nosozlik: yo'l hech qachon "tayyor" bo'lmaydi,
+# bayt hisobi esa har urinishda noldan boshlanadi — yuqoridagi mantiq
+# buni umuman ko'rmaydi. Eng ko'p uchragan sababi: kamera RTSP'ni TCP
+# orqali bermaydi (media/transport.py).
+
+@pytest.fixture()
+def sinovlar(monkeypatch):
+    """`transport.request` o'rniga — chaqirilganlar ro'yxati."""
+    buyurtma = []
+    monkeypatch.setattr(reconciler.transport, "request",
+                        lambda slug: buyurtma.append(slug) or True)
+    reconciler._not_ready.clear()
+    yield buyurtma
+    reconciler._not_ready.clear()
+
+
+def test_tayyor_bolmagan_yol_sinovga_buyuriladi(monkeypatch, clean, soat, sinovlar):
+    yol = {"kam_1": {"ready": False, "bytesReceived": 0}}
+    _feed(monkeypatch, yol)
+    reconciler._check_stalls(NODE)
+    assert sinovlar == []                       # hali erta — ulanayotgan bo'lishi mumkin
+
+    for _ in range(int(reconciler.NOT_READY_AFTER / reconciler.STALL_INTERVAL) + 1):
+        soat.surish(reconciler.STALL_INTERVAL)
+        reconciler._check_stalls(NODE)
+    # Takror buyurtma zarar qilmaydi (transport.request o'zi tormozlaydi),
+    # muhimi — aynan shu kamera va faqat muddat to'lgandan keyin.
+    assert set(sinovlar) == {"kam_1"}
+
+
+def test_yol_yoqolib_tursa_ham_hisob_saqlanadi(monkeypatch, clean, soat, sinovlar):
+    """Ochilmayotgan yo'l MediaMTX ro'yxatidan vaqti-vaqti bilan
+    butunlay yo'qoladi (manba o'ldi -> talab bo'yicha yo'l o'chdi).
+    Hisoblagich o'shanda nolga qaytsa, muddat hech qachon to'lmaydi —
+    ishlab chiqarishda aynan shu bo'lgan: 7 daqiqada bitta ham sinov
+    ishga tushmagan."""
+    bor = {"kam_1": {"ready": False, "bytesReceived": 0}}
+    for _ in range(int(reconciler.NOT_READY_AFTER / reconciler.STALL_INTERVAL) + 2):
+        _feed(monkeypatch, bor)
+        reconciler._check_stalls(NODE)
+        soat.surish(reconciler.STALL_INTERVAL)
+        _feed(monkeypatch, {})                  # yo'l yo'qoldi
+        reconciler._check_stalls(NODE)
+        soat.surish(reconciler.STALL_INTERVAL)
+    assert set(sinovlar) == {"kam_1"}
+
+
+def test_tayyor_bolgan_yol_sinovga_tushmaydi(monkeypatch, clean, soat, sinovlar):
+    _feed(monkeypatch, {"kam_1": {"ready": False, "bytesReceived": 0}})
+    reconciler._check_stalls(NODE)
+    for _ in range(20):
+        soat.surish(reconciler.STALL_INTERVAL)
+        _feed(monkeypatch, {"kam_1": {"ready": True, "bytesReceived": 5000}})
+        reconciler._check_stalls(NODE)
+    assert sinovlar == []
+
+
+def test_devor_yoli_sinovga_tushmaydi(monkeypatch, clean, soat, sinovlar):
+    """`wall_...` — mozaika, kamera emas: unda transport degan tushuncha yo'q."""
+    _feed(monkeypatch, {"wall_abc": {"ready": False, "bytesReceived": 0}})
+    for _ in range(int(reconciler.NOT_READY_AFTER / reconciler.STALL_INTERVAL) + 2):
+        soat.surish(reconciler.STALL_INTERVAL)
+        reconciler._check_stalls(NODE)
+    assert sinovlar == []
+
+
+def test_ogirilgan_yol_kamera_slugi_bilan_sinaladi(monkeypatch, clean, soat, sinovlar):
+    """`<slug>_sub_h264` — o'sha kameraning ko'rinishi; transport butun
+    qurilmaga tegishli, shuning uchun asosiy slug sinaladi."""
+    _feed(monkeypatch, {"kam_1_sub_h264": {"ready": False, "bytesReceived": 0}})
+    for _ in range(int(reconciler.NOT_READY_AFTER / reconciler.STALL_INTERVAL) + 2):
+        soat.surish(reconciler.STALL_INTERVAL)
+        reconciler._check_stalls(NODE)
+    assert set(sinovlar) == {"kam_1"}
+
+
+def test_buzuq_kadrlar_ham_sinovga_olib_boradi(monkeypatch, clean, soat, sinovlar):
+    """Yo'l "tayyor", bayt ham kelyapti — lekin kadrlar buzuq.
+
+    Ishlab chiqarishda o'lchangan holat: kamera TCP'da sekundiga
+    1200-1700 RTP paket yo'qotgan, MediaMTX "invalid FU-A packet" deb
+    kadrni yig'olmagan va HLS segmenti chiqmagan — tomoshabin faqat 500
+    ko'rgan. Na muzlash (bayt kelyapti), na "tayyor emas" tekshiruvi
+    buni ko'rmaydi.
+    """
+    xato = {"v": 100}
+    bayt = {"v": 1000}
+
+    def yol():
+        return {"kam_1": {"ready": True, "bytesReceived": bayt["v"],
+                          "inboundFramesInError": xato["v"]}}
+
+    _feed(monkeypatch, yol())
+    reconciler._check_stalls(NODE)
+    for _ in range(int(reconciler.NOT_READY_AFTER / reconciler.STALL_INTERVAL) + 2):
+        soat.surish(reconciler.STALL_INTERVAL)
+        xato["v"] += 50          # buzuq kadrlar o'sib boryapti
+        bayt["v"] += 100000      # oqim esa "kelyapti"
+        _feed(monkeypatch, yol())
+        reconciler._check_stalls(NODE)
+    assert set(sinovlar) == {"kam_1"}
+    assert reconciler.stalled_paths() == set()   # bu muzlash EMAS
+
+
+def test_sogom_oqim_sinovga_tushmaydi(monkeypatch, clean, soat, sinovlar):
+    """Buzuq kadr o'smasa — hammasi joyida, hech narsa qilinmaydi."""
+    bayt = {"v": 1000}
+
+    for _ in range(int(reconciler.NOT_READY_AFTER / reconciler.STALL_INTERVAL) + 4):
+        _feed(monkeypatch, {"kam_1": {"ready": True, "bytesReceived": bayt["v"],
+                                      "inboundFramesInError": 7}})
+        reconciler._check_stalls(NODE)
+        soat.surish(reconciler.STALL_INTERVAL)
+        bayt["v"] += 100000
+    assert sinovlar == []

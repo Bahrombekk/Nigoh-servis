@@ -34,6 +34,21 @@ CAMERA_EXTRA_COLUMNS = {
     # aniqlangач saqlanadi, keyingi safar devor to'g'ridan asosiy oqimdan
     # ochadi, sub'ni qayta sinamaydi. Kamera tahrirlanganda 0 ga qaytadi.
     "sub_bad": "INTEGER NOT NULL DEFAULT 0",
+    # Kamera RTSP'ni TCP (interleaved) orqali BERMAYDI — UDP kerak.
+    #
+    # O'lchov (shu o'rnatmada, 155 ta kamera, har biri 8 soniya):
+    # 42 tasi TCP'da PLAY'ga 200 OK beradi, keyin ulanishni 1-2 soniyada
+    # o'zi yopadi (ffmpeg: "Failed reading RTSP data: End of file",
+    # MediaMTX: "unexpected EOF"), o'sha kameralarning aksariyati UDP'da
+    # 8 soniyada ~190 kadr beradi. Ishlab chiqaruvchiga ham, subnetga ham
+    # bog'liq emas (dahua ham, holowits ham; bir xil subnetda ishlaydigani
+    # ham bor) — demak qaror KAMERA bo'yicha saqlanadi, global emas.
+    #
+    # Tashqaridan bu "kamera ochilmayapti" bo'lib ko'rinardi: HLS muxeri
+    # birinchi segmentni bermay o'lgani uchun brauzer index.m3u8 ga bo'sh
+    # tanali 500 olardi. `media/transport.py` buni o'zi aniqlab shu
+    # ustunni yozadi, kamera tahrirlanganda 0 ga qaytadi.
+    "rtsp_udp": "INTEGER NOT NULL DEFAULT 0",
     "vendor": "TEXT",
     "enabled": "INTEGER NOT NULL DEFAULT 1",
     "note": "TEXT",

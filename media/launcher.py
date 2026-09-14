@@ -64,7 +64,7 @@ def load_camera(slug: str):
     with get_db() as db:
         row = db.execute(
             "SELECT slug, ip, port, username, password_enc, rtsp_path, "
-            "sub_path, transcode, enabled FROM cameras WHERE slug = ?",
+            "sub_path, transcode, enabled, rtsp_udp FROM cameras WHERE slug = ?",
             (slug,),
         ).fetchone()
     return row
@@ -253,6 +253,10 @@ def main() -> int:
         print("FFmpeg topilmadi — PATH ga qo'shing", file=sys.stderr)
         return 6
 
+    # Transport faqat KAMERAGA ulanishga tegishli. O'girish zanjirining
+    # manbasi lokal xom yo'l (127.0.0.1) — u yerda TCP har doim ishlaydi,
+    # UDP esa ortiqcha paket yo'qotish demakdir.
+    udp = bool(row["rtsp_udp"]) and not ogirish
     if ogirish:
         # Sub oqim kichik (odatda <= D1) — unga asosiy oqimning chegarasi
         # keraksiz. Sifatni `-cq` belgilaydi, bu faqat yuqori chegara
@@ -263,9 +267,9 @@ def main() -> int:
         print(f"{slug}: H.264 ga o'girilmoqda ({'GPU' if has_nvenc() else 'CPU'})",
               file=sys.stderr)
     else:
-        args = relay_args(source, destination)
-        print(f"{slug}: kameradan FFmpeg orqali uzatilmoqda (qayta kodlashsiz)",
-              file=sys.stderr)
+        args = relay_args(source, destination, udp=udp)
+        print(f"{slug}: kameradan FFmpeg orqali uzatilmoqda (qayta kodlashsiz"
+              f"{', UDP' if udp else ''})", file=sys.stderr)
 
     # FFmpeg shu jarayonning o'rnini egallaydi — MediaMTX uni to'g'ridan
     # to'g'ri boshqaradi (to'xtatish signali ham to'g'ri yetib boradi).

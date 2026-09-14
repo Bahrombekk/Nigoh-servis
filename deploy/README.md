@@ -89,3 +89,35 @@ Bearer bilan aynan bir xil bo'lsin. Tekshirish:
 grep -o 'hlsCDNSecret: .\{0,12\}' data/mediamtx.yml
 grep -o 'Bearer [a-f0-9]\{12\}' /etc/nginx/sites-available/negoh.conf
 ```
+
+## Yadro sozlamasi: UDP qabul buferi
+
+Kameralarning bir qismi RTSP'ni **TCP'da bermaydi**: DESCRIBE/SETUP/PLAY
+ga 200 OK qaytaradi, keyin ulanishni 1-2 soniyada o'zi yopadi. Bu holat
+ishlab chiqaruvchiga ham, subnetga ham bog'liq emas — shu o'rnatmada
+o'lchov: 155 ta kameradan 42 tasi TCP'da yiqilgan, ularning aksariyati
+UDP'da bemalol ishlaydi. Servis buni o'zi aniqlab, o'sha kameralarni UDP
+ga o'tkazadi (`media/transport.py`, `cameras.rtsp_udp`).
+
+UDP'da esa kamera keyframe'ni portlash bilan yuboradi va standart soket
+buferi (208 KB) to'lib, paket tushib qoladi — tasvir "sinadi". Shuning
+uchun serverda:
+
+```bash
+cat > /etc/sysctl.d/99-nigoh.conf <<'CONF'
+net.core.rmem_max = 16777216
+net.core.rmem_default = 1048576
+CONF
+sysctl -p /etc/sysctl.d/99-nigoh.conf
+```
+
+MediaMTX tomonda mos sozlama (`udpReadBufferSize`) `media/sync.py` dan
+avtomatik chiqadi — yadro chegarasi kichik qolsa u shunchaki qirqiladi,
+ya'ni ikkalasi ham kerak.
+
+Tekshirish:
+
+```bash
+sysctl net.core.rmem_max              # 16777216 bo'lsin
+grep udpReadBufferSize data/mediamtx.yml
+```

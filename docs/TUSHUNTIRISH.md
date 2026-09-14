@@ -509,6 +509,58 @@ yaramaydi: Windows'da `socket.if_nameindex()` haqiqiy nom o'rniga
 `ethernet_0` kabi soxta nom qaytaradi va MediaMTX umuman nomzod bermay
 qoladi (sinaldi — ICE "new" holatida qotdi).
 
+**6. Kamera RTSP'ni TCP orqali bermayaptimi?**
+
+Kameralarning sezilarli qismi TCP (interleaved) ulanishini PLAY dan
+keyin 1-2 soniyada O'ZI YOPADI. Jurnalda:
+
+```
+mediamtx.log:  [path <slug>] [RTSP source] unexpected EOF
+nginx access:  "GET /media/hls/<slug>/index.m3u8" 500 0     <- tanasi BO'SH
+```
+
+Bo'sh tanali 500 — aynan shu nosozlikning imzosi: MediaMTX HLS muxerini
+yaratadi, manba darhol o'ladi, muxer birinchi segmentni bermay yo'q
+qilinadi. (Tanasi 84 baytli 500 esa boshqa gap: `path ... is not
+configured` — yo'l MediaMTX'da yo'q.)
+
+Servis buni o'zi hal qiladi: yo'l 45 soniya "tayyor" bo'lmasa,
+`media/transport.py` kamerani ikkala transportda o'lchaydi va ishonchli
+ishlaydiganini `cameras.rtsp_udp` ga yozadi. Bo'sag'a ikkala tomonga
+bir xil — ketma-ket ikki urinishda ham kadr kelishi shart, chunki "goh
+ishlaydi" tomoshabin uchun "ishlamaydi" degani (o'lchov: bir martalik
+sinovda TCP "ishlaydi" chiqqan kamerada 30 ta so'rovdan 6 tasi ochildi).
+
+UDP'ga o'tgan kamera MediaMTX'ning o'zi emas, **FFmpeg relay** orqali
+tortiladi: uzoq tarmoqda UDP paketlar tartibi buziladi, FFmpeg ularni
+tiklaydi, MediaMTX tiklamaydi. O'lchov, bitta 2560x1440 H.265 kamera:
+
+| Usul | Natija |
+|---|---|
+| MediaMTX to'g'ridan UDP | sekundiga 80-220 paket yo'qotish, kadrlar sinadi |
+| FFmpeg UDP -> lokal RTSP | 20 soniyada 470 kadr, dekod xatosi 0 |
+
+Tekshirish: `GET /api/v1/admin/cameras` javobida `rtsp_udp`, jurnalda
+`rtsp_transport_switched`. Kamerani tahrirlab saqlasangiz belgi 0 ga
+qaytadi va qaytadan o'lchanadi.
+
+**7. Jarayon tirik, lekin port javob bermayaptimi?**
+
+Konteyner "healthy", jurnalda fon vazifalari yozilyapti, lekin API
+porti ulanish qabul qilmaydi — natijada nginx HLS auth'ga 500, MediaMTX
+RTSP auth'ga 401 beradi, ya'ni HAMMA kamera o'ladi. Sababi: uvicorn
+to'xtatish signalini olib, ochiq SSE ulanishi (`/api/v1/events`)
+yopilishini cheksiz kutadi:
+
+```
+docker logs nigoh | grep "Waiting for connections to close"
+```
+
+Endi bunday qotish bo'lmaydi: `SHUTDOWN_GRACE` (5 s) dan keyin uvicorn
+ulanishlarni majburan uzadi, `core/watchdog.py` esa har 30 soniyada
+xizmatga o'z porti orqali ulanib ko'radi va uch marta ketma-ket
+ulanolmasa jarayonni tugatadi — Docker uni qaytaradi.
+
 ---
 
 ## 13. Bir sahifalik xulosa

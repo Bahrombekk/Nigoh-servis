@@ -265,6 +265,8 @@ media/                   MEDIAMTX QATLAMI
   ├─ sync.py             konfiguratsiya, jonli API, FFmpeg buyruqlari
   ├─ reconciler.py       fon: MediaMTX'ni tirik tutish, yo'llarni
   │                      kelishtirish, muzlagan oqimni aniqlash
+  ├─ transport.py        kamera RTSP'ni TCP'da bermasa — o'lchab, UDP'ga
+  │                      o'tkazish (avtomatik)
   └─ launcher.py         talab bo'yicha o'girish jarayoni
 core/                    UMUMIY INFRATUZILMA
   ├─ db.py               SQLite sxemasi va migratsiya
@@ -275,6 +277,7 @@ core/                    UMUMIY INFRATUZILMA
   ├─ rtsp_probe.py       kamerani tekshirish: tarmoq, login, kodek, SDP
   ├─ device_info.py      qurilma pasporti (ONVIF / ISAPI)
   ├─ fast_start.py       JPEG surat va keyframe so'rash
+  ├─ watchdog.py         jarayon tirik, lekin port o'lgan holatdan chiqish
   ├─ bus.py              jarayon ichidagi pub/sub (SSE uchun)
   ├─ events.py           hodisalar jadvali (yozish va tozalash)
   ├─ metrics.py          ochilish vaqti namunalari (p50/p95)

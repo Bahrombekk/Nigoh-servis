@@ -319,6 +319,11 @@ SOURCE_CLOSE_AFTER = os.environ.get("MEDIAMTX_CLOSE_AFTER", "2m0s")
 # standarti 10s — uzun GOP'li kamerada kam; build_config izohiga qarang).
 READ_TIMEOUT = os.environ.get("MEDIAMTX_READ_TIMEOUT", "30s")
 
+# UDP orqali tortiladigan kameralar uchun qabul buferi (baytda).
+# `build_config` izohiga qarang — yadroning `net.core.rmem_max` chegarasi
+# ham shuncha bo'lishi kerak.
+UDP_READ_BUFFER = int(os.environ.get("MEDIAMTX_UDP_READ_BUFFER", "8388608"))
+
 SOURCE_START_TIMEOUT = os.environ.get("MEDIAMTX_START_TIMEOUT", "12s")
 RELAY_START_TIMEOUT = os.environ.get("MEDIAMTX_RELAY_START_TIMEOUT", "30s")
 # O'girish (`_h264`) zanjiri yana bir pog'ona uzun: uning manbasi xom
@@ -403,8 +408,25 @@ _INPUT = ["-hide_banner", "-loglevel", "warning",
           # FFmpeg standart holda oqimni 5 soniya "o'rganadi" — kamerada
           # bitta video yo'l bo'lgani uchun bunga hojat yo'q, shu bilan
           # birinchi ochilish bir necha soniyaga qisqaradi.
-          "-analyzeduration", "1000000", "-probesize", "1000000",
-          "-rtsp_transport", "tcp"]
+          "-analyzeduration", "1000000", "-probesize", "1000000"]
+
+# UDP qabul buferi: kamera keyframe'ni portlash bilan yuboradi va standart
+# soket buferi (net.core.rmem_default, odatda 208 KB) to'lib, paket tushib
+# qoladi — tasvir "sinadi". O'lchov: shu buferisiz 2560x1440 H.265 oqimda
+# sekundiga 75-212 RTP paket yo'qolardi.
+_UDP_INPUT = ["-buffer_size", "8388608"]
+
+
+def input_args(udp: bool = False) -> list[str]:
+    """FFmpeg kirish argumentlari — kerakli RTSP transporti bilan.
+
+    TCP standart (UDP'da paket yo'qoladi), lekin TCP'ni ko'tarmaydigan
+    kamera uchun UDP yagona yo'l — core/db.py dagi `rtsp_udp` izohiga
+    qarang.
+    """
+    if udp:
+        return _INPUT + _UDP_INPUT + ["-rtsp_transport", "udp"]
+    return _INPUT + ["-rtsp_transport", "tcp"]
 
 # WebRTC uchun paketlar kichik bo'lsin — MediaMTX ularni qayta bo'lmasin.
 _OUTPUT = ["-an", "-pkt_size", "1200", "-f", "rtsp", "-rtsp_transport", "tcp"]
@@ -416,7 +438,7 @@ _RELAY_OUTPUT = ["-c", "copy", "-pkt_size", "1200",
                  "-f", "rtsp", "-rtsp_transport", "tcp"]
 
 
-def relay_args(src_url: str, dst_url: str) -> list[str]:
+def relay_args(src_url: str, dst_url: str, udp: bool = False) -> list[str]:
     """Oqimni qayta kodlashsiz uzatish (paketlar borligicha).
 
     Ishlatiladi: kamerani MediaMTX o'zi tortishi o'rniga FFmpeg tortadi.
@@ -431,7 +453,7 @@ def relay_args(src_url: str, dst_url: str) -> list[str]:
     yuboradi — o'lchov: shu kamerani ffmpeg 302 soniya uzilmasdan
     o'qidi, MediaMTX esa 54 soniyada uzildi.
     """
-    return _INPUT + ["-i", src_url] + _RELAY_OUTPUT + [dst_url]
+    return input_args(udp) + ["-i", src_url] + _RELAY_OUTPUT + [dst_url]
 
 
 # O'girishda chiqish tezligi. ILGARI qat'iy `-rc cbr -b:v 3M` edi —
@@ -463,7 +485,8 @@ TRANSCODE_MAX_MAIN = os.environ.get("TRANSCODE_MAX_MAIN", "8M")
 
 
 def transcode_args(src_url: str, dst_url: str, gpu: bool = True,
-                   maxrate: str = TRANSCODE_MAX_MAIN) -> list[str]:
+                   maxrate: str = TRANSCODE_MAX_MAIN,
+                   udp: bool = False) -> list[str]:
     """Kamera H.265 bergan holat: dekodlash va qayta kodlash.
 
     H.265 va H.264 — bir-biriga o'xshamaydigan siqish usullari, shuning
@@ -490,7 +513,7 @@ def transcode_args(src_url: str, dst_url: str, gpu: bool = True,
             "-crf", TRANSCODE_CQ, "-maxrate", maxrate, "-bufsize", maxrate,
         ]
     # Qisqa GOP — segment tezroq tayyor bo'ladi.
-    return _INPUT + video + ["-g", "30", "-bf", "0"] + _OUTPUT + [dst_url]
+    return input_args(udp) + video + ["-g", "30", "-bf", "0"] + _OUTPUT + [dst_url]
 
 
 def kadr_keladimi(url: str, sekund: float = 12.0) -> bool:
@@ -675,7 +698,19 @@ def source_path(cam: dict) -> dict:
     bir necha MB), ham ishonchliroq — FFmpeg nusxalashda B-kadrli H.264
     oqimni buzib yuborardi.
     """
-    if pull_via_ffmpeg(cam["slug"]):
+    # UDP'ga o'tkazilgan kamera FFmpeg orqali tortiladi — MediaMTX'ning
+    # o'zi UDP'ni yomon o'qiydi. O'lchov (bitta 2560x1440 H.265 kamera,
+    # boshqa iste'molchi yo'q):
+    #
+    #   MediaMTX to'g'ridan UDP — sekundiga 80-220 "RTP packets lost" va
+    #       uzluksiz "invalid fragmentation unit" (kadrlar sinadi);
+    #   FFmpeg UDP -> lokal RTSP — 20 soniyada 470 kadr, DEKOD XATOSI 0.
+    #
+    # Sababi yo'qotish emas, TARTIB BUZILISHI: uzoq tarmoqda UDP paketlar
+    # aralashib keladi, FFmpeg ularni navbat bilan tiklaydi
+    # (`reorder_queue_size`), MediaMTX esa tiklamaydi. Relay chiqishi
+    # lokal TCP, ya'ni MediaMTX'ga allaqachon tartiblangan oqim tushadi.
+    if pull_via_ffmpeg(cam["slug"]) or cam.get("rtsp_udp"):
         return relay_path(cam)
 
     conf = {
@@ -683,8 +718,13 @@ def source_path(cam: dict) -> dict:
             cam["ip"], cam["port"], cam.get("rtsp_path") or "/",
             cam.get("username") or "", cam.get("password") or "",
         ),
-        # UDP'da paketlar yo'qoladi va tasvir buziladi — TCP majburiy.
-        "rtspTransport": "tcp",
+        # UDP'da paketlar yo'qoladi va tasvir buziladi — shuning uchun
+        # standart TCP. ISTISNO: TCP'ni umuman ko'tarmaydigan kamera
+        # (core/db.py `rtsp_udp` izohi) — unda tanlov "buzuq tasvir"
+        # bilan "tasvir yo'q" o'rtasida, ya'ni UDP yagona yo'l. Yo'qotishni
+        # kamaytirish uchun MediaMTX'ning UDP qabul buferi kattalashtirilgan
+        # (`udpReadBufferSize`, build_config).
+        "rtspTransport": "udp" if cam.get("rtsp_udp") else "tcp",
         # DIQQAT: bu qiymat FAQAT always_on ga bog'liq bo'lishi shart.
         #
         # Ilgari bu yerda `is_warm(...)` ham bor edi va yo'l issiqligi
@@ -803,7 +843,20 @@ def build_config(cameras: list[dict], auth_url: str | None = None,
 
         "rtsp": True,
         "rtspAddress": f":{rtsp_port}",
+        # Bu — MediaMTX'ning RTSP SERVERI qabul qiladigan transportlar
+        # (ichki publish va o'qish 127.0.0.1 orqali ketadi, u yerda TCP
+        # eng to'g'ri tanlov). Kameradan TORTISH transporti alohida va
+        # yo'l bo'yicha beriladi (`source_path`: rtspTransport).
         "rtspTransports": ["tcp"],
+        # TCP'ni ko'tarmaydigan kameralar UDP'da tortiladi (core/db.py:
+        # rtsp_udp). Standart soket buferi (208 KB) keyframe portlashiga
+        # kichik — o'lchovda sekundiga 75-212 RTP paket yo'qolardi va
+        # tasvir sinardi. 8 MB bufer buni yo'qotadi.
+        #
+        # DIQQAT: yadro buni `net.core.rmem_max` bilan cheklaydi. Server
+        # standartda 208 KB beradi, ya'ni sozlama o'z-o'zicha yetarli
+        # emas — deploy/README.md dagi sysctl ham qo'yilishi kerak.
+        "udpReadBufferSize": UDP_READ_BUFFER,
 
         # WebRTC — asosiy yo'l, eng tez ochiladi.
         "webrtc": True,
@@ -958,6 +1011,20 @@ def _foreign_message(api_base: str | None = None) -> str:
             f"boshqa portlarga)")
 
 
+def needs_replace(current: dict | None, wanted: dict) -> bool:
+    """Yo'lning TURI o'zgardimi (MediaMTX o'zi tortadi <-> FFmpeg relay).
+
+    PATCH faqat berilgan maydonlarni almashtiradi. Kamera UDP'ga
+    o'tkazilganda yo'l `source` dan `runOnDemand` ga o'tadi va PATCH
+    qilinsa eski `source` JOYIDA QOLADI: MediaMTX kamerani o'zi ham
+    tortadi, launcher ham tortadi — kameraga ikkita ulanish, oqim esa
+    ikkalasi orasida sakraydi. Bunday holatda butun konfiguratsiya
+    almashtiriladi (`replace`).
+    """
+    return (bool((current or {}).get("runOnDemand"))
+            != bool(wanted.get("runOnDemand")))
+
+
 def ensure_path(cam: dict, api_base: str | None = None) -> bool:
     """Kamera yo'li MediaMTX'da borligiga ishonch hosil qiladi.
 
@@ -983,6 +1050,9 @@ def ensure_path(cam: dict, api_base: str | None = None) -> bool:
     try:
         if current is None:
             _api("POST", f"/v3/config/paths/add/{slug}", wanted, api_base=api_base)
+        elif needs_replace(current, wanted):
+            _api("POST", f"/v3/config/paths/replace/{slug}", wanted,
+                 api_base=api_base)
         elif any(current.get(k) != v for k, v in wanted.items()):
             _api("PATCH", f"/v3/config/paths/patch/{slug}", wanted, api_base=api_base)
         return True
@@ -1207,7 +1277,10 @@ def push_to_api(cameras: list[dict], api_base: str | None = None,
             # qo'llanadi.
             if name in serving:
                 continue
-            ops.append(("PATCH", f"/v3/config/paths/patch/{name}", conf))
+            if needs_replace(current, conf):
+                ops.append(("POST", f"/v3/config/paths/replace/{name}", conf))
+            else:
+                ops.append(("PATCH", f"/v3/config/paths/patch/{name}", conf))
     for name in existing:
         if name in wanted:
             continue
@@ -1232,28 +1305,39 @@ def push_to_api(cameras: list[dict], api_base: str | None = None,
     deadline = time.monotonic() + SYNC_BUDGET_S
     SKIPPED = "__skip__"
 
+    def _turi(path: str) -> str:
+        """Amal nima qildi — hisobot uchun. HTTP metodidan emas, MANZILDAN:
+        yo'l turi o'zgarganda `replace` ham POST bilan ketadi, lekin u
+        yangi yo'l qo'shish emas, mavjudini yangilash."""
+        if "/add/" in path:
+            return "added"
+        if "/delete/" in path:
+            return "removed"
+        return "updated"
+
     def _run(op: tuple[str, str, dict | None]):
         method, path, payload = op
+        kind = _turi(path)
         if time.monotonic() > deadline:
-            return method, SKIPPED
+            return kind, SKIPPED
         try:
             _api(method, path, payload, api_base=api_base)
-            return method, None
+            return kind, None
         except (urllib.error.URLError, OSError, ValueError) as exc:
-            return method, f"{path.rsplit('/', 1)[-1]}: {exc}"
+            return kind, f"{path.rsplit('/', 1)[-1]}: {exc}"
 
     added = updated = removed = pending = 0
     errors: list[str] = []
     with ThreadPoolExecutor(max_workers=16) as pool:
-        for method, error in pool.map(_run, ops):
+        for kind, error in pool.map(_run, ops):
             if error is SKIPPED:
                 pending += 1
             elif error is not None:
-                if method != "DELETE":     # o'chirishdagi xato jiddiy emas
+                if kind != "removed":      # o'chirishdagi xato jiddiy emas
                     errors.append(error)
-            elif method == "POST":
+            elif kind == "added":
                 added += 1
-            elif method == "PATCH":
+            elif kind == "updated":
                 updated += 1
             else:
                 removed += 1
