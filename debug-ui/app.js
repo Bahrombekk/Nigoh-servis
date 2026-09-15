@@ -163,39 +163,15 @@ setInterval(() => { $("#clock").textContent = clock(); $("#cdate").textContent =
    hisoblansa xom H.265 WebRTC'ga beriladi va baytlar oqib turgan holda
    tasvir birinchi kadrda qotib qoladi. Shuning uchun WebRTC bor bo'lsa
    hukmni faqat u chiqaradi. */
-/* Brauzer H.265 ni HLS orqali o'qiy oladimi.
-
-   DIQQAT: bu yerda ilgari `RTCRtpReceiver.getCapabilities("video")` ham
-   bor edi — ya'ni brauzerning WebRTC uchun H.265 e'loni. U YOLG'ON
-   CHIQDI. O'lchov (bitta kamera, bitta sub oqim, bir daqiqada, yonma-yon):
-
-     xom H.265 -> WebRTC : tasvir BUZUQ — rangli chiziqlar, yuvilgan
-                           kadr; statistika esa toza: 625 kadr qabul,
-                           624 dekod, yo'qolgan paket 0, PLI 0, NACK 0
-     H.264 ga o'girilgan : o'sha oqim, o'sha daqiqa — tasvir TOZA
-
-   Ya'ni baytlar butun yetib keladi va brauzer "dekod qildim" deb
-   hisoblaydi, chiqargan tasviri esa yaroqsiz. Transport ko'rsatkichlari
-   bu nosozlikni UMUMAN ko'rsatmaydi — shuning uchun u uzoq vaqt
-   "kamera/tarmoq aybi" bo'lib ko'ringan.
-
-   HLS yo'lida H.265 muammosiz ishlaydi (MSE/native dekod), shuning
-   uchun tekshiruv faqat o'sha qobiliyatni so'raydi. */
 const HEVC_OK = (() => {
+  try {
+    const caps = RTCRtpReceiver.getCapabilities("video");
+    if (caps) return caps.codecs.some((c) => /H265|hevc/i.test(c.mimeType));
+  } catch (e) {}
   const type = 'video/mp4; codecs="hvc1.1.6.L93.B0"';
   try { if (window.MediaSource && MediaSource.isTypeSupported(type)) return true; } catch (e) {}
   return document.createElement("video").canPlayType(type) === "probably";
 })();
-
-/* Serverdan XOM H.265 so'raymizmi.
-
-   Faqat WebRTC ishlatilmaydigan holatda: yuqoridagi o'lchov bo'yicha
-   WebRTC'da xom H.265 buzuq tasvir beradi. WebRTC sinaladigan bo'lsa
-   H.264 ga o'girilgan yo'l so'raladi — GPU narxi bor, lekin tomoshabin
-   yaroqli tasvir ko'radi. */
-function xomHevcSoralsin(camId) {
-  return HEVC_OK && !rtcWorthFor(camId);
-}
 
 /* ═════════ holat ═════════ */
 const S = {
@@ -1341,7 +1317,7 @@ function warmStream(c) {
   // sahifasini ochish uchun kameraga ulanishning ma'nosi yo'q: play
   // bosilganda pleyer baribir ulanadi, keyframe so'rovi esa birinchi
   // kadrni tezlashtiradi va u kameraning HTTP yuzasi orqali ketadi.
-  api(`/api/v1/cameras/${c.id}/stream?hevc=${xomHevcSoralsin(c.id) ? 1 : 0}`).catch(() => {});
+  api(`/api/v1/cameras/${c.id}/stream?hevc=${HEVC_OK ? 1 : 0}`).catch(() => {});
 }
 
 /* Devor kataki qaysi sifatда ochilsin. Sub yengil, lekin: (a) ilgari
@@ -1574,7 +1550,7 @@ function createPlayer(video, msgEl) {
 
     // Sub so'ralganda hevc=0 — H.265 sub'ni server H.264 ga o'girsin
     // (`_sub_h264`), aks holda brauzer H.265 sub'ni ocholmay qotardi.
-    api(`/api/v1/cameras/${cam.id}/stream?hevc=${quality === "sub" ? 0 : (xomHevcSoralsin(cam.id) ? 1 : 0)}` +
+    api(`/api/v1/cameras/${cam.id}/stream?hevc=${quality === "sub" ? 0 : (HEVC_OK ? 1 : 0)}` +
         (quality ? `&quality=${quality}` : ""))
       .then((urls) => {
         if (stale()) return;
