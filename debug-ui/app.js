@@ -1167,6 +1167,12 @@ const FAIL_MSG = "oqim ochilmadi";
 const WATCH_MS = 2000;
 const WATCH_DEAD = 6;
 const MAX_RETRY = 3;          // ketma-ket shuncha urinishdan keyin taslim
+/* Sub oqim shuncha marta ochilmasa — yaroqsiz deb belgilanib, asosiy
+   oqimga o'tiladi (p.reopen izohiga qarang). REOPEN_BACKOFF bo'yicha bu
+   1 + 1,5 + 2 = ~4,5 soniya kutish: sekin uyg'onadigan kamerani
+   noto'g'ri tashlamaydi, lekin umuman yo'q sub'da tomoshabinni uzoq
+   kuttirmaydi. */
+const SUB_GIVEUP = 3;
 const RETRY_WINDOW = 60000;   // shuncha tinch turgandan keyin hisob yangilanadi
 const SNAP_PUSH_MS = 30000;   // jonli ochiq turganda surat shuncha vaqtda yangilanadi
 /* WebRTC jitter buferi nishoni (ms) — brauzer tasvirni ko'rsatishdan
@@ -1372,8 +1378,39 @@ function createPlayer(video, msgEl) {
   /* Chiptani yangilash uchun qayta ochish. p.retry() dan farqi: bu
      nosozlik EMAS, shuning uchun urinishlar hisobiga kirmaydi va
      "taslim bo'lish" chegarasiga yaqinlashtirmaydi. */
+  /* Sub oqim yaroqsiz deb belgilanadi: shu sessiyada ham, serverda ham.
+     Server eslab qolgani uchun qayta yuklangandan keyin ham sinalmaydi
+     (wallQuality -> "" -> asosiy oqim). */
+  p.noteSubBad = () => {
+    if (!p.cam || !p.cam.id) return;
+    S.subBad.add(p.cam.id);
+    p.cam.sub_bad = true;
+    fetch(`/api/v1/cameras/${p.cam.id}/sub-bad`,
+          {method: "POST", credentials: "same-origin"}).catch(() => {});
+  };
+
   p.reopen = (why) => {
     if (!p.cam) return;
+    /* Sub yo'li UMUMAN ochilmasa — asosiy oqimga o'tamiz.
+       Nima uchun shart kerak: `p.retry` faqat oqim ulanib keyin qotgan
+       holatni tutadi. Yo'l esa umuman tayyor bo'lmasa WHEP 404 qaytaradi
+       va bu yerga tushadi — oldin bu holat cheksiz qayta urinardi,
+       tomoshabin esa "oqim ochilmadi" ni ko'rardi. Amalda shunday
+       registrator uchradi: 8 kanaldan ikkitasida (4 va 8) ikkinchi oqim
+       yoqilmagan edi, /Streaming/Channels/402 va 802 javob bermasdi.
+       Asosiy oqimlari esa ishlab turardi.
+       `everPlayed` shart: bir marta ishlagan sub vaqtincha uzilsa
+       asosiyga O'TILMAYDI — asosiy 4-5 barobar og'ir va zaif linkda
+       ahvolni yomonlashtiradi (wallQuality izohiga qarang). Faqat hech
+       qachon kadr bermagan sub tashlanadi. */
+    if (p.quality === "sub" && !p.everPlayed && p.reopens >= SUB_GIVEUP) {
+      console.log(`[pleyer] ${why} — sub ${SUB_GIVEUP} marta ochilmadi, `
+                  + "asosiy oqimga o'tildi");
+      p.noteSubBad();
+      p.reopens = 0;
+      p.open(p.cam, "");
+      return;
+    }
     const wait = REOPEN_BACKOFF[Math.min(p.reopens, REOPEN_BACKOFF.length - 1)]
                  || REOPEN_MAX_WAIT;
     p.reopens++;
@@ -1437,13 +1474,7 @@ function createPlayer(video, msgEl) {
     // bo'lsa allaqachon H.264 ga o'girilgan) baribir ishlaydi.
     if (p.quality === "sub") {
       console.log(`[pleyer] ${why} — sub ishlamadi, asosiy oqimga o'tildi`);
-      if (p.cam) {
-        S.subBad.add(p.cam.id);            // shu sessiyada
-        p.cam.sub_bad = true;              // ma'lumotда
-        // Serverda saqlaymiz — restart bo'lsa ham qayta sinamaydi.
-        fetch(`/api/v1/cameras/${p.cam.id}/sub-bad`,
-              {method: "POST", credentials: "same-origin"}).catch(() => {});
-      }
+      p.noteSubBad();
       p.retries = 0;
       p.open(p.cam, "");
       return;
@@ -1467,9 +1498,14 @@ function createPlayer(video, msgEl) {
   };
 
   p.open = (cam, quality) => {
+    const q = quality || "";
+    // Bayroq KAMERAGA tegishli: o'sha kamerani o'sha sifatda qayta
+    // ochish (p.reopen) uni tozalamasligi kerak, aks holda "bir marta
+    // ishlagan" faktini yo'qotamiz.
+    if (!p.cam || p.cam.id !== cam.id || p.quality !== q) p.everPlayed = false;
     p.stop();
     p.cam = cam;
-    p.quality = quality || "";
+    p.quality = q;
     const my = ++p.token;
     const stale = () => p.token !== my;
     msgEl.textContent = "ulanmoqda…";
@@ -1534,6 +1570,7 @@ function createPlayer(video, msgEl) {
         msgEl.textContent = "";
         p.retries = 0;              // tasvir keldi — urinishlar hisobi tozalanadi
         p.reopens = 0;
+        p.everPlayed = true;        // bu sub bir marta ishlagan — tashlanmaydi
         report();                   // birinchi kadr keldi — o'lchov to'liq
       }, {once: true});
       const rtcWorth = rtcWorthFor(cam.id);
