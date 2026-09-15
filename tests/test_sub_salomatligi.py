@@ -34,13 +34,16 @@ def soat(monkeypatch):
 
 @pytest.fixture()
 def toza():
-    for t in (reconciler._sub_ok, reconciler._sub_zero,
-              reconciler._sub_tekshiruvda):
-        t.clear()
+    def tozala():
+        for t in (reconciler._sub_ok, reconciler._sub_zero,
+                  reconciler._sub_tekshiruvda, reconciler._sub_olik):
+            t.clear()
+        # Bazadan yuklash sinovda o'tkazib yuboriladi — testlar
+        # bayroqlarni o'zlari beradi.
+        reconciler._sub_olik_yuklandi = True
+    tozala()
     yield
-    for t in (reconciler._sub_ok, reconciler._sub_zero,
-              reconciler._sub_tekshiruvda):
-        t.clear()
+    tozala()
 
 
 @pytest.fixture()
@@ -258,3 +261,33 @@ def test_transport_sinovi_ketayotganda_hukm_kutadi(
     soat.surish(reconciler.SUB_DEAD_AFTER + 1)
     reconciler._check_sub_health(NODE, yollar)
     assert shubha == ["kam_sub"]
+
+
+def test_yaroqsiz_deb_bilingan_sub_qayta_tekshirilmaydi(
+        monkeypatch, toza, soat, yozuvlar, shubha):
+    """Regressiya: allaqachon hukm qilingan yo'l qayta tekshirilmasin.
+
+    Ishlab chiqarishda o'lchandi: `sub_bad = 1` qo'yilgan kameraning
+    `_sub` yo'li MediaMTX'da bo'sh turaverardi va har tsiklda qaytadan
+    shubhaga tushardi — natijada har ~50 soniyada bitta ffprobe
+    ko'tarilib, registratorga keraksiz RTSP ulanish borardi. Cheksiz.
+
+    Qayta sinash bu yerda emas, `_recheck_sub_bad` da (SUB_RECHECK).
+    """
+    _issiq(monkeypatch, {"kam_sub"})
+    yollar = {"kam_sub": {"ready": False, "bytesReceived": 0}}
+    reconciler._sub_olik.add("kam_sub")
+    for _ in range(5):
+        soat.surish(reconciler.SUB_DEAD_AFTER)
+        reconciler._check_sub_health(NODE, yollar)
+    assert shubha == []
+
+
+def test_sub_yana_ishlasa_royxatdan_chiqadi(monkeypatch, toza, soat, yozuvlar):
+    """Kadr kelsa — bayroq ham, ichki ro'yxat ham tozalanadi."""
+    _issiq(monkeypatch, {"kam_sub"})
+    reconciler._sub_olik.add("kam_sub")
+    reconciler._check_sub_health(
+        NODE, {"kam_sub": {"ready": True, "bytesReceived": 4096}})
+    assert "kam_sub" not in reconciler._sub_olik
+    assert yozuvlar == [(["kam"], False)]

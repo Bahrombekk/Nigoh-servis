@@ -100,6 +100,16 @@ _sub_ok: set[tuple[int, str]] = set()
 _sub_zero: dict[tuple[int, str], float] = {}
 # ayni damda RTSP tekshiruvida turgan sub yo'llar — takror tekshirilmasin
 _sub_tekshiruvda: set[str] = set()
+# Allaqachon "yaroqsiz" deb hukm qilingan sub yo'llar. Ularni jonli
+# kuzatuv QAYTA tekshirmaydi — aks holda yo'l MediaMTX'da turgani va
+# bo'sh qolgani uchun har tsiklda shubhaga tushib, har daqiqada bitta
+# ffprobe ko'tarilardi. Ishlab chiqarishda o'lchandi: bitta kamera
+# uchun har ~50 soniyada takror tekshiruv, cheksiz.
+#
+# Qayta sinash bu yerda emas, `_recheck_sub_bad` da (SUB_RECHECK) —
+# o'sha yerda bayroq olinsa, yo'l bu to'plamdan ham chiqadi.
+_sub_olik: set[str] = set()
+_sub_olik_yuklandi = False
 _stalled: dict[tuple[int, str], str] = {}      # (tugun, yo'l) -> ko'rsatma nomi
 # (tugun, yo'l) -> oxirgi ko'rilgan buzuq kadrlar hisobi. Yo'l "tayyor"
 # bo'lsa ham oqim yaroqsiz bo'lishi mumkin: kamera RTP paketlarni
@@ -350,10 +360,22 @@ def _check_sub_health(node: dict, active: dict[str, dict]) -> None:
     degani "tortib ko'rildi" degani emas. Shuning uchun yakuniy qarorni
     `_sub_tasdiqla` RTSP tekshiruvi bilan chiqaradi.
     """
+    global _sub_olik_yuklandi
     node_id = node["id"]
     now = time.monotonic()
     shubhali: list[str] = []
     tirik: list[str] = []
+    if not _sub_olik_yuklandi:
+        # Bazadagi bayroqlar jarayon qayta ishga tushganda ham o'rinli:
+        # usiz har restartdan keyin hamma belgilangan kamera qaytadan
+        # tekshirilardi. Qayta sinashni `_recheck_sub_bad` bajaradi.
+        try:
+            with _lock:
+                _sub_olik.update(c["slug"] + sync.SUB_SUFFIX
+                                 for c in sub_bad_cameras())
+            _sub_olik_yuklandi = True
+        except Exception:      # baza hali tayyor bo'lmasa keyingi tsiklda
+            pass
     with _lock:
         for name, item in active.items():
             # `_sub_h264` — o'girish CHIQISHI, kameraning oqimi emas.
@@ -364,9 +386,10 @@ def _check_sub_health(node: dict, active: dict[str, dict]) -> None:
             if item.get("ready") and got > 0:
                 _sub_ok.add(key)
                 _sub_zero.pop(key, None)
+                _sub_olik.discard(name)
                 tirik.append(name)
                 continue
-            if key in _sub_ok or got > 0:
+            if key in _sub_ok or got > 0 or name in _sub_olik:
                 continue
             if not sync.is_warm(name):
                 _sub_zero.pop(key, None)
@@ -435,7 +458,10 @@ def _sub_tasdiqla(slugs: list[str]) -> None:
             log("reconciler", "sub_tekshiruv", level="info", camera=c["slug"],
                 xabar="sub oqimdan kadr kelmadi")
         if olik:
-            _sub_belgila([s + sync.SUB_SUFFIX for s in olik], bad=True)
+            olik_yollar = [s + sync.SUB_SUFFIX for s in olik]
+            with _lock:
+                _sub_olik.update(olik_yollar)
+            _sub_belgila(olik_yollar, bad=True)
     finally:
         with _lock:
             _sub_tekshiruvda.difference_update(slugs)
@@ -459,6 +485,8 @@ def _recheck_sub_bad() -> None:
     if not kameralar:
         return
     tuzalgan = [c["slug"] for c in kameralar if _sub_kadr_beradimi(c)]
+    with _lock:
+        _sub_olik.difference_update(s + sync.SUB_SUFFIX for s in tuzalgan)
     for slug in set_sub_bad(tuzalgan, bad=False):
         log("reconciler", "sub_tiklandi", camera=slug,
             sabab="qayta tekshiruvda sub oqim javob berdi — endi yana "
