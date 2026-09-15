@@ -89,13 +89,31 @@ def bootstrap() -> None:
     # behuda kutib HLS'ga tushadi, HLS'ning sovuq starti esa 15-65
     # soniya — foydalanuvchi buni "sekin" va "ochilmayapti" deb ko'radi.
     # O'lchov: 5 kameradan 5 tasi 12 soniyada bitta kadr bermadi.
+    #
+    # Sozlama berilmasa manzil endi marshrut bo'yicha O'ZI aniqlanadi
+    # (media/sync.webrtc_ice_hosts) — ya'ni ichki tarmoqdagi tomoshabin
+    # uchun WebRTC baribir ishlaydi. Shuning uchun ogohlantirish
+    # yumshatildi: u endi "umuman ishlamaydi" emas, "faqat ichkarida
+    # ishlaydi" deydi. Umuman manzil topilmagani esa jiddiy — o'shanda
+    # MediaMTX hamma interfeysni e'lon qiladi va ICE virtual adapterni
+    # (VPN, WSL) tanlab qo'yishi mumkin; o'lchovda bu qotishni ikki
+    # barobar oshirgan edi.
     if not mediamtx_sync.WEBRTC_HOSTS:
-        log("app", "webrtc_tashqi_manzil_yoq", level="warning",
-            sabab="WEBRTC_HOSTS/MEDIA_HOST/MEDIA_BASE bo'sh — MediaMTX ICE "
-                  "nomzodlarida faqat ichki manzillar bo'ladi, tashqi "
-                  "tomoshabinga WebRTC kadr bermaydi",
-            yechim="`.env` ga WEBRTC_HOSTS=<domen yoki tashqi IP> yozing "
-                   "va ICE portini (UDP/TCP) firewallda oching")
+        topilgan = mediamtx_sync.webrtc_ice_hosts()
+        log("app", "webrtc_tashqi_manzil_yoq",
+            level="info" if topilgan else "warning",
+            topilgan=topilgan,
+            sabab=("WEBRTC_HOSTS/MEDIA_HOST/MEDIA_BASE bo'sh — manzil "
+                   f"marshrut bo'yicha aniqlandi ({', '.join(topilgan)}). "
+                   "Ichki tarmoqdagi tomoshabinga yetadi, internetdagi "
+                   "tomoshabinga YETMAYDI." if topilgan else
+                   "WEBRTC_HOSTS/MEDIA_HOST/MEDIA_BASE bo'sh va manzil "
+                   "avtomatik ham aniqlanmadi — MediaMTX hamma "
+                   "interfeysni e'lon qiladi, ICE virtual adapterni "
+                   "(VPN, WSL) tanlab qolishi mumkin"),
+            yechim="Tashqi tomoshabin kerak bo'lsa `.env` ga "
+                   "WEBRTC_HOSTS=<domen yoki tashqi IP> yozing va ICE "
+                   "portini (UDP/TCP) firewallda oching")
 
     if ENABLE_UI:
         log("app", "ui_yoqilgan", level="warning",

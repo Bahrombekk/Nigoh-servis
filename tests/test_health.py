@@ -12,7 +12,8 @@ def test_health_kalitsiz_va_shakli():
         assert set(body) == {"ok", "mediamtx", "mediamtx_foreign", "health",
                              "egress_mbps", "egress_capacity_mbps", "streams",
                              "readers", "warm", "managed", "sse_subscribers",
-                             "snapshots", "open_ms", "webrtc_public_hosts"}
+                             "snapshots", "open_ms", "webrtc_public_hosts",
+                             "webrtc_hosts_source"}
         # Muhitga bog'lanmaymiz: test mashinasida MediaMTX ishlayotgan
         # bo'lishi ham mumkin — shakl va turlargina tekshiriladi.
         assert isinstance(body["mediamtx"], bool)
@@ -21,6 +22,10 @@ def test_health_kalitsiz_va_shakli():
         assert body["egress_capacity_mbps"] > 0
         # Tashqi WebRTC manzillari — sozlanmagani UZOQDAN ko'rinishi kerak.
         assert isinstance(body["webrtc_public_hosts"], list)
+        # Manzil operator bergan sozlamadanmi yoki marshrutdan o'zi
+        # topilganmi — operator uchun farqi bor: avtomatik topilgani LAN
+        # manzili, internetdagi tomoshabinga yetmaydi.
+        assert body["webrtc_hosts_source"] in ("sozlama", "avtomatik")
 
 
 def test_egress_tezligi_farqdan():

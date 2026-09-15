@@ -74,7 +74,18 @@ def service_health():
         # behuda kutib HLS'ga tushadi. Sozlash: WEBRTC_HOSTS / MEDIA_HOST /
         # MEDIA_BASE. Maydon aynan shu nosozlikni UZOQDAN ko'rish uchun —
         # ichkarida u faqat jurnaldagi bitta ogohlantirish bo'lib qolardi.
-        "webrtc_public_hosts": mediamtx_sync.WEBRTC_HOSTS,
+        # HAQIQATDA e'lon qilinayotgan manzil. Ilgari bu yerda xom
+        # `WEBRTC_HOSTS` turardi va operator sozlamani bermagan holatda
+        # doim bo'sh ko'rinardi — hozir esa bo'sh qolsa manzil marshrut
+        # bo'yicha O'ZI aniqlanadi (media/sync.webrtc_ice_hosts). Ya'ni
+        # eski maydon "WebRTC sozlanmagan" degan noto'g'ri xulosaga
+        # olib borardi.
+        "webrtc_public_hosts": mediamtx_sync.webrtc_ice_hosts(),
+        # Manzil operator tomonidan berilganmi yoki o'zi topilganmi.
+        # Farqi muhim: o'zi topilgani LAN manzili — ichki tomoshabinga
+        # yetadi, internetdagi tomoshabinga yetmaydi.
+        "webrtc_hosts_source": ("sozlama" if mediamtx_sync.WEBRTC_HOSTS
+                                else "avtomatik"),
         "snapshots": snapshots.cycle_stats(),
         # Ochilish vaqti — pleyer o'lchaydi (POST /metrics/open), bu yerda
         # transport kesimida p50/p95. Qaysi bosqich sekinligi ko'rinadi:
