@@ -493,6 +493,35 @@ def transcode_args(src_url: str, dst_url: str, gpu: bool = True,
     return _INPUT + video + ["-g", "30", "-bf", "0"] + _OUTPUT + [dst_url]
 
 
+def kadr_keladimi(url: str, sekund: float = 12.0) -> bool:
+    """Oqim HAQIQATAN kadr beradimi — DESCRIBE emas, o'qib ko'rish.
+
+    Nima uchun kerak: RTSP DESCRIBE yolg'on gapiradi. O'lchangan holat —
+    registratorning 4 va 8-kanali DESCRIBE'ga javob berib, SDP'da sub
+    oqimni (hevc 704x576) e'lon qilardi, lekin SETUP/PLAY dan keyin
+    bitta ham paket kelmasdi. `core.rtsp_probe.probe` shu sababli
+    ikkalasini ham "sog'lom" deb ko'rsatgan edi, bazadagi `sub_codec`
+    ham shundan H265 bo'lib qolgan.
+
+    Shuning uchun tekshiruv paket darajasida: birinchi video paket
+    kelsa — oqim bor. Kelmasa (yoki muddat tugasa) — yo'q.
+    """
+    exe = ffmpeg_path()
+    if not exe:
+        return False
+    probe = exe.replace("ffmpeg", "ffprobe")
+    cmd = [probe, "-hide_banner", "-loglevel", "error",
+           "-rtsp_transport", "tcp",
+           "-select_streams", "v:0", "-show_entries", "packet=pts_time",
+           "-of", "csv=p=0", "-read_intervals", "%+2", "-i", url]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True,
+                           timeout=sekund)
+    except (subprocess.TimeoutExpired, OSError):
+        return False
+    return any(satr.strip() for satr in r.stdout.splitlines())
+
+
 # ---------- issiq to'plam (warm set) ----------
 #
 # Sub oqim ~0,5 Mbit/s va ~15 MB xotira — tayyor tutish deyarli tekin,

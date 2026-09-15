@@ -142,6 +142,56 @@ def unique_slug(db, base: str, exclude_id: int | None = None) -> str:
 
 # ---------- sxema ----------
 
+def set_sub_bad(slugs: list[str], bad: bool) -> list[str]:
+    """`sub_bad` bayrog'ini o'rnatadi/oladi. Qaytadi: o'zgargan sluglar.
+
+    Faqat haqiqatan boshqa qiymatda turgan qator yangilanadi, shuning
+    uchun chaqiruvchi har tsiklda chaqirsa ham takror yozuv bo'lmaydi.
+
+    Bayroq nimani bildiradi: kameraning ikkinchi (sub) oqimi yo'q yoki
+    ishlamayapti — tomoshabinga asosiy oqim berilsin. Uni reconciler
+    jonli kuzatuvdan o'zi qo'yadi va o'zi oladi (media/reconciler.py,
+    `_check_sub_health`), pleyer ham qo'ya oladi (/sub-bad).
+    """
+    qiymat = 1 if bad else 0
+    ozgargan: list[str] = []
+    with get_db() as db:
+        for slug in slugs:
+            if db.execute(
+                "UPDATE cameras SET sub_bad = ? WHERE slug = ? AND sub_bad = ?",
+                (qiymat, slug, 1 - qiymat),
+            ).rowcount:
+                ozgargan.append(slug)
+        if ozgargan:
+            db.commit()
+    return ozgargan
+
+
+def cameras_by_slug(slugs: list[str]) -> list[dict]:
+    """Sub yo'li bor kameralarni slug bo'yicha oladi (tekshiruv uchun)."""
+    if not slugs:
+        return []
+    q = ",".join("?" * len(slugs))
+    with get_db() as db:
+        return [dict(r) for r in db.execute(
+            "SELECT id, slug, ip, port, username, password_enc, sub_path "
+            f"FROM cameras WHERE slug IN ({q}) "
+            "AND sub_path IS NOT NULL AND sub_path != ''", slugs)]
+
+
+def sub_bad_cameras() -> list[dict]:
+    """`sub_bad` deb belgilangan, sub yo'li bor va yoqilgan kameralar.
+
+    Qayta tekshirish uchun: operator registratorda ikkinchi oqimni
+    yoqsa, tizim buni o'zi ko'rib bayroqni olishi kerak.
+    """
+    with get_db() as db:
+        return [dict(r) for r in db.execute(
+            "SELECT id, slug, ip, port, username, password_enc, sub_path "
+            "FROM cameras WHERE sub_bad = 1 AND enabled = 1 "
+            "AND ip != '' AND sub_path IS NOT NULL AND sub_path != ''")]
+
+
 def init_db() -> None:
     with get_db() as db:
         db.execute(

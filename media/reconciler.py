@@ -27,9 +27,15 @@ import time
 from datetime import datetime, timezone
 from typing import Callable
 
-from core import bus, events
-from core.db import get_db
+from core import bus, events, security
+from core.db import (
+    cameras_by_slug,
+    get_db,
+    set_sub_bad,
+    sub_bad_cameras,
+)
 from core.log import log
+from core.rtsp_probe import build_rtsp_url
 
 from . import sync
 
@@ -44,6 +50,21 @@ STALL_INTERVAL = 5.0       # soniya — tekshiruv qadami
 # emas. 20 soniya — eng sekin kamerada ham ikki-uch keyframe oralig'i,
 # lekin kuzatuvchi uchun hali ham tez.
 STALL_AFTER = float(os.environ.get("STALL_AFTER", "20"))
+# Sub oqim so'ralgan, lekin shuncha vaqt ichida bitta bayt ham kelmasa —
+# kamerada ikkinchi oqim yo'q (yoki o'chirilgan) deb belgilanadi.
+#
+# Amalda uchragan holat: registratorning 8 kanalidan ikkitasida ikkinchi
+# oqim yoqilmagan edi (/Streaming/Channels/402 va 802 javob bermasdi),
+# asosiy oqimlari esa ishlab turardi. Devorda o'sha ikki katak bo'sh
+# qolardi va buni QO'LDA topib, qo'lda belgilash kerak edi.
+#
+# 45 soniya: `sourceOnDemandStartTimeout` (12 s) dan ancha uzun, ya'ni
+# sekin uyg'onadigan kamera noto'g'ri belgilanmaydi.
+SUB_DEAD_AFTER = float(os.environ.get("SUB_DEAD_AFTER", "45"))
+# Yaroqsiz deb belgilangan sub shuncha vaqtdan keyin qayta sinaladi —
+# operator registratorda ikkinchi oqimni yoqsa, tizim buni O'ZI ko'radi
+# va belgini oladi. Tekshiruv RTSP DESCRIBE bilan (tomoshaga tegmaydi).
+SUB_RECHECK = float(os.environ.get("SUB_RECHECK", "21600"))   # 6 soat
 SPAWN_COOLDOWN = 30.0      # qayta urinishlar orasidagi eng kam vaqt
 STARTUP_WAIT = 8.0         # ishga tushirgandan keyin API'ni shuncha kutamiz
 
@@ -58,6 +79,16 @@ _last_spawn = 0.0
 
 # (tugun, yo'l) -> (bytesReceived, shu hisob oxirgi marta o'zgargan vaqt)
 _prev_bytes: dict[tuple[int, str], tuple[int, float]] = {}
+
+# Sub oqim salomatligi. `_sub_ok` — shu jarayonda BIR MARTA bo'lsa ham
+# kadr bergan sub yo'llar: ular vaqtincha yopilsa ham yaroqsiz deb
+# belgilanmaydi (sourceOnDemand yo'lni tomoshabin ketgach yopadi va
+# hisob nolga tushadi — bu nosozlik emas).
+_sub_ok: set[tuple[int, str]] = set()
+# (tugun, yo'l) -> qachondan beri so'ralgan-u, bitta bayt ham kelmagan
+_sub_zero: dict[tuple[int, str], float] = {}
+# ayni damda RTSP tekshiruvida turgan sub yo'llar — takror tekshirilmasin
+_sub_tekshiruvda: set[str] = set()
 _stalled: dict[tuple[int, str], str] = {}      # (tugun, yo'l) -> ko'rsatma nomi
 
 # Ortiqcha yo'llar. MediaMTX har `paths/add`/`delete` so'roviga butun
@@ -246,6 +277,157 @@ def _log_spawn_death() -> None:
                 "va WEBRTC_UDP_PORT/WEBRTC_TCP_PORT ni bo'sh portlarga o'zgartiring")
 
 
+def _sub_belgila(slugs: list[str], bad: bool) -> None:
+    """`sub_bad` bayrog'ini bazaga yozadi va hodisa qoldiradi.
+
+    Faqat HAQIQATAN o'zgargan qatorga yoziladi (`AND sub_bad = ?`),
+    shuning uchun har tsiklda takror yozuv ham, takror jurnal ham
+    bo'lmaydi.
+    """
+    kameralar = [s[: -len(sync.SUB_SUFFIX)] for s in slugs]
+    for kamera in set_sub_bad(kameralar, bad):
+        log("reconciler", "sub_yaroqsiz" if bad else "sub_tiklandi",
+            level="warning" if bad else "info", camera=kamera,
+            sabab=("sub oqim so'raldi-yu kelmadi, tekshiruvda ham kadr "
+                   "bermadi — registratorda ikkinchi oqim yo'q yoki "
+                   "o'chirilgan; endi asosiy oqim beriladi")
+            if bad else "sub oqim yana kadr beryapti — asosiyga o'tish bekor")
+
+
+def _check_sub_health(node: dict, active: dict[str, dict]) -> None:
+    """Sub oqim so'ralgan-u kelmasa — kamerani `sub_bad` deb belgilaydi.
+
+    Nima uchun serverda: pleyer ham buni aniqlay oladi, lekin faqat
+    O'SHA tomoshabin uchun va faqat u ochib ko'rgandan keyin. Server bir
+    marta ko'rsa — hamma mijoz uchun, qayta yuklangandan keyin ham
+    o'rinli bo'ladi va hech kim qo'lda aralashmaydi.
+
+    Shartlar ataylab qattiq — sog'lom kamerani noto'g'ri belgilash
+    tomoshani og'irlashtiradi (asosiy oqim o'lchovda 7,88 Mbit/s, sub
+    1,20 Mbit/s edi):
+
+      * yo'l ISSIQ bo'lishi kerak (`is_warm`) — ya'ni kimdir haqiqatan
+        so'ragan. So'ralmagan yo'l tayyor emasligi normal holat;
+      * bitta ham bayt kelmagan bo'lishi kerak;
+      * shu holat SUB_DEAD_AFTER davom etishi kerak;
+      * yo'l ilgari BIR MARTA ishlagan bo'lsa (`_sub_ok`) hech qachon
+        belgilanmaydi — tomoshabin ketgach sourceOnDemand yo'lni yopadi
+        va hisob nolga tushadi, bu nosozlikka o'xshab ko'rinadi.
+
+    DIQQAT: bu funksiya HUKM CHIQARMAYDI, faqat shubha uyg'otadi. Nima
+    uchun — jonli tizimda sinaganda soxta ishga tushdi: sog'lom kanalning
+    sub yo'li "issiq" edi (manzil so'ralgan), lekin tomoshabin ulanmagani
+    uchun yo'l bo'sh turardi va u yaroqsiz deb belgilanardi. "So'raldi"
+    degani "tortib ko'rildi" degani emas. Shuning uchun yakuniy qarorni
+    `_sub_tasdiqla` RTSP tekshiruvi bilan chiqaradi.
+    """
+    node_id = node["id"]
+    now = time.monotonic()
+    shubhali: list[str] = []
+    tirik: list[str] = []
+    with _lock:
+        for name, item in active.items():
+            # `_sub_h264` — o'girish CHIQISHI, kameraning oqimi emas.
+            if not name.endswith(sync.SUB_SUFFIX):
+                continue
+            key = (node_id, name)
+            got = int(item.get("bytesReceived") or 0)
+            if item.get("ready") and got > 0:
+                _sub_ok.add(key)
+                _sub_zero.pop(key, None)
+                tirik.append(name)
+                continue
+            if key in _sub_ok or got > 0:
+                continue
+            if not sync.is_warm(name):
+                _sub_zero.pop(key, None)
+                continue
+            birinchi = _sub_zero.setdefault(key, now)
+            if now - birinchi >= SUB_DEAD_AFTER and name not in _sub_tekshiruvda:
+                _sub_zero.pop(key, None)
+                _sub_tekshiruvda.add(name)
+                shubhali.append(name)
+        for key in [k for k in _sub_zero
+                    if k[0] == node_id and k[1] not in active]:
+            _sub_zero.pop(key)
+    if tirik:
+        _sub_belgila(tirik, bad=False)
+    if shubhali:
+        # Qarorni kuzatuv EMAS, tekshiruv chiqaradi — pastdagi izohga qarang.
+        threading.Thread(target=_sub_tasdiqla, args=(shubhali,),
+                         daemon=True).start()
+
+
+def _sub_kadr_beradimi(cam: dict) -> bool:
+    """Kameraning sub oqimidan haqiqatan kadr keladimi.
+
+    DIQQAT: RTSP DESCHRIBE bilan tekshirish YETARLI EMAS va bu shu
+    o'rnatmada o'lchandi — registratorning 4 va 8-kanali DESCRIBE'ga
+    javob berib, SDP'da sub oqimni e'lon qilardi, lekin bitta ham paket
+    bermasdi. `core.rtsp_probe.probe` ikkalasini "sog'lom" deb
+    ko'rsatgan, bazadagi `sub_codec` ham shundan H265 bo'lib qolgan.
+    Shuning uchun tekshiruv paket darajasida.
+    """
+    try:
+        url = build_rtsp_url(cam["ip"], cam["port"] or 554, cam["sub_path"],
+                             cam["username"] or "",
+                             security.decrypt(cam["password_enc"]))
+        return sync.kadr_keladimi(url)
+    except Exception:              # bitta kamera qolganini uzmasin
+        return True                # shubhada ayblamaymiz
+
+
+def _sub_tasdiqla(slugs: list[str]) -> None:
+    """Shubhali sub yo'llarni RTSP DESCRIBE bilan tekshirib hukm chiqaradi.
+
+    Kuzatuv "so'raldi-yu kelmadi" deyishi mumkin, lekin buning aybsiz
+    sababi ham bor (tomoshabin ulanmay yopib qo'ydi). Tekshiruv esa
+    kameraning o'zidan so'raydi: ikkinchi oqim BORMI. Faqat u javob
+    bermasa kamera `sub_bad` bo'ladi.
+
+    Alohida oqimda: probe sekin kamerada bir necha soniya kutadi,
+    reconciler tsikli esa (u bilan birga muzlash kuzatuvi) turib
+    qolmasligi kerak.
+    """
+    kameralar = [s[: -len(sync.SUB_SUFFIX)] for s in slugs]
+    try:
+        olik: list[str] = []
+        for c in cameras_by_slug(kameralar):
+            if _sub_kadr_beradimi(c):
+                continue
+            olik.append(c["slug"])
+            log("reconciler", "sub_tekshiruv", level="info", camera=c["slug"],
+                xabar="sub oqimdan kadr kelmadi")
+        if olik:
+            _sub_belgila([s + sync.SUB_SUFFIX for s in olik], bad=True)
+    finally:
+        with _lock:
+            _sub_tekshiruvda.difference_update(slugs)
+
+
+def _recheck_sub_bad() -> None:
+    """Yaroqsiz deb belgilangan sub oqimlarni qayta sinab ko'radi.
+
+    Busiz bayroq abadiy qolardi: `sub_bad` qo'yilgach mijoz sub'ni
+    boshqa so'ramaydi, ya'ni yo'l yaratilmaydi va jonli kuzatuv uni
+    hech qachon "tuzalgan" deb ko'ra olmaydi. Operator registratorda
+    ikkinchi oqimni yoqsa ham, kimdir QO'LDA bayroqni olishi kerak
+    bo'lardi — aynan shu qo'l mehnatidan qutulmoqchimiz.
+
+    Tekshiruv RTSP DESCRIBE bilan: tomoshaga tegmaydi, oqim ochmaydi.
+    Alohida oqimda ishlaydi — sekin javob beradigan kameralar tsiklni
+    (va u bilan birga muzlash kuzatuvini) ushlab qolmasin.
+    """
+    kameralar = sub_bad_cameras()
+    if not kameralar:
+        return
+    tuzalgan = [c["slug"] for c in kameralar if _sub_kadr_beradimi(c)]
+    for slug in set_sub_bad(tuzalgan, bad=False):
+        log("reconciler", "sub_tiklandi", camera=slug,
+            sabab="qayta tekshiruvda sub oqim javob berdi — endi yana "
+                  "devorda sub ishlatiladi")
+
+
 def _check_stalls(node: dict) -> None:
     """Bayt hisobi STALL_AFTER davomida qo'zg'almasa — oqim muzlagan.
 
@@ -298,6 +480,8 @@ def _check_stalls(node: dict) -> None:
                 _stalled.pop(key)                 # oqim yopildi — muzlash tugadi
         for key in [k for k in _prev_bytes if k[0] == node_id and k[1] not in active]:
             _prev_bytes.pop(key)
+    # Ro'yxat allaqachon qo'lda — ikkinchi API so'rovi shart emas.
+    _check_sub_health(node, active)
     if not changes:
         return
     at = datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -397,6 +581,9 @@ def _loop(load_cameras: Callable[[], list[dict]]) -> None:
     announced = False              # birinchi muvaffaqiyatli sinxron logda ko'rinsin
     last_prune = 0.0
     last_sync = 0.0
+    # Birinchi tekshiruv darhol emas: ishga tushishda kameralar hali
+    # ulanmagan bo'lishi mumkin va hammasi "tuzalmagan" bo'lib chiqardi.
+    last_sub_recheck = time.monotonic()
     while True:
         try:
             now = time.monotonic()
@@ -408,6 +595,10 @@ def _loop(load_cameras: Callable[[], list[dict]]) -> None:
                     last_prune = now
                     with get_db() as db:
                         events.prune(db)
+                if now - last_sub_recheck >= SUB_RECHECK:
+                    last_sub_recheck = now
+                    threading.Thread(target=_recheck_sub_bad,
+                                     daemon=True).start()
             # Muzlash tekshiruvi har tsiklda — to'liq sinxrondan ancha
             # tez-tez. Tomoshabin bor oqim qotganini 60 soniyada emas,
             # 5-10 soniyada bilamiz.
