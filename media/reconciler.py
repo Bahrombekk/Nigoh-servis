@@ -65,6 +65,9 @@ SUB_DEAD_AFTER = float(os.environ.get("SUB_DEAD_AFTER", "45"))
 # operator registratorda ikkinchi oqimni yoqsa, tizim buni O'ZI ko'radi
 # va belgini oladi. Tekshiruv sub oqimdan kadr o'qib ko'rish bilan.
 SUB_RECHECK = float(os.environ.get("SUB_RECHECK", "21600"))   # 6 soat
+# Ishga tushgandan keyin birinchi tekshiruvgacha — yangi versiya
+# qo'yilganda eski bayroqlar tez tozalansin (yuqoridagi izohga qarang).
+SUB_FIRST_RECHECK = float(os.environ.get("SUB_FIRST_RECHECK", "300"))
 # Yo'l MediaMTX'da bor, lekin shuncha vaqtdan beri "tayyor" bo'lmadi —
 # ya'ni kimdir uni ko'rmoqchi, manba esa ko'tarilmayapti. Shu holatda
 # transport tekshiruvi ishga tushadi (media/transport.py): kameralarning
@@ -674,7 +677,14 @@ def _loop(load_cameras: Callable[[], list[dict]]) -> None:
     last_sync = 0.0
     # Birinchi tekshiruv darhol emas: ishga tushishda kameralar hali
     # ulanmagan bo'lishi mumkin va hammasi "tuzalmagan" bo'lib chiqardi.
-    last_sub_recheck = time.monotonic()
+    #
+    # Lekin TO'LIQ muddat (6 soat) ham uzoq: yangi versiya qo'yilganda
+    # bazada eski, NOTO'G'RI `sub_bad` bayroqlari qolgan bo'lishi mumkin
+    # (ilgari pleyer har qotishda belgilardi) va ular devorni og'ir
+    # asosiy oqimga o'tkazib turadi. Shu o'rnatmada o'lchandi: 32 ta
+    # belgilangan kameradan 29 tasi tekshiruvda SOG'LOM chiqdi.
+    # Shuning uchun birinchi tekshiruv ishga tushgandan ko'p o'tmay.
+    last_sub_recheck = time.monotonic() - SUB_RECHECK + SUB_FIRST_RECHECK
     while True:
         try:
             now = time.monotonic()

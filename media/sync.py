@@ -414,7 +414,17 @@ _INPUT = ["-hide_banner", "-loglevel", "warning",
 # soket buferi (net.core.rmem_default, odatda 208 KB) to'lib, paket tushib
 # qoladi — tasvir "sinadi". O'lchov: shu buferisiz 2560x1440 H.265 oqimda
 # sekundiga 75-212 RTP paket yo'qolardi.
-_UDP_INPUT = ["-buffer_size", "8388608"]
+# Tartibni tiklash navbati. `source_path` izohida UDP'ning asosiy
+# muammosi TARTIB BUZILISHI deyilgan va uni FFmpeg `reorder_queue_size`
+# bilan tiklashi aytilgan — lekin bayroq AMALDA berilmagan edi, ya'ni
+# FFmpeg avtomatik (-1) qiymatda qolardi. Uzoq, yo'qotishli yo'lda bu
+# kam: paket kechikib kelsa navbat allaqachon bo'shatilgan bo'ladi va
+# kadr sinadi (ekranda yashil bloklar, yirtilgan tasvir).
+#
+# 2000 paket ~ 2,5 MB: 8 MB soket buferi bilan mos, kechikishga esa
+# sezilarli hissa qo'shmaydi (navbat faqat TARTIBSIZ paket kelganda
+# to'ladi, normal oqimda bo'sh turadi).
+_UDP_INPUT = ["-buffer_size", "8388608", "-reorder_queue_size", "2000"]
 
 
 def input_args(udp: bool = False) -> list[str]:
