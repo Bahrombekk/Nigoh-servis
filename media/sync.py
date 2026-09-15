@@ -516,7 +516,8 @@ def transcode_args(src_url: str, dst_url: str, gpu: bool = True,
     return input_args(udp) + video + ["-g", "30", "-bf", "0"] + _OUTPUT + [dst_url]
 
 
-def kadr_keladimi(url: str, sekund: float = 12.0) -> bool:
+def kadr_keladimi(url: str, sekund: float = 12.0,
+                  udp: bool = False) -> bool:
     """Oqim HAQIQATAN kadr beradimi — DESCRIBE emas, o'qib ko'rish.
 
     Nima uchun kerak: RTSP DESCRIBE yolg'on gapiradi. O'lchangan holat —
@@ -533,8 +534,12 @@ def kadr_keladimi(url: str, sekund: float = 12.0) -> bool:
     if not exe:
         return False
     probe = exe.replace("ffmpeg", "ffprobe")
+    # Transport kameraga qarab: bir qism kamera RTSP'ni TCP'da umuman
+    # bermaydi va UDP'ga o'tkazilgan (`cameras.rtsp_udp`,
+    # media/transport.py). Bu yerda qat'iy TCP yozilsa, o'sha kamera
+    # "kadr bermayapti" bo'lib chiqardi — aslida transport noto'g'ri.
     cmd = [probe, "-hide_banner", "-loglevel", "error",
-           "-rtsp_transport", "tcp",
+           "-rtsp_transport", "udp" if udp else "tcp",
            "-select_streams", "v:0", "-show_entries", "packet=pts_time",
            "-of", "csv=p=0", "-read_intervals", "%+2", "-i", url]
     try:

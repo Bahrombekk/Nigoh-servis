@@ -189,8 +189,8 @@ def cameras_by_slug(slugs: list[str]) -> list[dict]:
     q = ",".join("?" * len(slugs))
     with get_db() as db:
         return [dict(r) for r in db.execute(
-            "SELECT id, slug, ip, port, username, password_enc, sub_path "
-            f"FROM cameras WHERE slug IN ({q}) "
+            "SELECT id, slug, ip, port, username, password_enc, sub_path, "
+            f"rtsp_udp FROM cameras WHERE slug IN ({q}) "
             "AND sub_path IS NOT NULL AND sub_path != ''", slugs)]
 
 
@@ -202,8 +202,8 @@ def sub_bad_cameras() -> list[dict]:
     """
     with get_db() as db:
         return [dict(r) for r in db.execute(
-            "SELECT id, slug, ip, port, username, password_enc, sub_path "
-            "FROM cameras WHERE sub_bad = 1 AND enabled = 1 "
+            "SELECT id, slug, ip, port, username, password_enc, sub_path, "
+            "rtsp_udp FROM cameras WHERE sub_bad = 1 AND enabled = 1 "
             "AND ip != '' AND sub_path IS NOT NULL AND sub_path != ''")]
 
 

@@ -63,7 +63,7 @@ STALL_AFTER = float(os.environ.get("STALL_AFTER", "20"))
 SUB_DEAD_AFTER = float(os.environ.get("SUB_DEAD_AFTER", "45"))
 # Yaroqsiz deb belgilangan sub shuncha vaqtdan keyin qayta sinaladi —
 # operator registratorda ikkinchi oqimni yoqsa, tizim buni O'ZI ko'radi
-# va belgini oladi. Tekshiruv RTSP DESCRIBE bilan (tomoshaga tegmaydi).
+# va belgini oladi. Tekshiruv sub oqimdan kadr o'qib ko'rish bilan.
 SUB_RECHECK = float(os.environ.get("SUB_RECHECK", "21600"))   # 6 soat
 # Yo'l MediaMTX'da bor, lekin shuncha vaqtdan beri "tayyor" bo'lmadi —
 # ya'ni kimdir uni ko'rmoqchi, manba esa ko'tarilmayapti. Shu holatda
@@ -368,6 +368,13 @@ def _check_sub_health(node: dict, active: dict[str, dict]) -> None:
             if not sync.is_warm(name):
                 _sub_zero.pop(key, None)
                 continue
+            # Transport sinovi ketayotgan kamerani hozir baholamaymiz:
+            # sinov davomida kamera TCP'da kadr bermasligi normal holat
+            # (u aynan shuni o'lchayapti), va sinov kamerani UDP'ga
+            # o'tkazsa sub o'z-o'zidan ishlab ketishi mumkin. `_sub_zero`
+            # tozalanmaydi — keyingi tsiklda qaytadan navbatga turadi.
+            if transport.busy(name[: -len(sync.SUB_SUFFIX)]):
+                continue
             birinchi = _sub_zero.setdefault(key, now)
             if now - birinchi >= SUB_DEAD_AFTER and name not in _sub_tekshiruvda:
                 _sub_zero.pop(key, None)
@@ -398,7 +405,7 @@ def _sub_kadr_beradimi(cam: dict) -> bool:
         url = build_rtsp_url(cam["ip"], cam["port"] or 554, cam["sub_path"],
                              cam["username"] or "",
                              security.decrypt(cam["password_enc"]))
-        return sync.kadr_keladimi(url)
+        return sync.kadr_keladimi(url, udp=bool(cam.get("rtsp_udp")))
     except Exception:              # bitta kamera qolganini uzmasin
         return True                # shubhada ayblamaymiz
 
@@ -440,9 +447,10 @@ def _recheck_sub_bad() -> None:
     ikkinchi oqimni yoqsa ham, kimdir QO'LDA bayroqni olishi kerak
     bo'lardi — aynan shu qo'l mehnatidan qutulmoqchimiz.
 
-    Tekshiruv RTSP DESCRIBE bilan: tomoshaga tegmaydi, oqim ochmaydi.
-    Alohida oqimda ishlaydi — sekin javob beradigan kameralar tsiklni
-    (va u bilan birga muzlash kuzatuvini) ushlab qolmasin.
+    Tekshiruv sub oqimdan kadr o'qib ko'rish bilan — DESCRIBE yetarli
+    emas (`_sub_kadr_beradimi` izohiga qarang). Alohida oqimda ishlaydi:
+    sekin javob beradigan kameralar tsiklni (va u bilan birga muzlash
+    kuzatuvini) ushlab qolmasin.
     """
     kameralar = sub_bad_cameras()
     if not kameralar:

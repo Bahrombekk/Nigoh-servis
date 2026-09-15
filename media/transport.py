@@ -216,6 +216,17 @@ def _run(slug: str) -> None:
             _busy.discard(slug)
 
 
+def busy(slug: str) -> bool:
+    """Shu kamera ayni damda transport sinovida turibdimi.
+
+    Boshqa avtomatik hukmlar sinov tugashini kutishi uchun kerak:
+    sinov davomida kamera TCP'da kadr bermasligi NORMAL holat, u
+    aynan shuni o'lchayapti.
+    """
+    with _lock:
+        return slug in _busy
+
+
 def request(slug: str) -> bool:
     """Fonda sinov buyuradi (chaqiruvchini kutdirmaydi).
 

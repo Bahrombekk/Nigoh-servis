@@ -210,3 +210,51 @@ def test_describe_javob_bersa_ham_kadr_shart(monkeypatch, toza):
            "password_enc": b"", "sub_path": "/sub"}
     assert reconciler._sub_kadr_beradimi(cam) is False
     assert chaqirildi and "/sub" in chaqirildi[0]
+
+
+def test_udp_kamera_tcp_bilan_ayblanmaydi(monkeypatch, toza):
+    """Regressiya: UDP kerak bo'lgan kamera "sub yo'q" deb belgilanmasin.
+
+    Kameralarning bir qismi RTSP'ni TCP'da umuman bermaydi va tizim
+    ularni UDP'ga o'tkazadi (`cameras.rtsp_udp`, media/transport.py).
+    Tekshiruv qat'iy TCP bilan ketsa, o'sha kameraning sub oqimi
+    "kadr bermayapti" bo'lib chiqardi — aslida transport noto'g'ri
+    tanlangan bo'lardi, va kamera abadiy og'ir asosiy oqimga o'tib
+    ketardi.
+    """
+    chaqiruv = {}
+    monkeypatch.setattr(reconciler.sync, "kadr_keladimi",
+                        lambda url, *a, **k: chaqiruv.update(k) or True)
+    monkeypatch.setattr(reconciler.security, "decrypt", lambda v: "p")
+    cam = {"ip": "10.0.0.1", "port": 554, "username": "a", "password_enc": b"",
+           "sub_path": "/sub", "rtsp_udp": 1}
+    reconciler._sub_kadr_beradimi(cam)
+    assert chaqiruv.get("udp") is True
+
+    chaqiruv.clear()
+    cam["rtsp_udp"] = 0
+    reconciler._sub_kadr_beradimi(cam)
+    assert chaqiruv.get("udp") is False
+
+
+def test_transport_sinovi_ketayotganda_hukm_kutadi(
+        monkeypatch, toza, soat, yozuvlar, shubha):
+    """Sinov davomida kadr kelmasligi NORMAL — u aynan shuni o'lchayapti.
+
+    Sinov kamerani UDP'ga o'tkazsa sub o'z-o'zidan ishlab ketishi
+    mumkin, shuning uchun hukm shoshilmaydi.
+    """
+    _issiq(monkeypatch, {"kam_sub"})
+    monkeypatch.setattr(reconciler.transport, "busy", lambda slug: slug == "kam")
+    yollar = {"kam_sub": {"ready": False, "bytesReceived": 0}}
+    for _ in range(5):
+        soat.surish(reconciler.SUB_DEAD_AFTER)
+        reconciler._check_sub_health(NODE, yollar)
+    assert shubha == []
+
+    # Sinov tugadi — endi odatdagi tartibda shubhaga tushadi.
+    monkeypatch.setattr(reconciler.transport, "busy", lambda slug: False)
+    reconciler._check_sub_health(NODE, yollar)
+    soat.surish(reconciler.SUB_DEAD_AFTER + 1)
+    reconciler._check_sub_health(NODE, yollar)
+    assert shubha == ["kam_sub"]
