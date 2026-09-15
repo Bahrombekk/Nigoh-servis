@@ -46,6 +46,10 @@ from . import sync
 # belgilash xavfi bor (sekin ochiladigan kamera o'lchovda 10,5 soniyada
 # ulangan), uzun bo'lsa bitta kameraning tashxisi yarim daqiqaga cho'ziladi.
 PROBE_SECONDS = float(os.environ.get("TRANSPORT_PROBE_SECONDS", "8"))
+# Ulanishga beriladigan qo'shimcha vaqt: o'lchov oynasi real vaqtda
+# ketadi, ulanishning o'zi esa sekin kamerada 10 soniyagacha olishi
+# mumkin. Usiz sekin kamera "kadr bermadi" bo'lib chiqardi.
+CONNECT_ALLOWANCE = float(os.environ.get("TRANSPORT_CONNECT_ALLOWANCE", "12"))
 # Shu kadrdan ko'p kelsa transport ishlayapti. 1-2 kadr yetarli emas:
 # yiqiladigan ulanish ham uzilishdan oldin bitta kadr berib ulguradi.
 MIN_FRAMES = 5
@@ -89,31 +93,96 @@ _last_try: dict[str, float] = {}      # slug -> oxirgi sinov (monotonic)
 _busy: set[str] = set()               # ayni damda sinovdan o'tayotganlar
 
 _FRAME_RE = re.compile(r"frame=\s*(\d+)")
+# Dekoder kadrni yig'a olmaganini bildiruvchi xabarlar.
+_BUZUQ_RE = re.compile(r"corrupt decoded frame|error while decoding|"
+                       r"cabac decode|Error constructing the frame RPS|"
+                       r"invalid fragmentation|missed \d+ packets")
+_TAKROR_RE = re.compile(r"Last message repeated (\d+) times")
 
 
-def _frames(url: str, transport: str) -> int:
-    """Shu transport bilan necha kadr keladi (FFmpeg bilan o'lchanadi).
+def _frames(url: str, transport: str) -> tuple[int, int]:
+    """Shu transport bilan necha SOG'LOM kadr keladi.
 
     Nima uchun FFmpeg: `core/rtsp_probe.py` faqat RTSP muloqotini
     tekshiradi (DESCRIBE/SETUP), bu nosozlik esa aynan PLAY dan keyin
     boshlanadi — kadrlar oqmaguncha ko'rinmaydi.
+
+    DIQQAT: kadr DEKOD QILINADI (`-c copy` EMAS). Sabab o'lchandi.
+    Ilgari sinov kadrni sanardi, butunligini tekshirmasdi — buzuq kadr
+    ham "kadr" bo'lib hisoblanardi. Yo'qotishli kanalda UDP doim TCP dan
+    ko'p "kadr" beradi (TCP kutadi, UDP kutmaydi), shuning uchun sinov
+    bunday kameralarni DOIM UDP'ga o'tkazardi va tomoshabin qotish
+    o'rniga buzuq tasvir ko'rardi — yashil bloklar, surilgan kadrlar.
+
+    Shu o'rnatmada o'lchandi (10.30.33.57, bir vaqtda, 30 soniya):
+
+        kameradan to'g'ridan TCP :   0 dekod xatosi
+        o'sha kamera UDP orqali  : 147 dekod xatosi
+
+    Qaytaradi: (kelgan kadr, buzuq kadr). Ikkalasi ham kerak — qaror
+    faqat songa qarab chiqarilmaydi: buzuq beradigan transport ko'p
+    kadr bersa ham yaramaydi (`check` izohiga qarang).
     """
     exe = sync.ffmpeg_path()
     if not exe or not url:
-        return -1
+        return -1, 0
     args = [exe, "-hide_banner", "-loglevel", "error", "-stats",
             "-rtsp_transport", transport]
     if transport == "udp":
         args += ["-buffer_size", str(sync.UDP_READ_BUFFER)]
-    args += ["-i", url, "-t", str(int(PROBE_SECONDS)), "-an",
-             "-c", "copy", "-f", "null", "-"]
+    # DIQQAT: `-t` (VIDEO vaqti) ATAYLAB ishlatilmaydi — o'lchov REAL
+    # vaqt bo'yicha ketadi. Sabab o'lchandi: sekin kanalda kamera 8
+    # soniyalik videoni 50 soniyada beradi (ffmpeg "speed=0.16x"), ya'ni
+    # `-t 8` muddatga ulgurmaydi va jarayon timeout bilan uzilib, sinov
+    # -1 qaytaradi. Keyin `_measure` uni "ishonchsiz" deb hisoblardi va
+    # SEKINLIK "TCP ishlamaydi" deb talqin qilinardi — kamera esa
+    # buzuq tasvir beradigan UDP'ga o'tkazilardi.
+    #
+    # Real vaqt o'lchovi ikkala transportga ham teng: qaysi biri SHU
+    # oynada ko'proq sog'lom kadr bersa, o'sha yaxshi.
+    args += ["-i", url, "-an", "-f", "null", "-"]
     try:
-        out = subprocess.run(args, capture_output=True, text=True,
-                             timeout=PROBE_SECONDS + 20)
-    except (OSError, subprocess.SubprocessError):
-        return -1
-    found = _FRAME_RE.findall(out.stderr or "")
-    return int(found[-1]) if found else 0
+        proc = subprocess.Popen(args, stdout=subprocess.DEVNULL,
+                                stderr=subprocess.PIPE, text=True)
+    except OSError:
+        return -1, 0
+    bolaklar: list[str] = []
+
+    def oqi() -> None:
+        for satr in proc.stderr:
+            bolaklar.append(satr)
+
+    oquvchi = threading.Thread(target=oqi, daemon=True)
+    oquvchi.start()
+    # Ulanishga ham vaqt kerak (o'lchovda sekin kamera 10,5 soniyada
+    # ulangan), shuning uchun oyna = ulanish + o'lchov.
+    time.sleep(PROBE_SECONDS + CONNECT_ALLOWANCE)
+    proc.kill()
+    oquvchi.join(timeout=5)
+    stderr = "".join(bolaklar)
+    found = _FRAME_RE.findall(stderr)
+    kadr = int(found[-1]) if found else 0
+    return kadr, _buzuq_soni(stderr)
+
+
+def _buzuq_soni(stderr: str) -> int:
+    """Dekoder nechta kadrni yig'a olmaganini sanaydi.
+
+    FFmpeg takrorlanuvchi xabarni siqadi ("Last message repeated N
+    times"), shuning uchun ko'paytuvchi ham hisobga olinadi — aks holda
+    eng buzuq oqim eng kam xato bergandek ko'rinardi.
+    """
+    jami = 0
+    oldingi_buzuq = False
+    for satr in stderr.splitlines():
+        takror = _TAKROR_RE.search(satr)
+        if takror and oldingi_buzuq:
+            jami += int(takror.group(1))
+            continue
+        oldingi_buzuq = bool(_BUZUQ_RE.search(satr))
+        if oldingi_buzuq:
+            jami += 1
+    return jami
 
 
 def _stable(url: str, transport: str) -> bool:
@@ -122,23 +191,28 @@ def _stable(url: str, transport: str) -> bool:
     Birinchi muvaffaqiyatsizlikda to'xtaydi — sog'lom kamerada ham,
     o'lik kamerada ham ortiqcha ulanish bo'lmasin.
     """
-    return _measure(url, transport) > 0
+    return _measure(url, transport)[0] > 0
 
 
-def _measure(url: str, transport: str) -> int:
-    """Shu transport necha kadr beradi — urinishlarning ENG YOMONI.
+def _measure(url: str, transport: str) -> tuple[int, int]:
+    """(eng yomon urinishdagi kadr, urinishlardagi eng ko'p buzuqlik).
 
-    0 — ishonchsiz: urinishlarning birortasi kadr bermadi. Aynan eng
-    yomon urinish olinadi, chunki tomoshabin uchun ham o'sha muhim:
-    "goh ishlaydi" — bu ishlamaydi degani.
+    Kadr bo'yicha ENG YOMON urinish olinadi, chunki tomoshabin uchun
+    ham o'sha muhim: "goh ishlaydi" — bu ishlamaydi degani. Buzuqlik
+    bo'yicha esa eng YOMONI (eng ko'pi) — bir marta buzuq bergan
+    transport ishonchli emas.
+
+    (0, buzuq) — ishonchsiz: urinishlarning birortasi kadr bermadi.
     """
     eng_yomon = 0
+    eng_buzuq = 0
     for _ in range(STABLE_TRIES):
-        kadr = _frames(url, transport)
+        kadr, buzuq = _frames(url, transport)
+        eng_buzuq = max(eng_buzuq, buzuq)
         if kadr <= MIN_FRAMES:
-            return 0
+            return 0, eng_buzuq
         eng_yomon = kadr if not eng_yomon else min(eng_yomon, kadr)
-    return eng_yomon
+    return eng_yomon, eng_buzuq
 
 
 def _camera(slug: str):
@@ -185,19 +259,31 @@ def check(slug: str) -> str | None:
     # transportni umuman bezovta qilmaymiz.
     hozirgi = "udp" if hozir_udp else "tcp"
     boshqa = "tcp" if hozir_udp else "udp"
-    hozirgi_kadr = _measure(url, hozirgi)
-    boshqa_kadr = _measure(url, boshqa)
+    hozirgi_kadr, hozirgi_buzuq = _measure(url, hozirgi)
+    boshqa_kadr, boshqa_buzuq = _measure(url, boshqa)
     # O'lchov HAR DOIM jurnalga tushadi, qaror o'zgarmagan bo'lsa ham.
     # Aks holda "nega bu kamera ochilmayapti, tekshiruv nima dedi?"
     # degan savolga javob qolmaydi — tashxis jimgina yo'qoladi.
     log("transport", "probe", slug=slug,
-        **{hozirgi: hozirgi_kadr, boshqa: boshqa_kadr},
+        **{hozirgi: hozirgi_kadr, boshqa: boshqa_kadr,
+           hozirgi + "_buzuq": hozirgi_buzuq, boshqa + "_buzuq": boshqa_buzuq},
         sekund=PROBE_SECONDS, hozirgi=hozirgi)
     if boshqa_kadr == 0:
         # Ikkinchisi ishonchsiz — o'tishning ma'nosi yo'q. Hozirgisi ham
         # bermayotgan bo'lsa, bu transport muammosi emas (kamera javob
         # bermayapti yoki butun tarmoq nosoz), va tirik transportni o'lik
         # kameraga qarab almashtirish keyin faqat chalkashtiradi.
+        return None
+    # BUZUQLIK — man qiluvchi shart, son bilan qoplanmaydi.
+    #
+    # O'lchandi (10.30.33.57, bir xil 6 soniyalik video):
+    #     TCP : 147 kadr, dekod xatosi 0
+    #     UDP : 136 kadr, dekod xatosi 4
+    # UDP real vaqtda ko'proq kadr "beradi" (kutmaydi), lekin ularning
+    # bir qismi yaroqsiz — ekranda yashil bloklar va surilgan kadrlar.
+    # Tomoshabin uchun buzuq kadr kadr emas, shuning uchun toza
+    # transportni buzuq transportga almashtirmaymiz.
+    if boshqa_buzuq > hozirgi_buzuq:
         return None
     if hozirgi_kadr and boshqa_kadr < DEGRADED_RATIO * hozirgi_kadr:
         return None                    # hozirgisi yetarlicha yaxshi ishlayapti

@@ -424,7 +424,9 @@ _INPUT = ["-hide_banner", "-loglevel", "warning",
 # 2000 paket ~ 2,5 MB: 8 MB soket buferi bilan mos, kechikishga esa
 # sezilarli hissa qo'shmaydi (navbat faqat TARTIBSIZ paket kelganda
 # to'ladi, normal oqimda bo'sh turadi).
-_UDP_INPUT = ["-buffer_size", "8388608", "-reorder_queue_size", "2000"]
+UDP_REORDER = int(os.environ.get("UDP_REORDER_QUEUE", "2000"))
+_UDP_INPUT = ["-buffer_size", str(UDP_READ_BUFFER),
+              "-reorder_queue_size", str(UDP_REORDER)]
 
 
 def input_args(udp: bool = False) -> list[str]:

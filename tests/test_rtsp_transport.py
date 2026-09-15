@@ -103,9 +103,12 @@ def qolda(monkeypatch):
     return yozilgan
 
 
-def _kadrlar(monkeypatch, tcp: int, udp: int):
-    monkeypatch.setattr(transport, "_frames",
-                        lambda url, tr: tcp if tr == "tcp" else udp)
+def _kadrlar(monkeypatch, tcp: int, udp: int,
+             tcp_buzuq: int = 0, udp_buzuq: int = 0):
+    """`_frames` endi (kadr, buzuq kadr) juftligini qaytaradi."""
+    monkeypatch.setattr(
+        transport, "_frames",
+        lambda url, tr: (tcp, tcp_buzuq) if tr == "tcp" else (udp, udp_buzuq))
 
 
 def test_tcp_yiqilsa_udp_ga_otadi(monkeypatch, qolda):
@@ -156,7 +159,8 @@ def test_goh_ishlaydigan_tcp_ham_yetarli_emas(monkeypatch, qolda):
     uchun bo'sag'a — ketma-ket urinishlarning HAMMASI.
     """
     monkeypatch.setattr(transport, "_camera", lambda slug: _Baza().row)
-    javoblar = {"tcp": iter([200, 0]), "udp": iter([190, 195])}
+    javoblar = {"tcp": iter([(200, 0), (0, 0)]),
+                "udp": iter([(190, 0), (195, 0)])}
     monkeypatch.setattr(transport, "_frames",
                         lambda url, tr: next(javoblar[tr]))
     assert transport.check("kam_1") == "udp"
@@ -166,7 +170,7 @@ def test_goh_ishlaydigan_tcp_ham_yetarli_emas(monkeypatch, qolda):
 def test_goh_ishlaydigan_udp_ga_otilmaydi(monkeypatch, qolda):
     """Ikkinchi transport ham beqaror bo'lsa — o'tishning ma'nosi yo'q."""
     monkeypatch.setattr(transport, "_camera", lambda slug: _Baza().row)
-    javoblar = {"tcp": iter([0]), "udp": iter([190, 0])}
+    javoblar = {"tcp": iter([(0, 0)]), "udp": iter([(190, 0), (0, 0)])}
     monkeypatch.setattr(transport, "_frames",
                         lambda url, tr: next(javoblar[tr]))
     assert transport.check("kam_1") is None
@@ -184,7 +188,7 @@ def test_sinov_kameraga_ortiqcha_ulanish_ochmaydi(monkeypatch, qolda):
 
     def frames(url, tr):
         urilgan.append(tr)
-        return 200
+        return 200, 0
 
     monkeypatch.setattr(transport, "_frames", frames)
     assert transport.check("kam_1") is None
@@ -200,7 +204,7 @@ def test_olik_kamera_holatni_ozgartirmaydi_va_tez_toxtaydi(monkeypatch, qolda):
 
     def frames(url, tr):
         urilgan.append(tr)
-        return 0
+        return 0, 0
 
     monkeypatch.setattr(transport, "_frames", frames)
     assert transport.check("kam_1") is None
@@ -248,3 +252,34 @@ def test_ozgina_farq_almashtirmaydi(monkeypatch, qolda):
     _kadrlar(monkeypatch, tcp=150, udp=200)
     assert transport.check("kam_1") is None
     assert qolda == {}
+
+
+def test_buzuq_kadr_beradigan_transportga_otilmaydi(monkeypatch, qolda):
+    """Regressiya: ko'p kadr bersa ham, buzuq beradigan transport yaramaydi.
+
+    Ishlab chiqarishda aynan shu bo'ldi: sekin kanaldagi kameralar
+    UDP'ga o'tkazildi va tomoshabin qotish o'rniga BUZUQ tasvir ko'rdi —
+    yashil bloklar, surilgan kadrlar.
+
+    O'lchov (10.30.33.57, bir xil 6 soniyalik video):
+        TCP : 147 kadr, dekod xatosi 0
+        UDP : 136 kadr, dekod xatosi 4
+
+    UDP real vaqtda ko'proq kadr "beradi" (kutmaydi), lekin bir qismi
+    yaroqsiz. Tomoshabin uchun buzuq kadr kadr emas.
+    """
+    monkeypatch.setattr(transport, "_camera", lambda slug: _Baza().row)
+    # UDP besh barobar ko'p kadr, lekin buzuq — baribir o'tilmaydi.
+    _kadrlar(monkeypatch, tcp=100, udp=500, tcp_buzuq=0, udp_buzuq=4)
+    assert transport.check("kam_1") is None
+    assert qolda == {}
+
+
+def test_buzuqlik_kamaysa_otiladi(monkeypatch, qolda):
+    """Teskarisi: hozirgi transport buzuq bersa, tozasiga o'tiladi."""
+    monkeypatch.setattr(transport, "_camera",
+                        lambda slug: _Baza(rtsp_udp=1).row)
+    # Hozirgi UDP buzuq, TCP toza va yetarlicha ko'p kadr beradi.
+    _kadrlar(monkeypatch, tcp=500, udp=100, tcp_buzuq=0, udp_buzuq=9)
+    assert transport.check("kam_1") == "tcp"
+    assert qolda["udp"] is False
