@@ -274,6 +274,20 @@ def check(slug: str) -> str | None:
         # bermayapti yoki butun tarmoq nosoz), va tirik transportni o'lik
         # kameraga qarab almashtirish keyin faqat chalkashtiradi.
         return None
+    # HOZIRGI transport buzuq, boshqasi toza — NISBATGA QARAMAY o'tamiz.
+    #
+    # Nima uchun nisbat bu yerda ishlamaydi: u faqat kadr SONINI
+    # taqqoslaydi. O'lchovda shunday holat chiqdi —
+    #
+    #     3395_km_3395_2_km   UDP  90 kadr, 340 buzuq
+    #                         TCP 135 kadr,   0 buzuq
+    #
+    # TCP har jihatdan yaxshi, lekin "3 barobar ko'p" shartiga tushmaydi
+    # va kamera buzuq tasvirda qolib ketardi. Buzuq kadr tomoshabin
+    # uchun kadr emas, shuning uchun bu yerda son emas, SIFAT hal qiladi.
+    if hozirgi_buzuq > boshqa_buzuq and boshqa_kadr > MIN_FRAMES:
+        _remember(row, udp=(boshqa == "udp"))
+        return boshqa
     # BUZUQLIK — man qiluvchi shart, son bilan qoplanmaydi.
     #
     # O'lchandi (10.30.33.57, bir xil 6 soniyalik video):

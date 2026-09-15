@@ -283,3 +283,35 @@ def test_buzuqlik_kamaysa_otiladi(monkeypatch, qolda):
     _kadrlar(monkeypatch, tcp=500, udp=100, tcp_buzuq=0, udp_buzuq=9)
     assert transport.check("kam_1") == "tcp"
     assert qolda["udp"] is False
+
+
+def test_buzuq_hozirgidan_toza_boshqasiga_nisbatga_qaramay_otiladi(
+        monkeypatch, qolda):
+    """Regressiya: nisbat qoidasi buzuq transportni ushlab qolardi.
+
+    O'lchovda chiqqan holat:
+
+        3395_km_3395_2_km   UDP  90 kadr, 340 buzuq   (hozirgi)
+                            TCP 135 kadr,   0 buzuq
+
+    TCP har jihatdan yaxshi, lekin "3 barobar ko'p kadr" shartiga
+    tushmaydi — eski mantiqda kamera buzuq tasvirda qolib ketardi.
+    """
+    monkeypatch.setattr(transport, "_camera",
+                        lambda slug: _Baza(rtsp_udp=1).row)
+    _kadrlar(monkeypatch, tcp=135, udp=90, tcp_buzuq=0, udp_buzuq=340)
+    assert transport.check("kam_1") == "tcp"
+    assert qolda["udp"] is False
+
+
+def test_toza_boshqasi_kadr_bermasa_otilmaydi(monkeypatch, qolda):
+    """Buzuq bo'lsa ham, ALMASHTIRADIGAN narsa bo'lmasa joyida qoladi.
+
+    Qora ekran buzuq tasvirdan yaxshi emas — kamerani umuman
+    ko'rsatmaslikdan ko'ra buzuq ko'rsatgan afzal.
+    """
+    monkeypatch.setattr(transport, "_camera",
+                        lambda slug: _Baza(rtsp_udp=1).row)
+    _kadrlar(monkeypatch, tcp=0, udp=300, tcp_buzuq=0, udp_buzuq=90)
+    assert transport.check("kam_1") is None
+    assert qolda == {}
