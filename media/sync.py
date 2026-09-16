@@ -535,6 +535,23 @@ def transcode_args(src_url: str, dst_url: str, gpu: bool = True,
     # va katak sinib turadi. Bitta shunday katak butun chiqishning 80 %
     # ini yeb, DEVORDAGI QOLGAN HAMMA katakni ham sindiradi.
     wallclock = ["-use_wallclock_as_timestamps", "1"]
+    # Kadr TAKRORLANMASIN.
+    #
+    # Wallclock vaqt belgisi bilan birinchi paket real soatni oladi
+    # (mikrosoniyada, o'n olti xonali son). FFmpeg esa standart holda
+    # chiqishni TEKIS kadr tezligiga keltiradi va noldan o'sha songacha
+    # kadr to'ldirmoqchi bo'ladi. Ishlab chiqarish jurnalidan:
+    #
+    #     [rtsp] DTS discontinuity: packet 7 with DTS 161059438118809
+    #     [vf#0:0] 9684782 frame duplication too large, skipping
+    #
+    # Ya'ni to'qqiz millionlab kadr "takrorlanishi" kerak bo'lib
+    # chiqadi, ffmpeg ularni tashlaydi va chiqishda BO'SH kadr qoladi —
+    # tomoshabin butunlay YASHIL ekran ko'radi.
+    #
+    # `passthrough` — kadr kelganda chiqadi, to'ldirish yo'q. Jonli
+    # oqim uchun to'g'ri rejim: tekis kadr tezligi baribir kerak emas.
+    fps_mode = ["-fps_mode", "passthrough"]
     # Bufer nishondan ikki barobar: keyframe portlashi sig'sin, lekin
     # yo'l hech qachon o'nlab Mbit/s ga chiqmasin. Qattiq shift —
     # kodlovchi qanday adashsa ham kanalni bosa olmaydi.
@@ -555,7 +572,8 @@ def transcode_args(src_url: str, dst_url: str, gpu: bool = True,
             "-crf", TRANSCODE_CQ, "-maxrate", maxrate, "-bufsize", bufsize,
         ]
     # Qisqa GOP — segment tezroq tayyor bo'ladi.
-    return input_args(udp) + video + ["-g", "30", "-bf", "0"] + _OUTPUT + [dst_url]
+    return (input_args(udp) + video + fps_mode + ["-g", "30", "-bf", "0"]
+            + _OUTPUT + [dst_url])
 
 
 def kadr_keladimi(url: str, sekund: float = 12.0,

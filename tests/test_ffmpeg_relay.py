@@ -134,3 +134,25 @@ def test_ogirish_buferi_nishondan_ikki_barobar():
     assert args[args.index("-bufsize") + 1] == "4M"
     assert sync._ikki_barobar("8M") == "16M"
     assert sync._ikki_barobar("500K") == "1000K"
+
+
+def test_ogirish_kadr_takrorlamaydi():
+    """Regressiya: wallclock vaqt belgisi kadr to'ldirishni keltirib chiqardi.
+
+    Wallclock bilan birinchi paket real soatni oladi (mikrosoniyada,
+    o'n olti xonali son). FFmpeg esa standart holda chiqishni TEKIS
+    kadr tezligiga keltiradi va noldan o'sha songacha kadr
+    to'ldirmoqchi bo'ladi. Ishlab chiqarish jurnalidan:
+
+        [rtsp] DTS discontinuity: packet 7 with DTS 161059438118809
+        [vf#0:0] 9684782 frame duplication too large, skipping
+
+    Natijasi tomoshabin uchun: butunlay YASHIL ekran — ffmpeg
+    to'ldirib bo'lmaydigan kadrlarni tashlaydi va chiqishda bo'sh
+    kadr qoladi.
+    """
+    args = sync.transcode_args("SRC", "DST", gpu=False, maxrate="2M")
+    assert "-fps_mode" in args
+    assert args[args.index("-fps_mode") + 1] == "passthrough"
+    # Chiqish sozlamasi: `-i` dan KEYIN turishi shart.
+    assert args.index("-fps_mode") > args.index("-i")
