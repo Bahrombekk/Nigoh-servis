@@ -6,7 +6,7 @@ ishlatiladi. Kalit conftest'da: X-API-Key: test-kalit.
 import pytest
 from fastapi.testclient import TestClient
 
-from api import create_app
+from api import create_app, deps
 from core.db import get_db
 
 KEY = {"X-API-Key": "test-kalit"}
@@ -25,6 +25,18 @@ def _yangi(client, nom, ext=""):
     })
     assert r.status_code == 201, r.text
     return r.json()
+
+
+@pytest.fixture(autouse=True)
+def _toza_kalit_hisobi():
+    """Kalit cheklovi hisobi har test uchun tozalanadi.
+
+    Usiz testlar bir-birining hisobini meros qilib oladi va tartibga
+    qarab goh 401, goh 429 chiqadi.
+    """
+    deps._key_throttle._fails.clear()
+    yield
+    deps._key_throttle._fails.clear()
 
 
 def test_kalitsiz_401(client):
@@ -279,3 +291,49 @@ def test_auth_stream_mediamtx(client):
         "ip": "127.0.0.1", "action": "publish", "path": "x_h264",
         "query": f"token={security.internal_token()}"})
     assert r.status_code == 200
+
+
+def test_takroriy_notogri_kalit_sekinlashtiriladi(client):
+    """Kalit bo'yicha ham cheklov bor — ilgari faqat kirish formasida edi.
+
+    Kalit 64 belgili bo'lsa taxmin qilib bo'lmaydi, lekin u KALTA yoki
+    sizib chiqqan bo'lishi mumkin; tekshiruvsiz endpoint cheksiz
+    tezlikda urishga ochiq qolardi.
+    """
+    xato = {"X-API-Key": "xato"}
+    for _ in range(deps._key_throttle.free):
+        assert client.get("/api/v1/cameras", headers=xato).status_code == 401
+
+    r = client.get("/api/v1/cameras", headers=xato)
+    assert r.status_code == 429
+    assert int(r.headers["Retry-After"]) >= 1
+
+
+def test_togri_kalit_hisobni_tozalaydi(client):
+    """Muvaffaqiyatli so'rov ip hisobini nolga qaytaradi."""
+    xato = {"X-API-Key": "xato"}
+    for _ in range(deps._key_throttle.free):
+        client.get("/api/v1/cameras", headers=xato)
+    assert client.get("/api/v1/cameras", headers=KEY).status_code == 200
+    # Hisob tozalandi — yana bepul urinishlar bor.
+    assert client.get("/api/v1/cameras", headers=xato).status_code == 401
+
+
+def test_xavfsizlik_sarlavhalari(client):
+    """Konsol kamera manzillari va chiptalarini ko'rsatadi — himoya arzon."""
+    r = client.get("/api/v1/cameras", headers=KEY)
+    assert r.headers["X-Content-Type-Options"] == "nosniff"
+    assert r.headers["X-Frame-Options"] == "DENY"
+    assert r.headers["Referrer-Policy"] == "no-referrer"
+    assert "frame-ancestors 'none'" in r.headers["Content-Security-Policy"]
+
+
+def test_sarlavhalar_401_javobda_ham_boladi():
+    """Xato javobda ham qo'yilsin — middleware hamma yo'lni qamraydi."""
+    from fastapi.testclient import TestClient
+
+    from api import create_app
+    with TestClient(create_app()) as c:
+        r = c.get("/api/v1/cameras")
+        assert r.status_code == 401
+        assert r.headers["X-Frame-Options"] == "DENY"

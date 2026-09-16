@@ -64,8 +64,22 @@ def media_locations(domain: str, api_port: int, hls_port: int,
                     webrtc_port: int, secret: str, scheme: str) -> str:
     """/media/... bloklari — 80 va 443 uchun aynan bir xil matn."""
     return f"""
+    # ---- Jurnal: CHIPTA yozilmaydi -------------------------------------
+    # Oqim manzili `?token=...` bo'lib keladi va nginx standart holda
+    # butun so'rov satrini jurnalga yozadi. Chipta bir soat amal qiladi,
+    # ya'ni jurnalni o'qiy oladigan har kim shu muddat ichida kamerani
+    # ocha oladi. Jurnal ko'pincha zaxiraga ham, monitoringga ham
+    # ko'chiriladi — sir uzoq yashaydi.
+    #
+    # `$uri` so'rov satrisiz yo'lni beradi: tashxis uchun yetarli
+    # (qaysi kamera, qaysi segment), sir esa tushmaydi.
+    log_format nigoh_media '$remote_addr - [$time_local] '
+                           '"$request_method $uri $server_protocol" '
+                           '$status $body_bytes_sent $request_time';
+
     # ---- HLS video -----------------------------------------------------
     location /media/hls/ {{
+        access_log /var/log/nginx/nigoh_media.log nigoh_media;
         # Tomoshabin chiptasi SHU YERDA tekshiriladi (quyidagi /_hlsauth).
         # Pastdagi Bearer sarlavhasi bilan kelgan so'rovni MediaMTX
         # shartsiz o'tkazadi va bizning auth ilgagimizni umuman
@@ -126,6 +140,7 @@ def media_locations(domain: str, api_port: int, hls_port: int,
 
     # ---- WebRTC signal (WHEP) ------------------------------------------
     location /media/whep/ {{
+        access_log /var/log/nginx/nigoh_media.log nigoh_media;
         proxy_pass http://127.0.0.1:{webrtc_port}/;
         proxy_set_header X-Forwarded-For $remote_addr;
         proxy_redirect ~^(?:https?://[^/]+)?/(?:media/whep/)?(.*)$ {scheme}://{domain}/media/whep/$1;

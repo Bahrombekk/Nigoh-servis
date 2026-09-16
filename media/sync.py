@@ -284,6 +284,57 @@ def webrtc_ice_hosts() -> list[str]:
 # Chiqish navbati. MediaMTX standarti — 512; bitta oqimni ko'p tomoshabin
 # ko'rganda u to'lib ketadi va server "reader is too slow" deb paketlarni
 # tashlaydi (tasvir uzuq-yuluq bo'ladi). Ikkining darajasi bo'lishi shart.
+# Media portlari qaysi interfeysda eshitsin.
+#
+# Standart holda hammasi `:port` edi, ya'ni server tashqi IP'ga ega
+# bo'lsa RTSP/HLS/WebRTC portlari internetdan ko'rinardi. Chipta
+# himoya qiladi, lekin hujum yuzasini bekorga ochib turishning ma'nosi
+# yo'q — ayniqsa RTSP: unga faqat LOKAL jarayonlar ulanadi
+# (stream_launcher nashr qiladi, o'girish o'qiydi), tashqaridan kirish
+# imkoni umuman kerak emas.
+#
+# HLS va WebRTC brauzerga kerak, lekin MEDIA_BASE berilgan bo'lsa
+# ular nginx ORTIDA turadi va ularga ham to'g'ridan kirish shart emas.
+# MEDIA_BASE bo'lmasa (lokal ishlab chiqish, proksisiz o'rnatma) eski
+# xatti-harakat saqlanadi — aks holda tomoshabin umuman ulana olmaydi.
+#
+# DIQQAT: WebRTC ICE porti (WEBRTC_UDP_PORT) bunga KIRMAYDI — u
+# tomoshabin bilan to'g'ridan gaplashadi va ochiq qolishi shart.
+def _bind(port: int, faqat_lokal: bool) -> str:
+    return f"127.0.0.1:{port}" if faqat_lokal else f":{port}"
+
+
+# RTSP har doim lokal. Tashqaridan RTSP kerak bo'lsa (boshqa tizim
+# Nigoh'dan tortsa) shu o'zgaruvchi bilan ochiladi.
+RTSP_PUBLIC = os.environ.get("RTSP_PUBLIC", "0") == "1"
+
+
+def _allow_origins() -> list[str]:
+    """Oqimni qaysi saytlar o'z sahifasiga joylay oladi.
+
+    Ilgari bu `["*"]` edi: istalgan sayt kamerani o'z sahifasiga
+    qo'ya olardi. Chipta baribir kerak, lekin sizib chiqqan chipta
+    o'shanda HAR QAYERDAN ishlaydi — cheklov shu oynani toraytiradi.
+
+    Manba: MEDIA_BASE (tomoshabin kiradigan domen). U berilmagan
+    bo'lsa cheklaydigan narsa yo'q va `*` qoladi — aks holda lokal
+    ishlab chiqish va proksisiz o'rnatma buzilardi.
+
+    `ALLOW_ORIGINS` bilan qo'lda ham berish mumkin (vergul bilan).
+    """
+    qol = os.environ.get("ALLOW_ORIGINS", "").strip()
+    if qol:
+        return [o.strip() for o in qol.split(",") if o.strip()]
+    base = os.environ.get("MEDIA_BASE", "").strip().rstrip("/")
+    if not base:
+        return ["*"]
+    parts = urllib.parse.urlsplit(base if "://" in base else "//" + base)
+    if not parts.hostname:
+        return ["*"]
+    sxema = parts.scheme or "https"
+    port = f":{parts.port}" if parts.port else ""
+    return [f"{sxema}://{parts.hostname}{port}"]
+
 WRITE_QUEUE_SIZE = int(os.environ.get("MEDIAMTX_WRITE_QUEUE", "1024"))
 
 # Bitta sinxronlash tsikliga ajratiladigan vaqt. Reconciler har 30
@@ -865,6 +916,9 @@ def build_config(cameras: list[dict], auth_url: str | None = None,
     remote = bool(node) and not is_local_api(node.get("api_base"))
     rtsp_port = int(node.get("rtsp_port") or RTSP_PORT)
     hls_port = int(node.get("hls_port") or HLS_PORT)
+    # Tomoshabin nginx orqali keladimi. Kelsa, HLS va WebRTC portlariga
+    # to'g'ridan kirish kerak emas va ular lokalda qoladi (_bind izohi).
+    proksi_ortida = bool(os.environ.get("MEDIA_BASE", "").strip()) and not node.get("public_host")
     webrtc_port = int(node.get("webrtc_port") or WEBRTC_PORT)
     # Uzoq tugunda API porti tugunning o'z manzilidan olinadi.
     api_prt = api_port(node.get("api_base")) if remote else API_PORT
@@ -907,7 +961,7 @@ def build_config(cameras: list[dict], auth_url: str | None = None,
         "readTimeout": READ_TIMEOUT,
 
         "rtsp": True,
-        "rtspAddress": f":{rtsp_port}",
+        "rtspAddress": _bind(rtsp_port, not RTSP_PUBLIC),
         # Bu — MediaMTX'ning RTSP SERVERI qabul qiladigan transportlar
         # (ichki publish va o'qish 127.0.0.1 orqali ketadi, u yerda TCP
         # eng to'g'ri tanlov). Kameradan TORTISH transporti alohida va
@@ -925,8 +979,8 @@ def build_config(cameras: list[dict], auth_url: str | None = None,
 
         # WebRTC — asosiy yo'l, eng tez ochiladi.
         "webrtc": True,
-        "webrtcAddress": f":{webrtc_port}",
-        "webrtcAllowOrigins": ["*"],
+        "webrtcAddress": _bind(webrtc_port, proksi_ortida),
+        "webrtcAllowOrigins": _allow_origins(),
         "webrtcLocalUDPAddress": f":{WEBRTC_UDP_PORT}" if WEBRTC_UDP_PORT else "",
         # ICE TCP zaxirasi — UDP yopiq tarmoqdagi tomoshabin HLS'ga
         # tushmasin (yuqoridagi izoh).
@@ -960,7 +1014,7 @@ def build_config(cameras: list[dict], auth_url: str | None = None,
 
         # HLS — WebRTC ishlamagan brauzerlar uchun zaxira.
         "hls": True,
-        "hlsAddress": f":{hls_port}",
+        "hlsAddress": _bind(hls_port, proksi_ortida),
         # Oddiy fMP4 rejimi (lowLatency EMAS): LL-HLS'ning 200 ms'lik
         # qismlari oldindagi proxy'lar buferida qotib, qora ekran berardi.
         # Oddiy HLS 1 s'lik butun segmentlar bilan ishlaydi — har qanday
@@ -972,7 +1026,7 @@ def build_config(cameras: list[dict], auth_url: str | None = None,
         # 7×1 s segment — tez boshlanish va mo''tadil bufer.
         "hlsSegmentCount": 7,
         "hlsSegmentDuration": "1s",
-        "hlsAllowOrigins": ["*"],
+        "hlsAllowOrigins": _allow_origins(),
         "hlsCDNSecret": hls_cdn_secret(),
         "hlsTrustedProxies": ["127.0.0.1"],
 

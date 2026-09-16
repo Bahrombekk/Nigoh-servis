@@ -93,6 +93,33 @@ def create_app() -> FastAPI:
         lifespan=_lifespan,
     )
 
+    @app.middleware("http")
+    async def xavfsizlik_sarlavhalari(request, call_next):
+        """Brauzer uchun eng arzon himoya qatlami.
+
+        Konsol ichki vosita, lekin u kamera manzillari va chiptalarini
+        ko'rsatadi — ya'ni uni begona sahifaga joylash (clickjacking)
+        yoki MIME taxminiga tayangan hujum bemalol qimmatga tushadi.
+        Sarlavhalar hech narsani buzmaydi va hech qanday sozlama
+        talab qilmaydi.
+
+        `frame-ancestors 'none'` — sahifa boshqa saytning iframe'iga
+        joylanmaydi. Oqimning O'ZI bunga kirmaydi: uni MediaMTX
+        beradi va u yerda cheklov `hlsAllowOrigins` bilan qo'yiladi.
+        """
+        javob = await call_next(request)
+        javob.headers.setdefault("X-Content-Type-Options", "nosniff")
+        javob.headers.setdefault("X-Frame-Options", "DENY")
+        javob.headers.setdefault("Referrer-Policy", "no-referrer")
+        javob.headers.setdefault(
+            "Content-Security-Policy",
+            "default-src 'self'; img-src 'self' data: blob:; "
+            "media-src 'self' blob: http: https:; "
+            "connect-src 'self' http: https: ws: wss:; "
+            "script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "
+            "frame-ancestors 'none'")
+        return javob
+
     if ENABLE_UI:
         @app.get("/", include_in_schema=False)
         def index():

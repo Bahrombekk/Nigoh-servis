@@ -21,10 +21,10 @@ from api import auth, create_app
 
 @pytest.fixture(autouse=True)
 def _toza_hisob():
-    """Har test toza hisob bilan boshlansin — `_fails` modul darajasida."""
-    auth._fails.clear()
+    """Har test toza hisob bilan boshlansin — hisob modul darajasida."""
+    auth._login_throttle._fails.clear()
     yield
-    auth._fails.clear()
+    auth._login_throttle._fails.clear()
 
 
 @pytest.fixture(scope="module")

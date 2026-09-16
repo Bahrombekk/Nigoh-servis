@@ -1,7 +1,5 @@
 """Nigoh — autentifikatsiya endpointlari."""
-import ipaddress
 import math
-import os
 import threading
 import time
 from urllib.parse import parse_qs
@@ -11,7 +9,10 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from core import security
 from core.db import get_db
 from core.log import log
+from core.throttle import Throttle
 
+from .helpers import TRUSTED_PROXIES as helpers_trusted
+from .helpers import client_ip, ishonchli_proksi
 from .models import LoginIn
 
 # Prefiks nisbiy — create_app uni /api/v1 (asosiy) va /api (eski) ostida ulaydi.
@@ -42,50 +43,24 @@ ui_router = APIRouter(prefix="/auth", tags=["auth"])
 # muddatini mijozga aytish bir xil himoyani beradi, lekin serverda
 # birorta resurs egallamaydi.
 
-_FAIL_FREE = 5           # shu songacha kutish yo'q
-_FAIL_MAX_DELAY = 30.0   # soniya
-_FAIL_TTL = 3600.0       # soniya — shuncha tinch turgan ip hisobi unutiladi
-_fails: dict[str, tuple[int, float]] = {}    # ip -> (xato soni, oxirgi vaqt)
-_fails_lock = threading.Lock()
+# Kirish urinishlari — mexanizm umumiy (core/throttle.py), chunki
+# aynan shu qoida API kaliti uchun ham kerak (api/deps.py).
+_login_throttle = Throttle(free=5, max_delay=30.0, ttl=3600.0)
+# Chegaralar tashqaridan ham ko'rinsin: testlar va diagnostika bilsin.
+_FAIL_FREE = _login_throttle.free
+_FAIL_MAX_DELAY = _login_throttle.max_delay
+# Jurnal takrorini cheklash uchun alohida qulf. Ilgari bu ikki joy
+# kirish hisobining qulfini qarzga olardi — mexanizm umumiy modulga
+# chiqqach o'sha qulf yo'qoldi.
+_log_lock = threading.Lock()
 
-# `X-Forwarded-For` faqat ishonchli proksidan kelganda hisobga olinadi.
-# Aks holda cheklovni aylanib o'tish arzon: har so'rovda boshqa soxta
-# sarlavha yuborilsa har safar yangi "ip" hisobi ochiladi va eksponensial
-# kutish umuman ishlamaydi. MediaMTX konfiguratsiyasida shu tamoyil
-# allaqachon bor (`hlsTrustedProxies`), bu yerda yetishmasdi.
-#
-# Standart — loopback va ichki tarmoqlar: nginx shu mashinada turadi
-# (`network_mode: host`, proksi 127.0.0.1 ga), lekin uni alohida hostga
-# ko'chirsa ham sozlamasiz ishlayversin. Internetdan to'g'ridan kelgan
-# so'rovning sarlavhasiga hech qachon ishonilmaydi. `TRUSTED_PROXIES`
-# (vergul bilan) berilsa — faqat o'sha manzillar.
-_TRUSTED_ENV = os.environ.get("TRUSTED_PROXIES", "").strip()
-TRUSTED_PROXIES = {p.strip() for p in _TRUSTED_ENV.split(",") if p.strip()}
-
-
-def _ishonchli_proksi(peer: str) -> bool:
-    if TRUSTED_PROXIES:
-        return peer in TRUSTED_PROXIES
-    try:
-        manzil = ipaddress.ip_address(peer)
-    except ValueError:
-        return False
-    return manzil.is_loopback or manzil.is_private
-
-
-def _client_ip(request: Request) -> str:
-    """So'rov kelgan haqiqiy manzil.
-
-    Nginx ortida u `X-Forwarded-For` da bo'ladi, lekin sarlavhaga faqat
-    ulanish IShONChLI proksidan kelgandagina ishonamiz — aks holda uni
-    har kim o'zi yozib yuboradi.
-    """
-    peer = request.client.host if request.client else ""
-    if _ishonchli_proksi(peer):
-        fwd = request.headers.get("x-forwarded-for", "")
-        if fwd:
-            return fwd.split(",")[0].strip()
-    return peer
+# Proksi va mijoz manzili — umumiy joyda (api/helpers.py), chunki
+# aynan shu mantiq API kaliti cheklovida ham kerak (api/deps.py).
+# Eski nomlar taxallus bo'lib qoladi: chaqiruvchilar va testlar
+# o'zgarmasin.
+_ishonchli_proksi = ishonchli_proksi
+_client_ip = client_ip
+TRUSTED_PROXIES = helpers_trusted
 
 
 def _https_dami(request: Request) -> bool:
@@ -105,31 +80,15 @@ def _https_dami(request: Request) -> bool:
 
 def _retry_after(ip: str) -> float:
     """Shu ip yana urinishi uchun necha soniya qolgani (0 — hoziroq mumkin)."""
-    now = time.monotonic()
-    with _fails_lock:
-        if len(_fails) > 1000:               # xotira cheksiz o'smasin
-            for k, (_, t) in list(_fails.items()):
-                if now - t > _FAIL_TTL:
-                    _fails.pop(k, None)
-        count, last = _fails.get(ip, (0, 0.0))
-        if now - last > _FAIL_TTL or count < _FAIL_FREE:
-            return 0.0
-        wait = min(2.0 ** (count - _FAIL_FREE), _FAIL_MAX_DELAY)
-        return max(0.0, last + wait - now)
+    return _login_throttle.retry_after(ip)
 
 
 def _note_fail(ip: str) -> None:
-    now = time.monotonic()
-    with _fails_lock:
-        count, last = _fails.get(ip, (0, 0.0))
-        if now - last > _FAIL_TTL:
-            count = 0
-        _fails[ip] = (count + 1, now)
+    _login_throttle.note_fail(ip)
 
 
 def _clear_fails(ip: str) -> None:
-    with _fails_lock:
-        _fails.pop(ip, None)
+    _login_throttle.clear(ip)
 
 
 @router.post("/stream")
@@ -232,7 +191,7 @@ def _bearer_yoq_ogohlantir(path: str) -> None:
     faqat https'da ko'rinardi.
     """
     now = time.monotonic()
-    with _fails_lock:
+    with _log_lock:
         if now - _bearer_warned[0] < _BEARER_WARN_EVERY:
             return
         _bearer_warned[0] = now
@@ -253,7 +212,7 @@ def _log_denial(ip: str, action: str, path: str, token: str) -> None:
            "chipta muddati tugagan yoki imzo mos emas")
     key = (path, why)
     now = time.monotonic()
-    with _fails_lock:
+    with _log_lock:
         if now - _denied.get(key, 0.0) < _DENY_EVERY:
             return
         _denied[key] = now
