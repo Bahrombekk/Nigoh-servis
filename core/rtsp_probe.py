@@ -161,6 +161,41 @@ def sdp_video_control(describe: str, request_uri: str) -> str:
     return base.rstrip("/") + "/" + control.lstrip("/")
 
 
+def sub_yol_nomzodlari(rtsp_path: str) -> list[str]:
+    """Asosiy yo'ldan ikkinchi (sub) oqim yo'lini taxmin qiladi.
+
+    Nima uchun kerak: bazada sub yo'li bo'sh bo'lgan kamera devorda
+    og'ir asosiy oqimda ochiladi. Amalda esa kameraning ikkinchi oqimi
+    ko'pincha BOR — shunchaki qo'shishda yozilmagan. Shu o'rnatmada
+    o'lchandi: sub yo'li bo'sh 23 kameradan sinalgan 8 tasining
+    4 tasida sub oqim ishlab turgan edi.
+
+    Taxmin ishlab chiqaruvchining nomlash qoidasiga tayanadi. Taxmin
+    QAT'IY EMAS — chaqiruvchi har nomzodni haqiqatda tekshiradi
+    (`media.sync.kadr_keladimi`) va faqat kadr bergani saqlanadi.
+    """
+    yol = (rtsp_path or "").strip()
+    if not yol:
+        return []
+    nomzod: list[str] = []
+    # Dahua va unga o'xshaganlar: subtype=0 -> subtype=1
+    if "subtype=0" in yol:
+        nomzod.append(yol.replace("subtype=0", "subtype=1"))
+    # Hikvision: /Streaming/Channels/101 -> 102 (oxirgi raqam — oqim
+    # nomeri: 1 asosiy, 2 sub).
+    m = re.search(r"(?i)(/streaming/channels/)(\d+)", yol)
+    if m and m.group(2).endswith("1"):
+        nomzod.append(yol[:m.start(2)] + m.group(2)[:-1] + "2" + yol[m.end(2):])
+    # "…/stream1", "…/ch01/main" kabi keng tarqalgan ikkita shakl.
+    m = re.search(r"(?i)(stream)0*1\b", yol)
+    if m:
+        nomzod.append(yol[:m.start()] + m.group(1) + "2" + yol[m.end():])
+    if re.search(r"(?i)/main\b", yol):
+        nomzod.append(re.sub(r"(?i)/main\b", "/sub", yol))
+    # Takrorlarni va asosiy yo'lning o'zini chiqarib tashlaymiz.
+    return [n for n in dict.fromkeys(nomzod) if n and n != yol]
+
+
 def probe(ip: str, port: int, path: str, username: str = "",
           password: str = "") -> dict:
     """Kamerani bosqichma-bosqich tekshiradi.

@@ -30,12 +30,14 @@ from typing import Callable
 from core import bus, events, security
 from core.db import (
     cameras_by_slug,
+    cameras_without_sub,
     get_db,
     set_sub_bad,
+    set_sub_path,
     sub_bad_cameras,
 )
 from core.log import log
-from core.rtsp_probe import build_rtsp_url
+from core.rtsp_probe import build_rtsp_url, sub_yol_nomzodlari
 
 from . import sync, transport
 
@@ -467,6 +469,61 @@ def _sub_tasdiqla(slugs: list[str]) -> None:
             _sub_tekshiruvda.difference_update(slugs)
 
 
+def _sub_tekshiruv_tsikli() -> None:
+    """Sub bo'yicha davriy ishlar — bitta oqimda, ketma-ket.
+
+    Ikkalasi ham kameraga RTSP ulanish ochadi, shuning uchun parallel
+    emas: aks holda bir kameraga bir vaqtda ikki ulanish borib, o'lchov
+    o'z natijasini o'zi buzardi.
+    """
+    _recheck_sub_bad()
+    _sub_yol_qidir()
+
+
+def _sub_yol_qidir() -> None:
+    """Sub yo'li yozilmagan kameralarda uni TOPIB ko'radi.
+
+    Nima uchun: yo'li bo'sh kamera devorda og'ir asosiy oqimda ochiladi
+    (o'lchovda 1,20 o'rniga 7,88 Mbit/s). Kameraning ikkinchi oqimi esa
+    ko'pincha bor — shunchaki qo'shishda yozilmagan. Shu o'rnatmada
+    o'lchandi: bo'sh 23 kameradan sinalgan 8 tasining 4 tasida sub oqim
+    ishlab turgan edi.
+
+    Taxmin ishlab chiqaruvchining nomlash qoidasidan olinadi
+    (`core.rtsp_probe.sub_yol_nomzodlari`), lekin QAT'IY emas: har
+    nomzoddan haqiqatda kadr o'qib ko'riladi va faqat bergani yoziladi.
+    Shuning uchun noto'g'ri taxmin zarar qilmaydi — u shunchaki
+    saqlanmaydi.
+
+    Alohida oqimda va kamdan-kam (SUB_RECHECK) — har nomzod kameraga
+    bitta qisqa RTSP ulanish degani.
+    """
+    kameralar = cameras_without_sub()
+    if not kameralar:
+        return
+    topildi = 0
+    for c in kameralar:
+        for nomzod in sub_yol_nomzodlari(c["rtsp_path"]):
+            try:
+                url = build_rtsp_url(c["ip"], c["port"] or 554, nomzod,
+                                     c["username"] or "",
+                                     security.decrypt(c["password_enc"]))
+                if not sync.kadr_keladimi(url, udp=bool(c.get("rtsp_udp"))):
+                    continue
+            except Exception:      # bitta kamera qolganini uzmasin
+                continue
+            if set_sub_path(c["slug"], nomzod):
+                topildi += 1
+                log("reconciler", "sub_yol_topildi", camera=c["slug"],
+                    sub_path=nomzod,
+                    sabab="kamerada ikkinchi oqim bor ekan — devor endi "
+                          "og'ir asosiy oqim o'rniga shuni ishlatadi")
+            break
+    if topildi:
+        log("reconciler", "sub_yol_qidiruv", topildi=topildi,
+            tekshirilgan=len(kameralar))
+
+
 def _recheck_sub_bad() -> None:
     """Yaroqsiz deb belgilangan sub oqimlarni qayta sinab ko'radi.
 
@@ -726,7 +783,7 @@ def _loop(load_cameras: Callable[[], list[dict]]) -> None:
                         events.prune(db)
                 if now - last_sub_recheck >= SUB_RECHECK:
                     last_sub_recheck = now
-                    threading.Thread(target=_recheck_sub_bad,
+                    threading.Thread(target=_sub_tekshiruv_tsikli,
                                      daemon=True).start()
             # Muzlash tekshiruvi har tsiklda — to'liq sinxrondan ancha
             # tez-tez. Tomoshabin bor oqim qotganini 60 soniyada emas,

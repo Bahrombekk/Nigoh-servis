@@ -194,6 +194,36 @@ def cameras_by_slug(slugs: list[str]) -> list[dict]:
             "AND sub_path IS NOT NULL AND sub_path != ''", slugs)]
 
 
+def cameras_without_sub() -> list[dict]:
+    """Sub yo'li yozilmagan, yoqilgan kameralar.
+
+    Ular devorda og'ir asosiy oqimda ochiladi. Kameraning ikkinchi oqimi
+    ko'pincha BOR — shunchaki qo'shishda yozilmagan; reconciler uni
+    taxmin qilib, tekshirib, shu yerga yozadi (`set_sub_path`).
+    """
+    with get_db() as db:
+        return [dict(r) for r in db.execute(
+            "SELECT id, slug, ip, port, username, password_enc, rtsp_path, "
+            "rtsp_udp FROM cameras WHERE enabled = 1 AND ip != '' "
+            "AND (sub_path IS NULL OR sub_path = '')")]
+
+
+def set_sub_path(slug: str, sub_path: str) -> bool:
+    """Topilgan sub yo'lini yozadi. Faqat yo'l hali bo'sh bo'lsa.
+
+    Shart muhim: operator shu orada qo'lda yo'l yozgan bo'lishi mumkin,
+    avtomatik taxmin uni bosib ketmasin.
+    """
+    with get_db() as db:
+        n = db.execute(
+            "UPDATE cameras SET sub_path = ? WHERE slug = ? "
+            "AND (sub_path IS NULL OR sub_path = '')",
+            (sub_path, slug)).rowcount
+        if n:
+            db.commit()
+    return bool(n)
+
+
 def sub_bad_cameras() -> list[dict]:
     """`sub_bad` deb belgilangan, sub yo'li bor va yoqilgan kameralar.
 
