@@ -78,6 +78,23 @@ def clear_node_cache() -> None:
     _node_cache.clear()
 
 
+def _hevc(row) -> bool:
+    """Kameraning sub oqimi H.265 mi (bilinmasa — asosiy oqimiga qarab).
+
+    Brauzer H.265 ni WebRTC'da ocholmaganda oqim o'girilishi shart,
+    shuning uchun bu savolga `transcode` bayrog'i emas, skan yozgan
+    kodek javob beradi.
+    """
+    for ustun in ("sub_codec", "codec"):
+        try:
+            qiymat = (row[ustun] or "").upper()
+        except (KeyError, IndexError, TypeError):
+            continue
+        if qiymat:
+            return qiymat in ("H265", "HEVC")
+    return False
+
+
 def stream_urls(row, request: Request, hevc_ok: bool = False,
                 quality: str = "") -> dict:
     """Kameraning oqim manzillari — faqat kerak bo'lganda so'raladi.
@@ -120,7 +137,16 @@ def stream_urls(row, request: Request, hevc_ok: bool = False,
         # chiqmaydi yoki birinchi kadrda qotib qoladi, shuning uchun sub
         # ham asosiy oqim bilan bir xil qoidada o'giriladi. `mode` "sub"
         # bo'lib qolaveradi: ishlamasa pleyer avvalgidek asosiyga o'tadi.
-        if row["transcode"] and not hevc_ok:
+        # Qaror BAYROQQA emas, HAQIQIY KODEKGA qarab chiqadi.
+        #
+        # `transcode` — qo'shishda yoziladigan metama'lumot va u xato
+        # yoki eskirgan bo'lishi mumkin. Ishlab chiqarishda aynan shu
+        # bo'ldi: H.265 kameralarda bayroq 0 turgani uchun brauzerga
+        # XOM H.265 sub berildi va uchta katak butunlay yashil chiqdi
+        # (dekoder oqimni umuman ocholmaydi). Bayroq to'g'ri bo'lgan
+        # o'rnatmada esa o'sha kameralar toza ishlayotgan edi — ya'ni
+        # farq kamerada emas, bazadagi yozuvda edi.
+        if not hevc_ok and (row["transcode"] or _hevc(row)):
             slug += mediamtx_sync.TRANSCODE_SUFFIX
     elif row["transcode"] and (not hevc_ok or row["always_on"]):
         slug += mediamtx_sync.TRANSCODE_SUFFIX

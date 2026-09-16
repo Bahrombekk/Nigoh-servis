@@ -42,3 +42,37 @@ def test_tanib_bolmaydigan_yol():
 def test_raqam_chalkashmaydi():
     """Regressiya: "stream10" dagi 1 oqim nomeri EMAS."""
     assert nomzod("/stream10") == []
+
+
+# ---- sub oqim o'girilishi kodekka qarab hal qilinadi ----
+
+from api.helpers import _hevc  # noqa: E402
+
+
+class _Qator(dict):
+    """`sqlite3.Row` kabi indekslanadigan soxta qator."""
+
+    def __getitem__(self, k):
+        if k not in self:
+            raise KeyError(k)
+        return dict.__getitem__(self, k)
+
+
+def test_hevc_sub_kodek_boyicha():
+    assert _hevc(_Qator(sub_codec="H265", codec="H264")) is True
+    assert _hevc(_Qator(sub_codec="hevc", codec="")) is True
+    assert _hevc(_Qator(sub_codec="H264", codec="H265")) is False
+
+
+def test_hevc_sub_bilinmasa_asosiyga_qaraydi():
+    assert _hevc(_Qator(sub_codec="", codec="H265")) is True
+    assert _hevc(_Qator(sub_codec=None, codec="H264")) is False
+
+
+def test_hevc_malumot_yoqligida_ogirishga_majburlamaydi():
+    """Bilinmaganda o'girish BUYURILMAYDI — bekorga GPU sarflamaslik uchun.
+
+    Bunday holatda eski yo'l qoladi: `transcode` bayrog'i hal qiladi.
+    """
+    assert _hevc(_Qator(sub_codec="", codec="")) is False
+    assert _hevc(_Qator()) is False
