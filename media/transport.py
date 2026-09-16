@@ -94,9 +94,29 @@ _busy: set[str] = set()               # ayni damda sinovdan o'tayotganlar
 
 _FRAME_RE = re.compile(r"frame=\s*(\d+)")
 # Dekoder kadrni yig'a olmaganini bildiruvchi xabarlar.
-_BUZUQ_RE = re.compile(r"corrupt decoded frame|error while decoding|"
-                       r"cabac decode|Error constructing the frame RPS|"
-                       r"invalid fragmentation|missed \d+ packets")
+# Dekoder kadrni yig'a olmaganini bildiruvchi xabarlar.
+#
+# DIQQAT: H.264 va H.265 BOSHQA-BOSHQA so'zlar bilan shikoyat qiladi.
+# Ilgari bu yerda faqat H.264 naqshlari bor edi va natijada H.265
+# kameralarda sinov buzuqlikni UMUMAN KO'RMASDI: UDP "toza" bo'lib
+# chiqar, kamera UDP'ga o'tkazilar, tomoshabin esa BUTUNLAY YASHIL
+# ekran ko'rardi (shikastlangan HEVC oqimida dekoder bo'sh kadr
+# chiqaradi). Ishlab chiqarish jurnalidan olingan haqiqiy xabarlar:
+#
+#     [hevc] Could not find ref with POC 7
+#     [hevc] Skipping invalid undecodable NALU: 39
+#     [hevc] The cu_qp_delta -37 is outside the valid range
+#     [hevc] Error constructing the frame RPS
+_BUZUQ_RE = re.compile(
+    # H.264
+    r"corrupt decoded frame|error while decoding|cabac decode|"
+    r"no frame|non-existing PPS|"
+    # H.265
+    r"Could not find ref with POC|Skipping invalid undecodable NALU|"
+    r"outside the valid range|Error constructing the frame RPS|"
+    r"Error parsing NAL unit|"
+    # RTP/transport darajasi
+    r"invalid fragmentation|missed \d+ packets|RTP: PT=")
 _TAKROR_RE = re.compile(r"Last message repeated (\d+) times")
 
 

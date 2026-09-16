@@ -315,3 +315,33 @@ def test_toza_boshqasi_kadr_bermasa_otilmaydi(monkeypatch, qolda):
     _kadrlar(monkeypatch, tcp=0, udp=300, tcp_buzuq=0, udp_buzuq=90)
     assert transport.check("kam_1") is None
     assert qolda == {}
+
+
+def test_hevc_buzuqligi_ham_sanaladi():
+    """Regressiya: naqsh faqat H.264 xabarlarini bilardi.
+
+    H.265 dekoderi butunlay boshqa so'zlar bilan shikoyat qiladi.
+    Natijada H.265 kameralarda sinov buzuqlikni UMUMAN ko'rmasdi: UDP
+    "toza" chiqar, kamera UDP'ga o'tkazilar, tomoshabin esa BUTUNLAY
+    YASHIL ekran ko'rardi (shikastlangan HEVC oqimida dekoder bo'sh
+    kadr chiqaradi).
+
+    Xabarlar ishlab chiqarish jurnalidan olingan.
+    """
+    jurnal = (
+        "[hevc @ 0x1] Could not find ref with POC 7\n"
+        "[hevc @ 0x1] Skipping invalid undecodable NALU: 39\n"
+        "[hevc @ 0x1] The cu_qp_delta -37 is outside the valid range.\n"
+        "[hevc @ 0x1] Error constructing the frame RPS.\n"
+        "    Last message repeated 10 times\n"
+        "frame=  100 fps=25\n"
+    )
+    # To'rt xabar + takrorlangan o'ni.
+    assert transport._buzuq_soni(jurnal) == 14
+
+
+def test_sog_lom_jurnalda_buzuqlik_topilmaydi():
+    """Yolg'on ishga tushish qimmat: toza transport rad etilib qolardi."""
+    jurnal = ("frame=   25 fps=0.0 q=-0.0 size=N/A time=00:00:00.96\n"
+              "frame=  200 fps= 25 q=-0.0 size=N/A time=00:00:08.00\n")
+    assert transport._buzuq_soni(jurnal) == 0
