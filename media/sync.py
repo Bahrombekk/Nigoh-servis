@@ -496,6 +496,16 @@ TRANSCODE_MAX_SUB = os.environ.get("TRANSCODE_MAX_SUB", "2M")
 TRANSCODE_MAX_MAIN = os.environ.get("TRANSCODE_MAX_MAIN", "8M")
 
 
+def _ikki_barobar(tezlik: str) -> str:
+    """"2M" -> "4M". Tanib bo'lmasa qiymatning o'zi qaytadi."""
+    son = tezlik.rstrip("MKmk")
+    birlik = tezlik[len(son):] or "M"
+    try:
+        return f"{int(float(son) * 2)}{birlik}"
+    except ValueError:
+        return tezlik
+
+
 def transcode_args(src_url: str, dst_url: str, gpu: bool = True,
                    maxrate: str = TRANSCODE_MAX_MAIN,
                    udp: bool = False) -> list[str]:
@@ -509,20 +519,40 @@ def transcode_args(src_url: str, dst_url: str, gpu: bool = True,
     `maxrate` — yuqori chegara, nishon emas. Sifatni `TRANSCODE_CQ`
     belgilaydi (yuqoridagi o'lchovga qarang).
     """
+    # Kirish vaqt belgisi kameraga ISHONMAYDI — paket kelgan paytdan
+    # olinadi. Nima uchun (ishlab chiqarishda o'lchandi):
+    #
+    # Kamera kadr tezligini e'lon qilmasa (bazada `fps=0.0`), FFmpeg
+    # vaqt bazasini xato oladi. Prezentatsiya vaqti real vaqtdan o'n
+    # barobar tez yuradi va `-maxrate` "sekundiga" ma'nosini yo'qotadi:
+    #
+    #     kameradan kelgan sub oqim     0,63 Mbit/s
+    #     o'girilgandan keyin chiqish  99,06 Mbit/s   (~150 barobar)
+    #     kodlovchi CPU                35 %  (sog'lomlari 1 %)
+    #
+    # Natijasi tomoshabin uchun: MediaMTX HLS muxerini har 3 soniyada
+    # o'ldiradi ("reached maximum segment size"), pleyer qayta ulanadi
+    # va katak sinib turadi. Bitta shunday katak butun chiqishning 80 %
+    # ini yeb, DEVORDAGI QOLGAN HAMMA katakni ham sindiradi.
+    wallclock = ["-use_wallclock_as_timestamps", "1"]
+    # Bufer nishondan ikki barobar: keyframe portlashi sig'sin, lekin
+    # yo'l hech qachon o'nlab Mbit/s ga chiqmasin. Qattiq shift —
+    # kodlovchi qanday adashsa ham kanalni bosa olmaydi.
+    bufsize = _ikki_barobar(maxrate)
     if gpu:
         # Dekodlash ham, kodlash ham GPU'da — nusxalashsiz.
-        video = [
+        video = wallclock + [
             "-hwaccel", "cuda", "-hwaccel_output_format", "cuda",
             "-i", src_url,
             "-c:v", "h264_nvenc", "-preset", "p1", "-tune", "ull",
             "-rc", "vbr", "-cq", TRANSCODE_CQ, "-b:v", "0",
-            "-maxrate", maxrate, "-bufsize", maxrate,
+            "-maxrate", maxrate, "-bufsize", bufsize,
         ]
     else:
-        video = [
+        video = wallclock + [
             "-i", src_url,
             "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency",
-            "-crf", TRANSCODE_CQ, "-maxrate", maxrate, "-bufsize", maxrate,
+            "-crf", TRANSCODE_CQ, "-maxrate", maxrate, "-bufsize", bufsize,
         ]
     # Qisqa GOP — segment tezroq tayyor bo'ladi.
     return input_args(udp) + video + ["-g", "30", "-bf", "0"] + _OUTPUT + [dst_url]

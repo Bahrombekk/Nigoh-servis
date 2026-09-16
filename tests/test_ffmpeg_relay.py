@@ -106,3 +106,31 @@ def test_ffmpeg_only_global_bayroqdan_ustun(monkeypatch):
     finally:
         monkeypatch.undo()
         importlib.reload(sync)
+
+
+def test_ogirish_vaqt_belgisiga_ishonmaydi():
+    """Regressiya: kamera fps e'lon qilmasa chiqish o'nlab Mbit/s bo'lardi.
+
+    Ishlab chiqarishda o'lchangan: bazada `fps=0.0` bo'lgan kamerada
+    FFmpeg vaqt bazasini xato oladi, prezentatsiya vaqti real vaqtdan
+    tez yuradi va `-maxrate` "sekundiga" ma'nosini yo'qotadi —
+
+        kameradan kelgan sub oqim     0,63 Mbit/s
+        o'girilgandan keyin chiqish  99,06 Mbit/s
+
+    MediaMTX HLS muxerini har 3 soniyada o'ldiradi va bitta shunday
+    katak butun devorni sindiradi.
+    """
+    args = sync.transcode_args("SRC", "DST", gpu=False, maxrate="2M")
+    assert "-use_wallclock_as_timestamps" in args
+    # Kirish sozlamasi bo'lgani uchun `-i` dan OLDIN turishi shart.
+    assert args.index("-use_wallclock_as_timestamps") < args.index("-i")
+
+
+def test_ogirish_buferi_nishondan_ikki_barobar():
+    """Keyframe portlashi sig'sin, lekin yo'l kanalni bosmasin."""
+    args = sync.transcode_args("SRC", "DST", gpu=False, maxrate="2M")
+    assert args[args.index("-maxrate") + 1] == "2M"
+    assert args[args.index("-bufsize") + 1] == "4M"
+    assert sync._ikki_barobar("8M") == "16M"
+    assert sync._ikki_barobar("500K") == "1000K"
