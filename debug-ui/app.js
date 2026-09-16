@@ -362,6 +362,19 @@ async function loadCams() {
     } catch (e) {}
     S.cams = all;
     S.byId = new Map(all.map((c) => [c.id, c]));
+    // Server sub'ni yana sog'lom deb topgan bo'lsa, sessiyadagi belgini
+    // ham olib tashlaymiz.
+    //
+    // Nima uchun kerak: pleyer sub ochilmaganda uni yaroqsiz deb
+    // belgilaydi (S.subBad) va serverga ham yozadi. Server keyinroq uni
+    // qayta tekshiradi va sub ishlayotgan bo'lsa bayroqni oladi —
+    // sessiyadagi to'plam esa abadiy qolardi va katak sahifa
+    // yangilanmaguncha OG'IR asosiy oqimda turaverardi.
+    //
+    // O'lchandi: shunday ikki katak devorda 5,5 va 5,9 Mbit/s yeb
+    // turgan edi, sub yo'llari esa sog'lom holda tomoshabinsiz turardi
+    // (qolgan kataklar 0,2-1,1 Mbit/s).
+    all.forEach((c) => { if (!c.sub_bad) S.subBad.delete(c.id); });
     S.camsAt = Date.now();
     // Skan formasidagi "Hudud" uchun mavjud hududlar taklifi.
     const regs = [...new Set(all.map((c) => c.region).filter(Boolean))].sort();
